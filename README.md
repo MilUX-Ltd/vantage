@@ -213,7 +213,8 @@ Everything else lives in the same console:
 
 Vantage ships **an agent role and four skills**, so an AI you connect starts knowing the job
 rather than improvising against a tool list. See **[AGENT.md](AGENT.md)** for the full list of
-what it can read, what it can do, and what it will never do.
+what it can read, what it can do, and what it will never do, and **[MODELS.md](MODELS.md)** for
+what size of model the job actually needs.
 
 In short: `vantage-agent` reads your estate, diagnoses what is wrong, and either proposes the fix
 or carries it out, depending on the autonomy you set. It comes with `vantage-lessons`

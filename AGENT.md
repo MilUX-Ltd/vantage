@@ -8,6 +8,9 @@ what stops any of that going wrong.
 
 ---
 
+**Which model do you need?** See **[MODELS.md](MODELS.md)**: what the job actually demands, what
+we observed at two model tiers, and whether a box with no GPU can do this.
+
 ## In one paragraph
 
 Point an MCP-capable AI at your console and give the connection an autonomy level. The agent

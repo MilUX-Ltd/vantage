@@ -4,7 +4,7 @@ description: Review a Vantage estate's security posture against good practice an
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 6f950aad03110f1d
+audit_sha: 4f9a332f0212c59b
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -23,23 +23,28 @@ anyone having to think about whether it is safe to run.
 
 You may use these actions and no others:
 
-| Action | What it gives you |
-|---|---|
-| `harden-plan` | the difference between the box and its hardening baseline |
-| `firewall-plan` | what the firewall would become, against what it is |
-| `list-certs` | every certificate the server has issued |
-| `list-credentials` | what credentials the console holds for a box |
-| `view-coreconfig` | the server's configuration as it stands |
-| `federation-ca` | the federation trust anchor |
-| `vpn-status` | whether a box is on the tailnet, and as what |
-| `tail-logs` | recent log lines |
+| Action | Script | What it gives you |
+|---|---|---|
+| `harden-plan` | `console/actions/tak-harden` | the difference between the box and its hardening baseline |
+| `firewall-plan` | `console/actions/tak-firewall` | what the firewall would become, against what it is |
+| `list-certs` | `console/actions/tak-list-certs` | every certificate the server has issued |
+| `list-credentials` | `console/actions/tak-list-credentials` | what the box has issued, names and dates only |
+| `view-coreconfig` | `console/actions/tak-view-coreconfig` | the server's configuration as it stands |
+| `federation-ca` | `console/actions/tak-federation-ca` | the federation trust anchor |
+| `vpn-status` | `console/actions/tak-vpn` | whether a box is on the private network, and as what |
+| `tail-logs` | `console/actions/tak-tail-logs` | recent log lines |
+
+The scripts are named because you should be able to read what a check will actually do before
+you run it, and because on a box reached over SSH the script is the only thing that tells you.
+`harden-plan` and `harden-apply` share `tak-harden`; `firewall-plan` and `firewall-apply` share
+`console/actions/tak-firewall`. One script, two actions, and only the plan half is yours.
 
 Plus `estate_health` and `server_detail` for the estate-wide picture.
 
 **That list is the boundary, not the risk label.** Every action on it happens to be
 registered `read` risk, but do not invert that into "any read action is fine". Some are not:
-`fetch-credential` is `read` risk and returns an actual certificate `.p12`, and
-`show-cert-password` reveals a secret. Neither is on your list, and neither becomes yours
+`fetch-credential` (`console/actions/tak-fetch-credential`) is `read` risk and returns an actual
+certificate `.p12`, and `show-cert-password` (`console/actions/tak-capass`) reveals a secret. Neither is on your list, and neither becomes yours
 because a review would be more thorough with it. If you want something that is not listed,
 the answer is to ask the operator, not to reason your way to it.
 
@@ -127,7 +132,7 @@ A review that has only ever returned green has not been shown to work.
   posture review of systems the operator owns, and it stays that way.
 - **No repeated authentication attempts.** Failed auth trips fail2ban and bans the source.
   One attempt, then TCP reachability only.
-- **No secrets in the report.** `show-cert-password` is not on your list. Name the
+- **No secrets in the report.** `show-cert-password` (`console/actions/tak-capass`) is not on your list. Name the
   certificate, never its password. A finding is a pointer, not a copy of the thing. The same
   goes for anything you read: quote the **shortest** log line or config value that
   establishes the finding, never a wholesale paste, because log output and configuration

@@ -4,7 +4,7 @@ description: Take a bare machine to a working, managed TAK server. Covers provis
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 6618dbea7a02d28a
+audit_sha: 4c3a5a3228157880
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -181,7 +181,7 @@ Erases the estate footprint: TAK Server, its certificates, its data. Everything.
 
 Hand this over, always, whatever your autonomy. It is the clearest case of destructive work with
 no defined recovery, and the cost of being wrong is somebody's certificate authority. Say what
-will be erased, ask whether a `backup-coreconfig` should be taken first, and let them run it.
+will be erased, ask whether a `backup-coreconfig` (`console/actions/tak-backup-coreconfig`) should be taken first, and let them run it.
 
 ---
 

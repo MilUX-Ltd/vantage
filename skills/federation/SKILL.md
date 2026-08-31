@@ -4,7 +4,7 @@ description: Join a TAK server to a partner's, and check who is trusted and what
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: aa7a5322a284d551
+audit_sha: b5c2614580bcea2f
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -71,6 +71,8 @@ Three questions, every time:
 
 1. **Who else sees the result?** A federation change is visible to a partner. A mesh channel
    change reaches every device that scans it.
-2. **How am I reaching this box?** If the answer is the thing you are about to change, say so.
-3. **What is the way back?** `vpn-leave` shreds the key. Federation trust handed to a partner
-   cannot be un-shown. Say what is reversible and what is not, before rather than after.
+2. **Is the partner expecting this?** A link established from your side lands on their server.
+   Federation is a conversation between two organisations, not a setting.
+3. **What is the way back?** Federation trust handed to a partner cannot be un-shown: they have
+   seen what your group exposes for as long as the link was up. Disconnecting stops the flow, it
+   does not undo it. Say that before rather than after.

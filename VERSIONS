@@ -1,5 +1,5 @@
 {
-  "vantage": "0.9.3-beta",
+  "vantage": "0.9.4-beta",
   "console": "2.29.0",
   "components": {
     "tak-health": "1.10.0",
