@@ -191,7 +191,13 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 systemctl enable --now vantage-console-collect.timer
-systemctl enable --now vantage-console.service
+# enable, then RESTART. `enable --now` starts a stopped service and does nothing at all to a
+# running one, so on an upgrade the new files landed and the old process carried on serving the
+# previous version from memory, with no error anywhere. The operator saw the old version on a
+# box that had just reported a successful update. Restart covers both cases: it starts a stopped
+# service and replaces a running one, and it happens after the new files are in place.
+systemctl enable vantage-console.service
+systemctl restart vantage-console.service
 
 echo "==> [7/8] firewall"
 # The rule is added even while ufw is INACTIVE: ufw stores it, and whatever later

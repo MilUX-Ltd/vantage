@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.30.0"
+VERSION = "2.31.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.6-beta"
+VANTAGE_RELEASE = "0.9.7-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -7789,7 +7789,12 @@ def render_estate(state):
     # from here, so no false "client" badges.
     _chost = str(state.get("console_host") or "")
     doc.append("<h2 class=sec-eye>Servers</h2>")
-    doc.append(server_board_html(state, history=history, desired=desired))
+    # Overview shows what Operations shows. The two pages are different routes to the
+    # same boxes, so a box that offers one-click Logs on one page and nothing on the
+    # other teaches the operator to distrust the thinner one. One renderer, one set of
+    # affordances, both pages.
+    doc.append(server_board_html(state, history=history, desired=desired,
+                                 cfg=cfg, quick=True))
 
     # the key: name every marker the tiles above actually carry, because a hover tooltip
     # is easy to miss. Only the services present somewhere in the estate, plus the admin
