@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.31.0"
+VERSION = "2.32.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.7-beta"
+VANTAGE_RELEASE = "0.9.8-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -10147,7 +10147,11 @@ def render_operations(state):
         + "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "
         "updates</button></div>"
         "<div id=upres class='a-res' role=status aria-live=polite></div></div>")
-    doc.append("""<script>(function(){
+    # RAW string, and it must stay raw. Python turns \n into a real newline, and a real
+    # newline inside a single-quoted JS string is a SyntaxError that kills the WHOLE
+    # block: the check, download and install buttons all silently did nothing while the
+    # panel looked perfectly normal. Same trap as STANDBY_ADMIN_JS, lesson 26.
+    doc.append(r"""<script>(function(){
 var b=document.getElementById('upchk'); if(!b)return;
 function el(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;}
 b.addEventListener('click',function(){
