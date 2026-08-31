@@ -30,6 +30,37 @@ cause. A confident wrong diagnosis costs more than no diagnosis.
 
 ---
 
+## The short answer
+
+If you want a number to plan around, this is it. Vantage does not require any of this: the
+console, the health checks and the gated actions all work with no AI at all. This is what it
+takes to add a local assistant on top.
+
+| | Model | Machine | What you get |
+|---|---|---|---|
+| **Minimum** | 8B class, 4-bit | 4 cores, 16 GB RAM, 20 GB free | Reads the estate and summarises it. `observe` only |
+| **Sensible** | 14B to 30B, 4-bit | 8 cores, 32 to 64 GB RAM, 60 GB free | Diagnosis worth reading, and proposals worth reviewing |
+| **Comfortable** | 70B class, 4-bit | 48 GB or more of fast unified memory or GPU memory | Everything, including `act` if you choose it |
+
+Three things matter more than the numbers above:
+
+**A 32k context window is the floor.** The role is around 3,000 tokens and a skill with its
+reference material is another 4,000 to 6,000. Add your standing brief and the estate's own
+output and a working session sits at 15,000 to 30,000 tokens before the model has said anything.
+128k is comfortable.
+
+**Memory bandwidth sets the speed, not cores.** Every token requires reading the model's whole
+weights out of memory, so a machine with many cores and ordinary desktop memory will hold a large
+model and run it slowly. Ask a supplier for the memory bandwidth figure; it is the one that
+predicts what you will actually experience.
+
+**Storage is not the constraint people expect.** An 8B model at 4-bit is about 4.5 GB and a 70B
+is around 40 GB. Any modern disk is fine; it is memory that decides what you can run.
+
+A machine with no dedicated graphics can do the minimum tier and will feel slow, in the range of
+5 to 10 tokens per second. That is usable for a scheduled overnight review and tiring to sit in
+front of.
+
 ## Answer it for your own hardware
 
 Do not take our word for any of this. The release carries the benchmark we used:

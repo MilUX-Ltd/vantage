@@ -16,6 +16,9 @@
 #
 #   sudo ./install-vantage.sh [--bind <addr>] [--port <n>]
 #
+# Reinstalling over an existing console keeps that box's address and port unless
+# you give them again, so an upgrade can be pushed to a box without moving it.
+#
 # --bind defaults to 127.0.0.1: choose your exposure deliberately. A tailnet or VPN
 # address is the intended posture; 0.0.0.0 is accepted but you are told what it means.
 # Idempotent: re-running updates code and leaves state and config alone.
@@ -23,7 +26,16 @@ set -euo pipefail
 die() { echo "ERROR: $*" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || die "run as root (sudo ./install-vantage.sh)"
 
-BIND="127.0.0.1"; PORT="8090"
+# An install over an existing one KEEPS that box's own address and port unless it is told
+# otherwise. This is what makes a console upgrade safe to push to a box you cannot see: the
+# old behaviour defaulted to 127.0.0.1, so a remote reinstall rebound the box to localhost and
+# took it off the network - a working box goes quiet and nothing says why. That single fault
+# is why the estate update pushed the checker and nothing else for so long.
+#
+# The values are read back from the unit this script wrote, and validated exactly as a
+# command-line argument is: the unit is operator-editable, so nothing from it is trusted.
+UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
+BIND=""; PORT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bind) BIND="${2:-}"; shift 2 ;;
@@ -31,6 +43,27 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown option: $1" ;;
   esac
 done
+EXISTING_UNIT="$UNIT_DIR/vantage-console.service"
+if [[ -r "$EXISTING_UNIT" ]]; then
+    if [[ -z "$BIND" ]]; then
+        was=$(grep -m1 '^Environment=VANTAGE_CONSOLE_BIND=' "$EXISTING_UNIT" 2>/dev/null | cut -d= -f3-)
+        if [[ -n "$was" ]]; then
+            [[ "$was" =~ ^[0-9a-fA-F.:]+$ ]] || die "the installed unit records an address this \
+script will not accept ($was). Reinstall with an explicit --bind."
+            BIND="$was"
+            echo "==> keeping this box's address: $BIND"
+        fi
+    fi
+    if [[ -z "$PORT" ]]; then
+        wasp=$(grep -m1 '^Environment=VANTAGE_CONSOLE_PORT=' "$EXISTING_UNIT" 2>/dev/null | cut -d= -f3-)
+        if [[ -n "$wasp" ]]; then
+            [[ "$wasp" =~ ^[0-9]{2,5}$ ]] || die "the installed unit records a port this script \
+will not accept ($wasp). Reinstall with an explicit --port."
+            PORT="$wasp"
+        fi
+    fi
+fi
+BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-8090}"
 [[ "$BIND" =~ ^[0-9a-fA-F.:]+$ ]] || die "bad --bind"
 [[ "$PORT" =~ ^[0-9]{2,5}$ ]] || die "bad --port"
 
@@ -119,7 +152,7 @@ echo "==> [5/8] empty estate config (kept if present)"
 EOF
 
 echo "==> [6/8] services"
-cat > /etc/systemd/system/vantage-console.service <<EOF
+cat > "$UNIT_DIR/vantage-console.service" <<EOF
 [Unit]
 Description=Vantage estate console
 After=network-online.target

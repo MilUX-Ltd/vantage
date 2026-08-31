@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.29.0"
+VERSION = "2.30.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.5-beta"
+VANTAGE_RELEASE = "0.9.6-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -9845,7 +9845,7 @@ def last_apply_result():
         return None
 
 
-def update_estate(client, passphrase="", passphrase_ok=False):
+def update_estate(client, passphrase="", passphrase_ok=False, consoles=False):
     """Bring every box up to the checker this console now carries (Spec 004, the estate leg).
 
     Updating one console is not updating an estate. After this console takes a release, every
@@ -9853,11 +9853,11 @@ def update_estate(client, passphrase="", passphrase_ok=False):
     versions that have nothing to do with what is released - which is exactly the drift an
     operator sees today.
 
-    This pushes the checker, and only the checker. It is idempotent, it needs no decisions,
-    and a box either takes it or says why. Consoles on the boxes are deliberately NOT
-    redeployed here: installing a console rewrites the address it listens on, and guessing
-    that for a box someone configured deliberately is how a working box goes quiet. Those are
-    reported instead, for an operator to redeploy one at a time with the settings they meant."""
+    The checker always. Consoles too, if asked for, which used to be impossible: installing a
+    console rewrote the address it listened on, so pushing one to a box you could not see was
+    how a working box went quiet. The installer now keeps a box's own address and port when it
+    reinstalls over itself, so the push is safe, and it still runs one box at a time and halts
+    at the first failure rather than doing the same thing to the whole estate."""
     cfg = load_actions_config()
     tgts = (cfg or {}).get("targets") or {}
     if "push-checker" not in enabled_actions(cfg):
@@ -9887,8 +9887,38 @@ def update_estate(client, passphrase="", passphrase_ok=False):
            if here else f"Checker pushed to {len(results) - len(failed)} of {len(results)} boxes.")
     if failed:
         msg += " Not updated: " + ", ".join(failed) + "."
-    msg += (" Consoles on the boxes are not touched here: redeploy one from its own page when "
-            "you want it on this version, so its address and kiosk stay as you set them.")
+    # Consoles, only if asked, and only after every checker landed. The installer now keeps a
+    # box's own address and port when it reinstalls over itself, which is what makes this safe
+    # to push at all: before that, a remote reinstall rebound the box to localhost and took it
+    # off the network. It still goes ONE BOX AT A TIME and stops at the first failure, because
+    # a console that will not come up is a box you cannot reach to fix, and doing that to the
+    # whole estate in one pass is a different kind of bad day from doing it to one box.
+    if consoles and not failed:
+        cresults = []
+        for name in sorted(tgts):
+            code, res = run_action("deploy-console", name, {}, passphrase, True, client,
+                                   passphrase_ok=passphrase_ok)
+            ok = code == 200
+            cresults.append({"box": name, "ok": ok,
+                             "detail": (res.get("message") or res.get("error") or "")[:140]})
+            if not ok:
+                failed.append(name)
+                cresults.append({"box": "(stopped)", "ok": False,
+                                 "detail": f"halted after {name} failed; the remaining boxes "
+                                           f"were left alone deliberately"})
+                break
+        results += cresults
+        done = sum(1 for r in cresults if r.get("ok"))
+        msg += f" Consoles: {done} of {len(tgts)} updated."
+        if failed:
+            msg += (" The run stopped at the first failure rather than carrying on, so the rest "
+                    "are untouched and still reachable.")
+    elif consoles and failed:
+        msg += (" Consoles were NOT pushed: a checker failed first, and a box that cannot take "
+                "a checker is not one to send a console to.")
+    else:
+        msg += (" Consoles on the boxes were not touched. Tick the console option to send those "
+                "too; each box keeps its own address and port.")
     return (200 if not failed else 502), {"results": results, "failed": failed, "message": msg}
 
 
@@ -10148,6 +10178,27 @@ b.addEventListener('click',function(){
        .catch(function(){ eb.disabled=false; eb.textContent='could not reach the console'; });
     });
     r.appendChild(eb);
+    var cb=el('button','a-go','Update checkers AND consoles across the estate'); cb.type='button';
+    cb.addEventListener('click',function(){
+      var pw=document.querySelector('#upwrap .up-pass');
+      if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
+      if(!confirm('Update the checker AND the console on every box?\n\n'+
+        'Each box keeps its own address and port, so it stays where you put it.\n\n'+
+        'It runs one box at a time and STOPS at the first failure, leaving the rest alone. '+
+        'A box whose console will not come up is a box you have to go to in person.')) return;
+      cb.disabled=true; cb.textContent='Updating the estate\u2026';
+      var lg=el('pre','deplog',''); r.appendChild(lg);
+      fetch('/api/updates/estate',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({passphrase:pw?pw.value:'', consoles:true})})
+       .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+       .then(function(x){ cb.disabled=false; cb.textContent='Update checkers AND consoles across the estate';
+         (x.o.results||[]).forEach(function(q){
+           lg.textContent+=(q.ok?'OK   ':'FAIL ')+q.box+'  '+(q.was?(q.was+' \u2192 '+(q.now||'?')):'')+
+             (q.detail?('  '+q.detail):'')+'\n'; });
+         r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
+       .catch(function(){ cb.disabled=false; cb.textContent='could not reach the console'; });
+    });
+    r.appendChild(cb);
     if(j.last_apply){ r.appendChild(el('div','meta','Last install: '+j.last_apply.status+
       ' \u2014 '+(j.last_apply.message||''))); }
     (j.staged||[]).forEach(function(sg){
@@ -15086,6 +15137,7 @@ class Handler(BaseHTTPRequestHandler):
                 code, res = 403, {"error": "your operator password is required to update the estate"}
             else:
                 code, res = update_estate(client, str(data.get("passphrase", "")),
+                                          consoles=bool(data.get("consoles")),
                                           passphrase_ok=True)
         elif path == "/api/updates/apply":
             if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
