@@ -20,9 +20,21 @@ command -v docker >/dev/null 2>&1 || deny "docker is not installed"
 # per-box compose dirs: deliberate constants, like the update-cloudtak allowlist. The console
 # cannot point this elsewhere. MediaMTX rides the CloudTAK compose on our estate; a box that
 # splits them sets its own dir here.
+# Where CloudTAK actually lives. The provisioner installs it to /opt/CloudTAK; a hand-built
+# box may have it elsewhere, so look rather than assume. It used to be hardcoded to one
+# person's home directory, which was both wrong on every provisioned box (the compose step
+# silently did nothing) and somebody's name shipped in a public product.
+find_compose_dir() {
+    local d
+    for d in /opt/CloudTAK /root/CloudTAK /srv/CloudTAK ${CLOUDTAK_DIR:-}; do
+        [[ -n "$d" && -f "$d/docker-compose.yml" ]] && { echo "$d"; return 0; }
+    done
+    echo /opt/CloudTAK
+}
+
 case "$module" in
-    cloudtak) COMPOSE_DIR="/home/matt/CloudTAK" ;;
-    mediamtx) COMPOSE_DIR="/home/matt/CloudTAK" ;;
+    cloudtak) COMPOSE_DIR="$(find_compose_dir)" ;;
+    mediamtx) COMPOSE_DIR="$(find_compose_dir)" ;;
 esac
 
 echo "== loading images (docker load, offline) =="

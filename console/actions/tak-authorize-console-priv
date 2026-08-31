@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# tak-authorize-console-priv - the privileged half: write another console's keys into this
+# box's takwatch / takadmin authorized_keys, or take them out again.
+#
+# This grants estate access, so it is the strictest wrapper in the set. It trusts NOTHING
+# about the payload beyond what it can prove itself:
+#
+#   - every line must be exactly  command="/usr/local/bin/tak-<script>[ args]",restrict <key>
+#     with the options being the single word `restrict` and nothing else. No port forwarding,
+#     no agent forwarding, no pty, no second command, no environment.
+#   - the pinned script must actually exist and be executable on THIS box and its name must
+#     start with tak-, so a line can only ever run a checker or action already installed here.
+#     A key cannot bring its own program with it.
+#   - the key must be a real ed25519 public key.
+#   - the comment must be vantage-admin:<label>:<name>, which is what makes removal exact.
+#   - tak-health lines go to takwatch (read only); everything else to takadmin.
+#
+# Anything that fails any of those refuses the WHOLE payload: a partially authorised console
+# is worse than one that failed cleanly, because nobody would know which half landed.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+WATCH_AK=/home/USER/.ssh/authorized_keys
+ADMIN_AK=/home/USER/.ssh/authorized_keys
+
+op="${1:-}"
+[[ "$op" =~ ^(add|remove|list)$ ]] || deny "op must be add, remove or list"
+
+if [[ "$op" == "list" ]]; then
+    # who can act on this box, other than the console that enrolled it
+    grep -ho 'vantage-admin:[a-z0-9-]\{1,24\}:' "$WATCH_AK" "$ADMIN_AK" 2>/dev/null \
+        | cut -d: -f2 | sort -u | sed 's/^/AUTHORISED /'
+    exit 0
+fi
+
+label="${2:-}"
+[[ "$label" =~ ^[a-z0-9-]{1,24}$ ]] || deny "label must match [a-z0-9-], max 24"
+
+if [[ "$op" == "remove" ]]; then
+    n=0
+    for f in "$WATCH_AK" "$ADMIN_AK"; do
+        [[ -f "$f" ]] || continue
+        before=$(wc -l < "$f")
+        # delete only lines carrying THIS label; another admin's keys are untouched.
+        # grep to a temp file and move it back rather than `sed -i`: the in-place flag takes
+        # an argument on BSD and none on GNU, and these scripts run on both (lesson 11).
+        tmp=$(mktemp) || deny "could not write a temp file"
+        grep -v "vantage-admin:${label}:" "$f" > "$tmp" || true
+        cat "$tmp" > "$f"; rm -f "$tmp"
+        after=$(wc -l < "$f")
+        n=$(( n + before - after ))
+    done
+    echo "OK removed $n line(s) for $label"
+    exit 0
+fi
+
+# ---- add: validate the entire payload BEFORE writing a single line --------------------
+payload=$(cat)
+[[ -n "$payload" ]] || deny "no payload"
+watch_lines=""; admin_lines=""; count=0
+
+while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    count=$((count + 1))
+    # split: command="<cmd>",restrict <keytype> <keydata> <comment>
+    [[ "$line" =~ ^command=\"(/usr/local/bin/tak-[A-Za-z0-9._-]+)([^\"]*)\",restrict\ (ssh-ed25519)\ ([A-Za-z0-9+/=]+)\ (vantage-admin:[a-z0-9-]{1,24}:[A-Za-z0-9_-]+)$ ]] \
+        || deny "line $count is not an acceptable forced-command entry"
+    cmd="${BASH_REMATCH[1]}"; cmdargs="${BASH_REMATCH[2]}"; comment="${BASH_REMATCH[5]}"
+    # the pinned program must already be here, and be one of ours
+    [[ -x "$cmd" ]] || deny "line $count pins $cmd, which is not installed on this box"
+    # arguments, where present, must be tame: no shell metacharacters at all
+    [[ "$cmdargs" =~ ^[A-Za-z0-9\ ._=/-]*$ ]] || deny "line $count has unacceptable arguments"
+    # the comment's label must be the one we were told to authorise
+    [[ "$comment" == "vantage-admin:${label}:"* ]] || deny "line $count carries the wrong label"
+    if [[ "$cmd" == "/usr/local/bin/tak-health" ]]; then
+        watch_lines+="$line"$'\n'
+    else
+        admin_lines+="$line"$'\n'
+    fi
+done <<< "$payload"
+
+[[ "$count" -gt 0 ]] || deny "payload held no lines"
+
+append_idempotent() {   # $1 file, $2 owner, $3 lines
+    local f="$1" owner="$2" lines="$3" added=0
+    [[ -n "$lines" ]] || return 0
+    install -d -m 700 -o "$owner" -g "$owner" "$(dirname "$f")"
+    [[ -f "$f" ]] || { : > "$f"; }
+    while IFS= read -r l; do
+        [[ -z "$l" ]] && continue
+        grep -qxF "$l" "$f" || { printf '%s\n' "$l" >> "$f"; added=$((added + 1)); }
+    done <<< "$lines"
+    chown "$owner:$owner" "$f"; chmod 600 "$f"
+    echo "$added"
+}
+
+w=$(append_idempotent "$WATCH_AK" takwatch "$watch_lines")
+a=$(append_idempotent "$ADMIN_AK" takadmin "$admin_lines")
+echo "OK authorised $label on this box ($count line(s): $w watch, $a admin added)"

@@ -16,13 +16,18 @@ if systemctl list-unit-files takserver.service >/dev/null 2>&1; then
 fi
 
 # 2. bring down the CloudTAK/MediaMTX compose (and its volumes), if present
-if command -v docker >/dev/null 2>&1 && [[ -f /home/matt/CloudTAK/docker-compose.yml ]]; then
-    ( cd /home/matt/CloudTAK && docker compose down -v --remove-orphans 2>/dev/null ) \
+# CloudTAK's directory is discovered, not assumed (the provisioner uses /opt/CloudTAK)
+_ctak_dir() { local d; for d in /opt/CloudTAK /root/CloudTAK /srv/CloudTAK; do
+    [[ -f "$d/docker-compose.yml" ]] && { echo "$d"; return 0; }; done; }
+
+if command -v docker >/dev/null 2>&1 && [[ -n "$(_ctak_dir)" ]]; then
+    ( cd "$(_ctak_dir)" && docker compose down -v --remove-orphans 2>/dev/null ) \
         && say "CloudTAK/MediaMTX stack down, volumes removed" || say "CloudTAK stack: nothing to stop"
 fi
 
 # 3. remove ONLY these known estate paths - an explicit allowlist, never anything else
-for p in /opt/tak /srv/vault /home/matt/CloudTAK /etc/tak-cloudtak-version /etc/tak-enrol-host; do
+for p in /opt/tak /srv/vault "$(_ctak_dir)" /etc/tak-cloudtak-version /etc/tak-enrol-host; do
+    [[ -n "$p" ]] || continue          # an undiscovered CloudTAK yields an empty path
     if [[ -e "$p" ]]; then
         rm -rf -- "$p" && say "erased $p" || say "could NOT erase $p"
     fi

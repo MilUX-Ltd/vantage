@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# tak-console-admin-priv - the privileged half of console-admin.
+#
+#   keys    mint this console's own per-action keys if they are absent, print the PUBLIC
+#           halves. Private keys never leave the box; nothing here can print one.
+#   estate  write the estate this console should manage: which boxes it watches, which it
+#           can act on, and which actions are enabled. Validated field by field first.
+#
+# The box's OWN self target is preserved whatever arrives: a console that manages an estate
+# must not stop being able to manage itself. Its operator password is preserved too, because
+# it is the box's own secret and no estate config should ever carry it.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+KEYDIR=/var/lib/vantage-console/.ssh
+TARGETS=/etc/vantage-console/targets.json
+ACTIONS=/etc/vantage-console/actions.json
+CONSOLE_USER=vantage-console
+
+op="${1:-}"
+[[ "$op" =~ ^(keys|estate)$ ]] || deny "op must be keys or estate"
+id "$CONSOLE_USER" >/dev/null 2>&1 || deny "this box runs no Vantage console"
+
+if [[ "$op" == "keys" ]]; then
+    install -d -m 700 -o "$CONSOLE_USER" -g "$CONSOLE_USER" "$KEYDIR"
+    # the health key plus one per action, minted on demand. The NAMES are the estate's
+    # convention (id_ed25519 for the health poll, id_action_* for the rest); the promoting
+    # console maps them to scripts, so that map stays in one place.
+    for k in id_ed25519 $(printf 'id_action_%s\n' logs svc certs cert revoke group cfgview \
+             cfgbak credlist credfetch capass enrol loadout harden firewall cloudtak loadimg \
+             vpn conmode kiosk destroy checker install_console provision upgrade pkgpush \
+             authcon conadmin fedca feden fedconn fedgroups lerenew meshdeploy meshchan); do
+        if [[ ! -f "$KEYDIR/$k.pub" ]]; then
+            sudo -u "$CONSOLE_USER" ssh-keygen -t ed25519 -N "" -C "vantage-console-$k" \
+                 -f "$KEYDIR/$k" -q || deny "could not mint $k"
+        fi
+        chown "$CONSOLE_USER:$CONSOLE_USER" "$KEYDIR/$k" "$KEYDIR/$k.pub" 2>/dev/null || true
+        chmod 600 "$KEYDIR/$k"
+        printf '%s %s\n' "$k" "$(cut -d' ' -f1,2 < "$KEYDIR/$k.pub")"
+    done
+    exit 0
+fi
+
+# ---- estate ---------------------------------------------------------------------------
+payload=$(cat)
+[[ -n "$payload" ]] || deny "no payload"
+printf '%s' "$payload" | python3 -c '
+import json, os, re, sys, tempfile
+
+TARGETS = "/etc/vantage-console/targets.json"
+ACTIONS = "/etc/vantage-console/actions.json"
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("ERR estate payload is not JSON", file=sys.stderr); raise SystemExit(2)
+if not isinstance(d, dict):
+    print("ERR estate payload is not an object", file=sys.stderr); raise SystemExit(2)
+
+NAME = re.compile(r"^[a-z0-9-]{1,24}$")
+DEST = re.compile(r"^[A-Za-z0-9._-]{1,32}@[A-Za-z0-9._-]{1,253}$")
+IDENT = re.compile(r"^/var/lib/vantage-console/\.ssh/[A-Za-z0-9_]{1,40}$")
+PROFILE = {"cloud", "firmbase", "nuc", "deployed"}
+AID = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
+
+def bad(m):
+    print("ERR " + m, file=sys.stderr); raise SystemExit(2)
+
+targets = d.get("targets") or []
+if not isinstance(targets, list): bad("targets must be a list")
+clean_t = []
+for t in targets:
+    if not isinstance(t, dict): bad("each target must be an object")
+    n = str(t.get("name", ""))
+    if not NAME.match(n): bad("target name %r is not acceptable" % n)
+    kind = str(t.get("kind", "ssh"))
+    if kind not in ("ssh", "local"): bad("target kind must be ssh or local")
+    row = {"name": n, "label": str(t.get("label", n))[:60], "kind": kind,
+           "profile": str(t.get("profile", "")), "expected_offline": bool(t.get("expected_offline"))}
+    if row["profile"] not in PROFILE: bad("target %s has an unknown profile" % n)
+    if kind == "ssh":
+        ssh = str(t.get("ssh", ""))
+        ident = str(t.get("identity", ""))
+        if not DEST.match(ssh): bad("target %s has an unacceptable ssh destination" % n)
+        # an identity may only be a key in this consoles own key directory: it can never be
+        # pointed at an arbitrary file on the box
+        if not IDENT.match(ident): bad("target %s has an unacceptable identity path" % n)
+        row["ssh"] = ssh; row["identity"] = ident
+    else:
+        row["command"] = "/usr/local/bin/tak-health"
+    clean_t.append(row)
+
+at = d.get("action_targets") or {}
+if not isinstance(at, dict): bad("action_targets must be an object")
+clean_a = {}
+for n, dest in at.items():
+    if not NAME.match(str(n)): bad("action target name %r is not acceptable" % n)
+    if not DEST.match(str(dest)): bad("action target %s has an unacceptable destination" % n)
+    clean_a[str(n)] = str(dest)
+
+enabled = d.get("enabled")
+clean_e = None
+if enabled is not None:
+    if not isinstance(enabled, list): bad("enabled must be a list")
+    if not all(AID.match(str(x)) for x in enabled): bad("an action id is not acceptable")
+    clean_e = [str(x) for x in enabled][:80]
+
+def write(path, obj, mode=0o644):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as fh:
+        json.dump(obj, fh, indent=2)
+    os.chmod(tmp, mode); os.replace(tmp, path)
+
+# targets.json: the box KEEPS its own self view whatever the estate says
+cur_t = {"targets": []}
+if os.path.exists(TARGETS):
+    try: cur_t = json.load(open(TARGETS))
+    except Exception: pass
+mine = [t for t in (cur_t.get("targets") or []) if t.get("kind") == "local"]
+names = {t.get("name") for t in mine}
+write(TARGETS, {"targets": mine + [t for t in clean_t if t["name"] not in names]})
+
+# actions.json: keep this box own passphrase and its self target; never carry a secret in
+# an estate payload
+cur_a = {}
+if os.path.exists(ACTIONS):
+    try: cur_a = json.load(open(ACTIONS))
+    except Exception: cur_a = {}
+tgt = dict(cur_a.get("targets") or {})
+tgt.update(clean_a)
+out = {"enabled": clean_e if clean_e is not None else cur_a.get("enabled", []),
+       "targets": tgt}
+if cur_a.get("passphrase"): out["passphrase"] = cur_a["passphrase"]
+write(ACTIONS, out)
+print("OK estate written: %d watched, %d actionable, %d actions enabled"
+      % (len(mine) + len([t for t in clean_t if t["name"] not in names]), len(tgt), len(out["enabled"])))
+' || exit 2
+
+# the console reads its config at request time, but a restart makes the change visible at once
+systemctl restart vantage-console-deployed.service 2>/dev/null \
+    || systemctl restart vantage-console.service 2>/dev/null || true

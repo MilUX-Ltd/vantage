@@ -66,6 +66,8 @@ declare -A ACTION_SCRIPTS=(
   [id_action_harden]=tak-harden
   [id_action_firewall]=tak-firewall
   [id_action_conmode]=tak-console-mode
+  [id_action_authcon]=tak-authorize-console
+  [id_action_conadmin]=tak-console-admin
   [id_action_loadout]=tak-set-loadout
   [id_action_kiosk]=tak-kiosk
   [id_action_meshdeploy]=tak-mesh-deploy
@@ -225,11 +227,11 @@ $SSH "$RSUDO bash -s" <<'EOF'
 set -euo pipefail
 useradd --system --create-home --shell /bin/bash takwatch 2>/dev/null || true
 useradd --system --create-home --shell /bin/bash takadmin 2>/dev/null || true
-install -d -m 700 -o takwatch -g takwatch /home/takwatch/.ssh
-install -d -m 700 -o takadmin -g takadmin /home/takadmin/.ssh
-touch /home/takwatch/.ssh/authorized_keys /home/takadmin/.ssh/authorized_keys
-chown takwatch:takwatch /home/takwatch/.ssh/authorized_keys; chmod 600 /home/takwatch/.ssh/authorized_keys
-chown takadmin:takadmin /home/takadmin/.ssh/authorized_keys; chmod 600 /home/takadmin/.ssh/authorized_keys
+install -d -m 700 -o takwatch -g takwatch /home/USER/.ssh
+install -d -m 700 -o takadmin -g takadmin /home/USER/.ssh
+touch /home/USER/.ssh/authorized_keys /home/USER/.ssh/authorized_keys
+chown takwatch:takwatch /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys
+chown takadmin:takadmin /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys
 EOF
 
 # ---------------------------------------------------------------- remote: sudoers + extras
@@ -248,10 +250,10 @@ $SSH "$RSUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q qrencode >
 echo "[4/6] authorized_keys (idempotent)"
 {
   echo "$HEALTH_LINE"
-} | $SSH "$RSUDO bash -c 'while IFS= read -r line; do grep -qF \"\$line\" /home/takwatch/.ssh/authorized_keys || echo \"\$line\" >> /home/takwatch/.ssh/authorized_keys; done; chown takwatch:takwatch /home/takwatch/.ssh/authorized_keys'"
+} | $SSH "$RSUDO bash -c 'while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takwatch:takwatch /home/USER/.ssh/authorized_keys'"
 for k in "${!ACTION_SCRIPTS[@]}"; do
   printf 'command="/usr/local/bin/%s",restrict %s\n' "${ACTION_SCRIPTS[$k]}" "$(cat "$KEYDIR/$k.pub")"
-done | $SSH "$RSUDO bash -c 'while IFS= read -r line; do grep -qF \"\$line\" /home/takadmin/.ssh/authorized_keys || echo \"\$line\" >> /home/takadmin/.ssh/authorized_keys; done; chown takadmin:takadmin /home/takadmin/.ssh/authorized_keys'"
+done | $SSH "$RSUDO bash -c 'while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takadmin:takadmin /home/USER/.ssh/authorized_keys'"
 echo "keys OK"
 
 # ---------------------------------------------------------------- local: configs

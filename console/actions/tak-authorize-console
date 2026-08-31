@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# tak-authorize-console - the ONE operation this key is allowed to run: let ANOTHER Vantage
+# console act on this box, or take that permission away again.
+#
+# This is how an estate gains a second admin (Spec 003, Option A). Each admin console carries
+# its OWN keys; promoting one means authorising those keys on every box, which is exactly what
+# this does, one box at a time, on the promoting admin's say-so. No key material is ever
+# shared between admins, so revoking one never touches another.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-authorize-console",restrict ssh-ed25519 AAAA... vantage-console-authcon
+# It runs UNPRIVILEGED (as takadmin); writing to another user's authorized_keys is handed to
+# tak-authorize-console-priv through a scoped sudoers rule, which re-validates every line.
+# Two gates, not one, and the second gate is the one that matters here.
+#
+#     authorize-console add <label> <sha256>   - lines arrive on stdin, hashed both ends
+#     authorize-console remove <label>         - drop every line carrying that label
+#     authorize-console list                   - which consoles are authorised here
+#
+# The label names the console being authorised (its estate name), so removal is exact and a
+# box can never be left with a key nobody can account for.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb op label want_sha extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "authorize-console" ]] || deny "only authorize-console is permitted on this key"
+[[ -z "${extra:-}" ]] || deny "too many arguments"
+[[ "$op" =~ ^(add|remove|list)$ ]] || deny "op must be add, remove or list"
+
+if [[ "$op" == "list" ]]; then
+    exec sudo -n /usr/local/bin/tak-authorize-console-priv list
+fi
+
+[[ "$label" =~ ^[a-z0-9-]{1,24}$ ]] || deny "label must match [a-z0-9-], max 24"
+
+if [[ "$op" == "remove" ]]; then
+    exec sudo -n /usr/local/bin/tak-authorize-console-priv remove "$label"
+fi
+
+# add: the payload is the authorized_keys lines themselves, built by the sending console
+# (which holds the key-to-script map, so that map stays in ONE place). They are hashed at
+# both ends, then re-validated line by line by the privileged half - this side never trusts
+# the payload's shape, and neither does that side.
+[[ "$want_sha" =~ ^[0-9a-f]{64}$ ]] || deny "add needs the payload sha256"
+payload=$(cat)
+[[ -n "$payload" ]] || deny "no payload on stdin"
+got_sha=$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)
+[[ "$got_sha" == "$want_sha" ]] || deny "payload sha256 mismatch (sent $want_sha, got $got_sha)"
+
+printf '%s' "$payload" | exec sudo -n /usr/local/bin/tak-authorize-console-priv add "$label"

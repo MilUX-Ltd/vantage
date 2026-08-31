@@ -20,7 +20,7 @@ MESH_HOME=/opt/vantage-mesh
 CONF=/etc/vantage-mesh.conf
 STATE_DIR=/var/lib/vantage-mesh
 UNIT=tak-meshtastic-gateway
-INBOX=/home/takadmin/package-inbox
+INBOX=/home/USER/package-inbox
 MCAST_GROUP=239.2.3.1
 MCAST_PORT=6970
 

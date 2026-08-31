@@ -32,7 +32,7 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.19.0"
+VERSION = "2.23.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
@@ -530,6 +530,26 @@ ACTIONS = {
                 "here. The box must run its own Vantage console. Driven by the Console role "
                 "control on this page, gated with the operator password.",
         "risk": "write", "tag": "Changes console role", "needs_passphrase": True,
+        "result": "text", "catalogue": False, "inputs": [],
+    },
+    "console-admin": {
+        "label": "Hand this box its estate (standby admin)", "verb": "console-admin",
+        "key": "id_action_conadmin", "group": "box", "needs": None,
+        "desc": "Mint this console's own keys and give it the estate it should manage. The "
+                "other half of promoting a standby admin: tak-authorize-console puts these "
+                "keys on every box, this puts the box list on the console. Driven by the "
+                "admin-resilience flow, not run by hand.",
+        "risk": "destructive", "tag": "Makes a standby admin", "needs_passphrase": True,
+        "result": "text", "catalogue": False, "inputs": [],
+    },
+    "authorize-console": {
+        "label": "Authorise another console on this box", "verb": "authorize-console",
+        "key": "id_action_authcon", "group": "box", "needs": None,
+        "desc": "Let a SECOND Vantage console act on this box, or take that permission away. "
+                "This is how an estate gains a standby admin: each admin carries its own keys, "
+                "so authorising one never shares key material and revoking it never touches "
+                "another. Driven by the admin-resilience flow, not run by hand.",
+        "risk": "destructive", "tag": "Grants estate access", "needs_passphrase": True,
         "result": "text", "catalogue": False, "inputs": [],
     },
     "kiosk": {
@@ -1816,7 +1836,7 @@ def build_console_installer(kiosk=False):
         "install -d -m 755 /etc/vantage-console\n"
         "[ -f /etc/vantage-console/instance.json ] || printf %s '" + inst_b64 + "' "
         "| base64 -d > /etc/vantage-console/instance.json\n"
-        "for d in tak-server mission-packs map-packs software; do "
+        "for d in tak-server mission-packs map-packs software updates; do "
         "install -d -o vantage-console -g vantage-console -m 750 "
         "/var/lib/vantage-console/agent/store/$d; done\n"
         "base64 -d > /usr/local/lib/vantage-console/vantage-console-serve.py <<'B64SERVE'\n"
@@ -8277,6 +8297,181 @@ def destroy_api(data, client):
     return 200, {"job": job_id}
 
 
+def _admin_key_scripts():
+    """key name -> the script its forced command must pin. Derived from the ACTIONS registry
+    (a script is tak-<verb>) so the map lives in ONE place; the health key and the package
+    push key are the two that are not actions."""
+    m = {"id_ed25519": "tak-health", "id_action_pkgpush": "tak-push-package"}
+    for a in ACTIONS.values():
+        if a.get("key") and a.get("verb"):
+            m.setdefault(a["key"], "tak-" + a["verb"])
+        if a.get("push_key"):
+            m.setdefault(a["push_key"], "tak-push-package")
+    return m
+
+
+def _box_ssh(key_name, dest, remote, payload=None, timeout=90):
+    """One call to a box over one of this console's scoped keys. Returns (ok, text)."""
+    cmd = ["ssh", "-i", os.path.join(ACTION_KEYS, key_name), "-o", "BatchMode=yes",
+           "-o", "ConnectTimeout=12", "-o", "StrictHostKeyChecking=accept-new", dest, remote]
+    try:
+        p = subprocess.run(cmd, input=payload, capture_output=True, text=True, timeout=timeout)
+    except Exception as ex:
+        return False, f"could not reach {dest}: {ex}"[:200]
+    out = (p.stdout or "").strip()
+    err = (p.stderr or "").strip()
+    if p.returncode != 0:
+        return False, (err or out or "the box refused").splitlines()[-1][:200]
+    return True, out
+
+
+def _admin_estate_for(cfg, state, skip):
+    """The estate a standby admin should be handed: every box this console can act on, bar
+    the one being promoted. A box reached on loopback (this console's own box) is given by
+    its reported FQDN instead, because localhost means something different over there."""
+    by_name = {t.get("name"): t for t in (state or {}).get("targets", [])}
+    targets, action_targets, skipped = [], {}, []
+    for name, dest in ((cfg or {}).get("targets") or {}).items():
+        if name == skip:
+            continue
+        host = dest.rsplit("@", 1)[-1]
+        t = by_name.get(name) or {}
+        if host in ("localhost", "127.0.0.1", "::1"):
+            host = str(t.get("fqdn") or "")
+            if not host:
+                skipped.append(name)
+                continue
+        profile = str(t.get("profile") or "")
+        if profile not in ("cloud", "firmbase", "nuc", "deployed"):
+            profile = "cloud"
+        targets.append({"name": name, "label": t.get("label", name), "kind": "ssh",
+                        "ssh": f"takwatch@{host}",
+                        "identity": os.path.join(ACTION_KEYS, "id_ed25519"),
+                        "profile": profile,
+                        "expected_offline": bool(t.get("expected_offline"))})
+        action_targets[name] = f"takadmin@{host}"
+    return targets, action_targets, skipped
+
+
+def promote_admin_console(target, client, demote=False):
+    """Make (or unmake) a standby admin, for real (Spec 003 slice 3).
+
+    Promoting is four steps, and the order matters: the box mints its own keys, those keys are
+    authorised on every box in the estate, the box is handed the estate to point them at, and
+    only then does its mode change. If authorisation fails part way the mode is NOT flipped,
+    so the estate is never left with a console that believes it is an admin and cannot act.
+
+    Demoting runs it backwards: revoke everywhere first, then drop the box back to client.
+    A box that cannot be reached during a revoke is REPORTED, never silently skipped - a key
+    left behind on one box is exactly the thing an operator must know about."""
+    cfg = load_actions_config()
+    tgts = (cfg or {}).get("targets") or {}
+    if target not in tgts:
+        return 400, {"error": "unknown target"}
+    label = target
+    if not re.fullmatch(r"[a-z0-9-]{1,24}", label):
+        return 400, {"error": "the box's name cannot be used as an authorisation label"}
+    for need in ("authorize-console", "console-admin", "console-mode"):
+        if need not in enabled_actions(cfg):
+            return 400, {"error": f"this estate is not enrolled for {need}; re-enrol the boxes"}
+    state, _ = load_state()
+    steps, failures = [], []
+
+    if demote:
+        for name, dest in tgts.items():
+            ok, txt = _box_ssh("id_action_authcon", dest, f"authorize-console remove {label}")
+            steps.append({"box": name, "step": "revoke", "ok": ok, "detail": txt[:120]})
+            if not ok:
+                failures.append(name)
+        ok, txt = _box_ssh("id_action_conmode", tgts[target], "console-mode client")
+        steps.append({"box": target, "step": "mode client", "ok": ok, "detail": txt[:120]})
+        if not ok:
+            failures.append(target)
+        else:
+            blob = json.dumps({"targets": [], "action_targets": {},
+                               "enabled": [a for a in enabled_actions(cfg)
+                                           if ACTIONS[a].get("group") == "box"]})
+            sha = hashlib.sha256(blob.encode()).hexdigest()
+            ok2, t2 = _box_ssh("id_action_conadmin", tgts[target],
+                               f"console-admin estate {sha}", payload=blob)
+            steps.append({"box": target, "step": "clear estate", "ok": ok2, "detail": t2[:120]})
+        audit({"action": "demote-admin", "target": target, "client": client,
+               "result": "OK" if not failures else "PARTIAL", "detail": ",".join(failures)})
+        return (200 if not failures else 502), {
+            "steps": steps, "failed": failures,
+            "message": ("Demoted. Its keys are off every box." if not failures else
+                        "Demoted where reachable. Its keys are STILL on: " + ", ".join(failures))}
+
+    # ---- promote ----
+    ok, keytext = _box_ssh("id_action_conadmin", tgts[target], "console-admin keys")
+    if not ok:
+        return 502, {"error": f"could not get that box's keys: {keytext}"}
+    pubs = {}
+    for line in keytext.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[1] == "ssh-ed25519":
+            pubs[parts[0]] = f"{parts[1]} {parts[2]}"
+    if not pubs:
+        return 502, {"error": "that box returned no usable public keys"}
+    scripts = _admin_key_scripts()
+    by_name = {t.get("name"): t for t in (state or {}).get("targets", [])}
+
+    for name, dest in tgts.items():
+        prof = str((by_name.get(name) or {}).get("profile") or "cloud")
+        if prof not in ("cloud", "firmbase", "nuc", "deployed"):
+            prof = "cloud"
+        lines = []
+        for kname, pub in sorted(pubs.items()):
+            script = scripts.get(kname)
+            if not script:
+                continue
+            args = f" --profile {prof} --json" if script == "tak-health" else ""
+            lines.append(f'command="/usr/local/bin/{script}{args}",restrict {pub} '
+                         f'vantage-admin:{label}:{kname}')
+        blob = "\n".join(lines)
+        sha = hashlib.sha256(blob.encode()).hexdigest()
+        ok, txt = _box_ssh("id_action_authcon", dest,
+                           f"authorize-console add {label} {sha}", payload=blob)
+        steps.append({"box": name, "step": "authorise", "ok": ok, "detail": txt[:120]})
+        if not ok:
+            failures.append(name)
+
+    if failures:
+        # do NOT flip the mode: a console that thinks it is an admin but cannot reach half
+        # the estate is worse than one that never changed
+        audit({"action": "promote-admin", "target": target, "client": client,
+               "result": "FAIL", "detail": ",".join(failures)})
+        return 502, {"steps": steps, "failed": failures,
+                     "error": "not promoted: could not authorise its keys on " +
+                              ", ".join(failures) + ". Nothing was changed on the box."}
+
+    est_t, est_a, skipped = _admin_estate_for(cfg, state, skip=target)
+    blob = json.dumps({"targets": est_t, "action_targets": est_a,
+                       "enabled": list(enabled_actions(cfg))})
+    sha = hashlib.sha256(blob.encode()).hexdigest()
+    ok, txt = _box_ssh("id_action_conadmin", tgts[target],
+                       f"console-admin estate {sha}", payload=blob)
+    steps.append({"box": target, "step": "hand over the estate", "ok": ok, "detail": txt[:120]})
+    if not ok:
+        audit({"action": "promote-admin", "target": target, "client": client,
+               "result": "FAIL", "detail": "estate"})
+        return 502, {"steps": steps, "error": f"its keys are authorised, but it would not "
+                     f"take the estate: {txt}. It is still a client."}
+
+    ok, txt = _box_ssh("id_action_conmode", tgts[target], "console-mode admin")
+    steps.append({"box": target, "step": "mode admin", "ok": ok, "detail": txt[:120]})
+    audit({"action": "promote-admin", "target": target, "client": client,
+           "result": "OK" if ok else "FAIL"})
+    if not ok:
+        return 502, {"steps": steps, "error": f"authorised and given the estate, but the mode "
+                     f"did not change: {txt}"}
+    msg = f"{target} is now a standby admin: its own keys are on {len(tgts)} box(es) and it manages {len(est_a)}."
+    if skipped:
+        msg += (" Not handed over: " + ", ".join(skipped) +
+                " (no address it could reach them on; add them there by hand).")
+    return 200, {"steps": steps, "message": msg, "skipped": skipped}
+
+
 def set_console_mode_api(data, client):
     """Promote or demote the Vantage console running ON a target box between admin and client,
     from an admin console. Gated with the operator password - the same re-entry the local
@@ -8656,6 +8851,41 @@ KIOSK_JS = """
 """
 
 
+STANDBY_ADMIN_JS = r"""
+(function(){
+  if(window.__saBound) return; window.__saBound=true;
+  document.addEventListener('click',function(ev){
+    var b=ev.target.closest('button.sabtn'); if(!b) return;
+    var f=b.closest('form.saform'); if(!f) return;
+    ev.preventDefault();
+    var op=b.getAttribute('data-op');
+    var res=f.querySelector('.sa-res'), log=f.querySelector('.sa-log');
+    var passEl=f.querySelector('.sa-pass'), target=f.getAttribute('data-name');
+    if(passEl && !passEl.value){ res.textContent='Enter your operator password.'; res.className='sa-res lib-status err'; return; }
+    var what=(op==='promote')
+      ? ('Make '+target+' a standby admin?\n\nIts own keys go on every box in the estate, and it will be able to run the estate on its own.')
+      : ('Take '+target+' back to client?\n\nIts keys are removed from every box; it will manage only itself.');
+    if(!confirm(what)) return;
+    b.disabled=true; res.textContent=(op==='promote'?'Promoting\u2026':'Demoting\u2026'); res.className='sa-res lib-status';
+    log.textContent='';
+    var body={target:target, op:op}; if(passEl) body.passphrase=passEl.value;
+    fetch('/api/console/admin',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)}).then(function(x){return x.json().then(function(j){return{code:x.status,j:j};});})
+    .then(function(x){
+      b.disabled=false; if(passEl)passEl.value='';
+      var j=x.j||{};
+      (j.steps||[]).forEach(function(s){
+        log.textContent+=(s.ok?'OK   ':'FAIL ')+s.box+'  '+s.step+(s.detail?('  - '+s.detail):'')+'\n';
+      });
+      if(x.code===200){ res.textContent=j.message||'Done.'; res.className='sa-res lib-status ok'; }
+      else { res.textContent=j.error||j.message||'failed'; res.className='sa-res lib-status err'; }
+    }).catch(function(){ b.disabled=false; res.textContent='could not reach the console';
+      res.className='sa-res lib-status err'; });
+  });
+})();
+"""
+
+
 DESTROY_SERVER_JS = """
 (function(){
   if(window.__dsBound) return; window.__dsBound=true;
@@ -8822,6 +9052,30 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
             "<span class='cr-res lib-status' role=status style='margin-left:10px'></span>"
             "</form></div>")
         doc.append(f"<script>{CONSOLE_MODE_JS}</script>")
+        # The standby admin. The role selector above changes what a console BELIEVES it is;
+        # this changes what it can actually reach, which is the difference between a spare
+        # admin and a console that discovers it is powerless the day the main one dies.
+        if all(a in acts for a in ("authorize-console", "console-admin")):
+            pw2 = ("<label class=cred-pass><span>Operator password</span>"
+                   "<input type=password class=sa-pass autocomplete=off></label>"
+                   if auth_configured() else "")
+            doc.append(
+                "<h2 class=sec-eye>Standby admin</h2>"
+                f"<div class=conrole><form class=saform data-name='{e(name)}'>"
+                "<p class=meta>Give this box its own keys, authorise them on every box in the "
+                "estate, hand it the estate and switch it to admin, in that order. It ends up "
+                "able to run the estate on its own, so losing this console is survivable. Its "
+                "keys are its own: taking them away later leaves every other console working. "
+                "If any box cannot be authorised the promotion stops and nothing on the box "
+                "changes.</p>" + pw2
+                + "<div class=kk-btns style='display:flex;gap:8px;flex-wrap:wrap;margin:8px 0'>"
+                f"<button type=button class='a-go sabtn confirm' data-op=promote>Make {e(label)} "
+                "a standby admin</button>"
+                "<button type=button class='a-go sabtn confirm' data-op=demote>Take it back to "
+                "client</button></div>"
+                "<span class='sa-res lib-status' role=status style='margin-left:10px'></span>"
+                "<pre class='deplog sa-log'></pre></form></div>")
+            doc.append(f"<script>{STANDBY_ADMIN_JS}</script>")
     # Kiosk: the box's own screen showing its console. Added after an install, then turned on
     # or off from here. Only when the box accepts it (enrolled for the kiosk action). A normal
     # control - reversible - but the state-changing buttons are gated with the operator password.
@@ -9362,6 +9616,164 @@ def release_deviation(manifest, state, desired):
     return rows
 
 
+# Where a downloaded release waits before anything is done with it. Its own shelf, not the
+# software shelf (that is the app channel), because a staged release is neither installed nor
+# discarded: it is evidence, and an operator should be able to see exactly what is sitting there.
+UPDATES_DIR = os.environ.get("VANTAGE_CONSOLE_UPDATES", os.path.join(STORE_ROOT, "updates"))
+RELEASE_MAX = int(os.environ.get("VANTAGE_CONSOLE_RELEASE_MAX", str(512 * 1024 * 1024)))
+
+
+def release_assets(tag, timeout=10):
+    """The files published against a release tag: name -> (url, size). A tag with no release
+    object behind it has none, which is the honest answer for a repo that only tags."""
+    import urllib.request as _ur
+    url = f"https://api.github.com/repos/{VANTAGE_REPO}/releases/tags/{tag}"
+    req = _ur.Request(url, headers={"User-Agent": f"vantage-console/{VERSION}",
+                                    "Accept": "application/vnd.github+json"})
+    try:
+        with _ur.urlopen(req, timeout=timeout) as r:
+            rel = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:
+        return {}
+    return {str(a.get("name")): (str(a.get("browser_download_url")), int(a.get("size") or 0))
+            for a in (rel.get("assets") or []) if a.get("name")}
+
+
+def staged_releases():
+    """What is already on the shelf, with the verdict recorded when it was pulled."""
+    out = []
+    try:
+        for f in sorted(os.listdir(UPDATES_DIR)):
+            if not f.endswith(".tgz"):
+                continue
+            full = os.path.join(UPDATES_DIR, f)
+            rec = {"file": f, "size": os.path.getsize(full), "verified": False}
+            side = full + ".sha256"
+            if os.path.exists(side):
+                rec["verified"] = True
+                rec["sha256"] = open(side).read().split()[0][:64]
+            out.append(rec)
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def start_release_pull(data, client):
+    """Download a published release onto this console's shelf and verify it (Spec 004 slice 3).
+
+    Staging is not applying. Nothing is installed, no box is touched: the archive lands on the
+    shelf, its checksum is checked against the one published beside it, and it sits there until
+    an operator does something with it - apply it, or carry it to an offline box on a stick.
+
+    The checksum proves the archive arrived intact and complete. It is NOT a signature: anyone
+    who could replace the archive could replace the checksum beside it, so this defends against
+    a truncated or corrupted download, not against a compromised publisher. Signing is the next
+    step up and this says so rather than implying more than it does."""
+    import urllib.request as _rq
+    latest = check_vantage_release()
+    if not latest.get("ok"):
+        return 502, {"error": latest.get("error", "could not reach the publish surface")}
+    tag = latest["tag"]
+    assets = release_assets(tag)
+    tgz = next((n for n in assets if n.endswith(".tgz")), None)
+    if not tgz:
+        return 400, {"error": f"{tag} publishes no archive to download. The repository carries "
+                              "the tag but no release file against it, so there is nothing to "
+                              "stage; build a cut and attach it to the release first."}
+    url, size = assets[tgz]
+    if size and size > RELEASE_MAX:
+        return 400, {"error": f"{tgz} is {size} bytes, over the {RELEASE_MAX} cap"}
+    want_sha = ""
+    sumname = next((n for n in assets if n == tgz + ".sha256" or n == "SHA256SUMS"), None)
+    if sumname:
+        try:
+            req = _rq.Request(assets[sumname][0],
+                              headers={"User-Agent": f"vantage-console/{VERSION}"})
+            with _rq.urlopen(req, timeout=20) as r:
+                for line in r.read().decode("utf-8", "replace").splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[-1].lstrip("*") == tgz:
+                        want_sha = parts[0].lower()
+                    elif len(parts) == 1 and re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+                        want_sha = parts[0].lower()
+        except Exception:
+            want_sha = ""
+
+    job_id = "j" + os.urandom(6).hex()
+    os.makedirs(JOBS_DIR, exist_ok=True)
+    log_path, _ = _job_paths(job_id)
+    started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _job_write(job_id, {"job": job_id, "action": "release-pull", "target": tgz,
+                        "status": "running", "started": started})
+    audit({"action": "release-pull", "target": tag, "result": "STARTED", "job": job_id,
+           "client": client})
+
+    def run():
+        ok = False
+        with open(log_path, "w") as log:
+            def say(m):
+                log.write(m.rstrip() + "\n"); log.flush()
+            os.makedirs(UPDATES_DIR, exist_ok=True)
+            dest = os.path.join(UPDATES_DIR, tgz)
+            tmp = dest + ".part"
+            try:
+                say(f"release {tag}")
+                say(f"fetching {url}")
+                if not want_sha:
+                    say("NOTE the release publishes no checksum beside the archive; the "
+                        "download can be checked for completeness but not against a "
+                        "published value")
+                req = _rq.Request(url, headers={"User-Agent": f"vantage-console/{VERSION}"})
+                sha = hashlib.sha256(); got = 0; first = b""
+                with _rq.urlopen(req, timeout=120) as r:
+                    total = int(r.headers.get("Content-Length", "0") or 0)
+                    if total > RELEASE_MAX:
+                        raise RuntimeError(f"{total} bytes is over the {RELEASE_MAX} cap")
+                    with open(tmp, "wb") as fh:
+                        while True:
+                            chunk = r.read(1 << 20)
+                            if not chunk:
+                                break
+                            if not first:
+                                first = chunk[:2]
+                                if first != b"\x1f\x8b":
+                                    raise RuntimeError("that is not a gzip archive")
+                            sha.update(chunk); fh.write(chunk); got += len(chunk)
+                            if got > RELEASE_MAX:
+                                raise RuntimeError("the archive exceeded its cap mid-download")
+                digest = sha.hexdigest()
+                say(f"downloaded {got} bytes")
+                if total and got != total:
+                    raise RuntimeError(f"truncated: expected {total} bytes, got {got}")
+                if want_sha:
+                    if digest != want_sha:
+                        raise RuntimeError(f"checksum mismatch: published {want_sha}, got {digest}")
+                    say(f"checksum matches the published value ({digest})")
+                else:
+                    say(f"sha256 {digest} (nothing published to compare it against)")
+                os.replace(tmp, dest)
+                if want_sha:
+                    with open(dest + ".sha256", "w") as fh:
+                        fh.write(f"{digest}  {tgz}\n")
+                say(f"staged {dest}")
+                say("staged, not applied: no box has been touched")
+                ok = True
+            except Exception as ex:
+                say(f"ERROR {ex}")
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        _job_write(job_id, {"job": job_id, "action": "release-pull", "target": tgz,
+                            "status": "done" if ok else "failed", "started": started})
+        audit({"action": "release-pull", "target": tag, "job": job_id,
+               "result": "OK" if ok else "FAIL", "client": client})
+
+    threading.Thread(target=run, daemon=True).start()
+    return 200, {"job": job_id, "file": tgz, "verifying": bool(want_sha)}
+
+
 def vantage_update_status(latest):
     """Compare what this box runs against what the surface carries. Returns (state, text)."""
     here = VANTAGE_RELEASE.lstrip("vV")
@@ -9417,13 +9829,16 @@ def render_operations(state):
     # with no route to github.com simply says so.
     doc.append("<h2 class=sec-eye>Vantage updates</h2>")
     doc.append(
-        "<div class=depcard><p class=meta>This box runs Vantage "
+        "<div class=depcard id=upwrap><p class=meta>This box runs Vantage "
         f"<b>{e(VANTAGE_RELEASE)}</b> (console {e(VERSION)}). Check what "
         f"<code>{e(VANTAGE_REPO)}</code> publishes, and see whether an update is waiting. "
         "The check calls github.com only when you press it; nothing is downloaded and no "
         "credentials leave this box. An offline box will say it could not reach GitHub, "
         "which is not a fault.</p>"
-        "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "
+        + ("<label class=cred-pass><span>Operator password</span>"
+           "<input type=password class=up-pass autocomplete=off></label>"
+           if auth_configured() else "")
+        + "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "
         "updates</button></div>"
         "<div id=upres class='a-res' role=status aria-live=polite></div></div>")
     doc.append("""<script>(function(){
@@ -9442,6 +9857,32 @@ b.addEventListener('click',function(){
       (l.published?(' ('+l.published.slice(0,10)+')'):'')+'.'));
     if(l.url){var a=document.createElement('a');a.href=l.url;a.target='_blank';
       a.rel='noopener noreferrer';a.textContent='Open it on GitHub \u203a';r.appendChild(a);}
+    (j.staged||[]).forEach(function(sg){
+      r.appendChild(el('div','meta','On the shelf: '+sg.file+' ('+Math.round(sg.size/1048576)+' MB)'+
+        (sg.verified?', checksum verified':', not checked against a published value')));
+    });
+    var dl=el('button','a-go','Download this release to the shelf'); dl.type='button';
+    dl.addEventListener('click',function(){
+      var pw=document.querySelector('#upwrap .up-pass');
+      if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+      dl.disabled=true; dl.textContent='Downloading\u2026';
+      var lg=el('pre','deplog',''); r.appendChild(lg);
+      fetch('/api/updates/pull',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({passphrase:pw?pw.value:''})})
+       .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+       .then(function(x){
+         if(x.code!==200){ dl.disabled=false; dl.textContent='Download failed';
+           lg.textContent=(x.o.error||'failed'); return; }
+         var t=setInterval(function(){
+           fetch('/api/job/'+x.o.job).then(function(y){return y.json();}).then(function(jb){
+             lg.textContent=(jb.log||'');
+             if(jb.status&&jb.status!=='running'){ clearInterval(t); dl.disabled=false;
+               dl.textContent=(jb.status==='done')?'Downloaded to the shelf':'Download failed'; }
+           }).catch(function(){});
+         },1200);
+       }).catch(function(){ dl.disabled=false; dl.textContent='could not reach the console'; });
+    });
+    r.appendChild(dl);
     var dev=j.deviation||[];
     if(!j.manifest){
       r.appendChild(el('div','meta','That release declares no component versions, so this '+
@@ -13829,7 +14270,8 @@ class Handler(BaseHTTPRequestHandler):
                    "client": self.address_string()})
             self._send(200, json.dumps({"here": VANTAGE_RELEASE, "state": st, "text": text,
                                         "latest": latest, "repo": VANTAGE_REPO,
-                                        "manifest": manifest, "deviation": dev}),
+                                        "manifest": manifest, "deviation": dev,
+                                        "staged": staged_releases()}),
                        "application/json")
         elif path == "/api/kiosk/status":
             # is a kiosk running on this box? the box's own view asks before it offers the
@@ -14190,6 +14632,7 @@ class Handler(BaseHTTPRequestHandler):
                             "/api/enrol-batch", "/api/usb-copy", "/api/module/load-offline",
                             "/api/usb-list", "/api/usb-import", "/api/software/current",
                             "/api/destroy", "/api/console/set-mode", "/api/console/kiosk",
+                            "/api/console/admin", "/api/updates/pull",
                             "/api/kiosk/exit",
                             "/api/store/mkdir", "/api/store/move", "/api/store/delete",
                             "/api/vault/save", "/api/networks/channel",
@@ -14299,6 +14742,25 @@ class Handler(BaseHTTPRequestHandler):
             code, res = software_current_api(data, client)
         elif path == "/api/destroy":
             code, res = destroy_api(data, client)
+        elif path == "/api/updates/pull":
+            # download a published release onto the shelf and verify it. Staging only: an
+            # operator still decides what happens to it. Gated like any write.
+            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+                code, res = 403, {"error": "your operator password is required to download a release"}
+            else:
+                code, res = start_release_pull(data, client)
+        elif path == "/api/console/admin":
+            # promote/demote a standby admin: keys, authorisation across the estate, the
+            # estate itself, then the mode. Operator password gated like the mode change.
+            tgt = str(data.get("target", ""))
+            op = str(data.get("op", ""))
+            if op not in ("promote", "demote"):
+                code, res = 400, {"error": "op must be promote or demote"}
+            elif auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+                code, res = 403, {"error": "your operator password is required to change "
+                                  "which consoles can run this estate"}
+            else:
+                code, res = promote_admin_console(tgt, client, demote=(op == "demote"))
         elif path == "/api/console/set-mode":
             code, res = set_console_mode_api(data, client)
         elif path == "/api/console/kiosk":

@@ -65,7 +65,7 @@ install -d -m 0775 -o "$USER_NAME" -g "$USER_NAME" /srv/vault /srv/vault/Deploye
 {"generated_at": "", "estate_result": "UNKNOWN", "targets": []}
 SEOF
 chown "$USER_NAME:$USER_NAME" "$VAR/state.json"
-for d in tak-server mission-packs map-packs software; do
+for d in tak-server mission-packs map-packs software updates; do
     install -d -m 0750 -o "$USER_NAME" -g "$USER_NAME" "$VAR/agent/store/$d"
 done
 

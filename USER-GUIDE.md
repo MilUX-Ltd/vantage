@@ -368,10 +368,16 @@ settings, and nothing beyond it. A new install comes up in client mode; the esta
 is admin.
 
 Change the mode under Customize (the gear). Switching it asks you to confirm, takes the
-operator password, and reloads so the new surface shows. An admin box can also switch
-another box's mode from that box's server page. Promoting a box to admin gives it its own
-estate keys, so you can stand up a second admin console for resilience if the main one ever
-fails; demoting it returns it to its own box only.
+operator password, and reloads so the new surface shows.
+
+**A standby admin** is more than a mode. On a box's server page, *Standby admin* gives that
+box its own keys, authorises them on every box in the estate, hands it the estate and then
+switches it to admin, in that order. It ends up able to run the estate on its own, so losing
+your main console is survivable. The keys are its own: taking them away later leaves every
+other console working. If any box cannot be authorised the promotion stops and nothing on
+the box changes, because a console that believes it is an admin and cannot act is worse than
+one that never changed. Taking it back to client revokes its keys everywhere, and says
+plainly if a box was unreachable and still holds them.
 
 ## Kiosk mode
 

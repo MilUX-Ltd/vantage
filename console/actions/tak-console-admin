@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# tak-console-admin - the two things a box must do to become (or stop being) a standby admin
+# console, beyond the mode flip that tak-console-mode already handles.
+#
+#     console-admin keys              - mint this console's own action keys if it has none,
+#                                       and print their PUBLIC halves, one per line
+#     console-admin estate <sha256>   - take the estate this console should manage (targets
+#                                       and the action set) on stdin, and write it
+#
+# Together with tak-authorize-console on every OTHER box, this is what makes promotion real:
+# the promoted console ends up with its own keys (authorised across the estate) and a list of
+# boxes to point them at. Nothing is shared with the first admin, so revoking one leaves the
+# other working (Spec 003, Option A).
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-console-admin",restrict ssh-ed25519 AAAA... vantage-console-conadmin
+# It runs UNPRIVILEGED (as takadmin); reading a console's key directory and writing its config
+# are handed to tak-console-admin-priv through a scoped sudoers rule, which re-validates.
+#
+# `keys` prints public key material only. There is no op here that reveals a private key.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb op want_sha extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "console-admin" ]] || deny "only console-admin is permitted on this key"
+[[ -z "${extra:-}" ]] || deny "too many arguments"
+[[ "$op" =~ ^(keys|estate)$ ]] || deny "op must be keys or estate"
+
+if [[ "$op" == "keys" ]]; then
+    exec sudo -n /usr/local/bin/tak-console-admin-priv keys
+fi
+
+# estate: the config arrives on stdin, hashed both ends so a truncated pipe cannot half-write
+# a box's estate. The privileged half validates every field before anything is written.
+[[ "$want_sha" =~ ^[0-9a-f]{64}$ ]] || deny "estate needs the payload sha256"
+payload=$(cat)
+[[ -n "$payload" ]] || deny "no payload on stdin"
+got_sha=$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1)
+[[ "$got_sha" == "$want_sha" ]] || deny "payload sha256 mismatch (sent $want_sha, got $got_sha)"
+
+printf '%s' "$payload" | exec sudo -n /usr/local/bin/tak-console-admin-priv estate

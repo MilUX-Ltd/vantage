@@ -35,7 +35,7 @@ set -uo pipefail
 # which version was actually running on which box, and the deployable kit is away with the
 # first one on it. A checker you cannot version is a checker you cannot trust
 # across an estate.
-VERSION="1.9.0"
+VERSION="1.9.1"
 SCHEMA="milux.tak-health/2"
 PROFILE=""
 JSON=0
@@ -893,7 +893,7 @@ gather_software() {
 
     # CloudTAK: liveness off the API port (lesson 1: check what it produces), version
     # from a world-readable breadcrumb. The checkout usually lives in a home directory
-    # (/home/matt/CloudTAK) that this deliberately-unprivileged checker cannot read,
+    # that this deliberately-unprivileged checker cannot read,
     # so root writes the version to /etc/tak-cloudtak-version (the update-cloudtak
     # action refreshes it on every apply, and enrolment seeds it). Fall back to a git
     # checkout only where one is actually readable; safe.directory='*' because the
@@ -901,7 +901,7 @@ gather_software() {
     v=""
     [[ -r /etc/tak-cloudtak-version ]] && v=$(head -1 /etc/tak-cloudtak-version | tr -dc 'A-Za-z0-9._+-')
     ct=""
-    for cdir in /home/matt/CloudTAK /opt/CloudTAK /root/CloudTAK; do
+    for cdir in /opt/CloudTAK /root/CloudTAK /srv/CloudTAK; do
         [[ -r "$cdir/docker-compose.yml" ]] && { ct="$cdir"; break; }
     done
     [[ -z "$v" && -n "$ct" ]] && v=$(git -c safe.directory='*' -C "$ct" describe --tags --always 2>/dev/null || true)

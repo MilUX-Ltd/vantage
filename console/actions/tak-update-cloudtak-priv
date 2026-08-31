@@ -14,7 +14,19 @@ set -euo pipefail
 deny() { echo "ERR $*" >&2; exit 2; }
 
 # --- the one directory this box is willing to have applied from the console ---------------------
-COMPOSE_DIR="/home/matt/CloudTAK"
+# Where CloudTAK actually lives. The provisioner installs it to /opt/CloudTAK; a hand-built
+# box may have it elsewhere, so look rather than assume. It used to be hardcoded to one
+# person's home directory, which was both wrong on every provisioned box (the compose step
+# silently did nothing) and somebody's name shipped in a public product.
+find_compose_dir() {
+    local d
+    for d in /opt/CloudTAK /root/CloudTAK /srv/CloudTAK ${CLOUDTAK_DIR:-}; do
+        [[ -n "$d" && -f "$d/docker-compose.yml" ]] && { echo "$d"; return 0; }
+    done
+    echo /opt/CloudTAK
+}
+
+COMPOSE_DIR="$(find_compose_dir)"
 # ------------------------------------------------------------------------------------------------
 
 [[ -f "$COMPOSE_DIR/docker-compose.yml" ]] || deny "no CloudTAK compose at $COMPOSE_DIR on this box"
