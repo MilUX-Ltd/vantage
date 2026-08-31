@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""vantage-baseline - what third-party software a Vantage estate is built on, at which
+version, and where to look when you want to know if that version is still current.
+
+The point is maintaining a baseline. An operator upgrading a box, an auditor asking what is
+in the stack, and an agent asked "are we behind on anything" all need the same list, and
+until now there wasn't one: the versions were scattered across two provisioner scripts as
+shell constants, some things were pinned by digest, one was not pinned at all, and TAK
+Server's version lived in a comment.
+
+    vantage-baseline                 the table, as an operator reads it
+    vantage-baseline --json          the same thing for a machine or an agent
+    vantage-baseline --write         regenerate docs/THIRD-PARTY.md + third-party.json
+    vantage-baseline --check         ask each upstream what it has released (needs network)
+
+THE RULE THAT KEEPS THIS HONEST: versions are READ OUT OF THE SHIPPED SCRIPTS, never typed
+in here. A hand-written list of dependencies is a list that goes stale silently, which is
+the same reasoning vantage-build-offline-bundle uses when it lets apt resolve its own
+closure. And it works in both directions: a pinned constant in a provisioner with no entry
+in this file is an error, not an omission, so nobody can add a dependency quietly.
+
+What is deliberately NOT here: anything with a licence we do not hold. TAK Server is listed
+because you must know which version an estate targets, but it is never downloaded, by this
+or any other Vantage program.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+DOC = os.path.join(ROOT, "docs", "THIRD-PARTY.md")
+JSON_OUT = os.path.join(ROOT, "console", "third-party.json")
+
+# The scripts that are allowed to pin a third-party version. Anything matching PIN_RE in one
+# of these must appear in COMPONENTS below, or --write and the test both fail.
+PINNING_SCRIPTS = [
+    "console/provision/vantage-tak-provision.sh",
+    "console/provision/vantage-infratak-provision.sh",
+]
+PIN_RE = re.compile(r"^([A-Z][A-Z0-9_]*)=\"([^\"]*)\"", re.M)
+# A constant naming a version is one whose name ends this way. Anything else in those
+# scripts is configuration, not a dependency.
+PIN_SUFFIXES = ("VER", "TAG", "DIGEST", "REF")
+
+# Metadata cannot be derived, so it lives here: what the thing is, who publishes it, where to
+# look for what they have released, its licence, and whether we can carry it onto a
+# disconnected box. The VERSION never lives here. `pin` names the script and the constant it
+# is read from; `fixed` is for the things no constant governs, and says where the version
+# actually comes from instead.
+COMPONENTS = [
+    {
+        "id": "takserver",
+        "name": "TAK Server",
+        "what": "the server itself, on every box that runs one",
+        "fixed": "5.8 (the release the provisioner targets; the .deb is supplied by you)",
+        "project": "https://tak.gov/",
+        "releases": None,
+        "licence": "US Government / TAK Product Center terms, licensed to the operator",
+        "offline": "carried on the stick by you, never downloaded",
+    },
+    {
+        "id": "postgresql",
+        "name": "PostgreSQL + PostGIS",
+        "what": "TAK Server's database",
+        "fixed": "18 with PostGIS 3, from the PGDG archive",
+        "project": "https://www.postgresql.org/",
+        "releases": None,
+        "licence": "PostgreSQL Licence",
+        "offline": "yes, in the offline bundle",
+    },
+    {
+        "id": "openjdk",
+        "name": "OpenJDK JRE",
+        "what": "the Java runtime TAK Server's .deb depends on",
+        "fixed": "17 (headless), from the distribution archive",
+        "project": "https://openjdk.org/",
+        "releases": None,
+        "licence": "GPL-2.0 with Classpath Exception",
+        "offline": "yes, in the offline bundle",
+    },
+    {
+        "id": "mediamtx",
+        "name": "MediaMTX",
+        "what": "the video server behind the Streams page",
+        "pin": ("console/provision/vantage-tak-provision.sh", "MEDIAMTX_VER"),
+        "project": "https://github.com/bluenviron/mediamtx",
+        "releases": "https://api.github.com/repos/bluenviron/mediamtx/releases/latest",
+        "licence": "MIT",
+        "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+    },
+    {
+        "id": "cloudtak",
+        "name": "CloudTAK",
+        "what": "the browser client, in docker",
+        "pin": ("console/provision/vantage-tak-provision.sh", "CLOUDTAK_TAG"),
+        "project": "https://github.com/dfpc-coe/CloudTAK",
+        "releases": "https://api.github.com/repos/dfpc-coe/CloudTAK/releases/latest",
+        "licence": "MIT",
+        "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+    },
+    {
+        "id": "mbtileserver",
+        "name": "mbtileserver",
+        "what": "serves the offline map tilesets",
+        "pin": ("console/provision/vantage-tak-provision.sh", "MBTILESERVER_VER"),
+        "project": "https://github.com/consbio/mbtileserver",
+        "releases": "https://api.github.com/repos/consbio/mbtileserver/releases/latest",
+        "licence": "ISC",
+        "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+    },
+    {
+        "id": "ollama",
+        "name": "Ollama",
+        "what": "the local model runtime on a box that carries one",
+        "pin": ("console/provision/vantage-tak-provision.sh", "OLLAMA_VER"),
+        "project": "https://github.com/ollama/ollama",
+        "releases": "https://api.github.com/repos/ollama/ollama/releases/latest",
+        "licence": "MIT",
+        "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+    },
+    {
+        "id": "nodered",
+        "name": "Node-RED",
+        "what": "the automation flows, in docker",
+        "pin": ("console/provision/vantage-tak-provision.sh", "NODERED_IMAGE_DIGEST"),
+        "project": "https://nodered.org/",
+        "releases": None,
+        "licence": "Apache-2.0",
+        "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+        "note": "pinned by image digest, which is the strongest pin here: a tag can be "
+                "repointed at different bytes, a digest cannot",
+    },
+    {
+        "id": "infratak",
+        "name": "infra-TAK",
+        "what": "an alternative stack, offered as a choice: its marketplace deploys the "
+                "TAK ecosystem and Vantage manages the box underneath",
+        "pin": ("console/provision/vantage-infratak-provision.sh", "REF"),
+        "project": "https://github.com/takwerx/infra-TAK",
+        "releases": "https://api.github.com/repos/takwerx/infra-TAK/tags",
+        "licence": "see the upstream repository",
+        "offline": "no",
+        "note": "every upstream release is tagged -alpha; there is no stable line, so the "
+                "pin records what we have stood up rather than what is blessed",
+    },
+    {
+        "id": "meshgateway",
+        "name": "TAK Meshtastic Gateway",
+        "what": "the mesh bridge on the Networks page",
+        "fixed": "vendored as a MilUX bundle; the version travels with the bundle on the "
+                 "console's shelf, checked by its SHA at install (ADR-002)",
+        "project": "https://github.com/brian7704/TAK-Meshtastic-Gateway",
+        "releases": None,
+        "licence": "GPL-3.0-or-later, shipped as a separate aggregated work (see NOTICE)",
+        "offline": "yes, it is carried as a bundle",
+    },
+    {
+        "id": "hardening",
+        "name": "ufw, unattended-upgrades, qrencode",
+        "what": "the hardening set and the QR encoder device enrolment needs",
+        "fixed": "whatever the distribution archive carries",
+        "project": "https://ubuntu.com/",
+        "releases": None,
+        "licence": "various, all distribution packages",
+        "offline": "yes, in the offline bundle",
+    },
+]
+
+
+def read_pins():
+    """Every third-party version pinned in a shipped script, as {(script, name): value}."""
+    pins = {}
+    for rel in PINNING_SCRIPTS:
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            raise SystemExit(f"ERROR: {rel} is missing; the baseline cannot be built")
+        for name, value in PIN_RE.findall(open(path).read()):
+            if name.endswith(PIN_SUFFIXES):
+                pins[(rel, name)] = value
+    return pins
+
+
+def build():
+    """The baseline: metadata from this file, versions from the scripts. Raises if the two
+    have drifted apart in either direction."""
+    pins = read_pins()
+    claimed, out = set(), []
+    for c in COMPONENTS:
+        entry = {k: c.get(k) for k in
+                 ("id", "name", "what", "project", "releases", "licence", "offline", "note")}
+        if "pin" in c:
+            key = (c["pin"][0], c["pin"][1])
+            if key not in pins:
+                raise SystemExit(
+                    f"ERROR: {c['id']} claims {key[1]} in {key[0]}, which is not there any "
+                    f"more. Either the constant was renamed or the component was dropped; "
+                    f"fix console/vantage-baseline rather than letting the list go stale.")
+            claimed.add(key)
+            entry["version"] = pins[key]
+            entry["pinned_by"] = f"{key[0]}:{key[1]}"
+        else:
+            entry["version"] = c["fixed"]
+            entry["pinned_by"] = None
+        out.append(entry)
+    missed = sorted(set(pins) - claimed)
+    if missed:
+        lines = "\n".join(f"    {n} in {s}" for s, n in missed)
+        raise SystemExit(
+            "ERROR: these versions are pinned in shipped scripts but are not in the "
+            "baseline:\n" + lines + "\n  Add them to console/vantage-baseline. A dependency "
+            "nobody recorded is one nobody can maintain.")
+    return out
+
+
+def as_markdown(rows):
+    head = [
+        "# Third-party software in a Vantage estate",
+        "",
+        "**Generated by `console/vantage-baseline`. Do not edit by hand.** The versions here",
+        "are read out of the provisioner scripts, so this file cannot drift from what is",
+        "actually installed; a pinned version with no entry here fails the build.",
+        "",
+        "Regenerate with `console/vantage-baseline --write`. Check what upstream has released",
+        "with `console/vantage-baseline --check`, which needs the internet and changes",
+        "nothing: it reports, and moving a pin stays a deliberate edit with a changelog note.",
+        "",
+        "| Component | Version | What it is | Licence | Offline |",
+        "|---|---|---|---|---|",
+    ]
+    for r in rows:
+        head.append(f"| [{r['name']}]({r['project']}) | `{r['version']}` | {r['what']} "
+                    f"| {r['licence']} | {r['offline']} |")
+    head += ["", "## Notes", ""]
+    for r in rows:
+        if r.get("note"):
+            head.append(f"- **{r['name']}**: {r['note']}")
+    head += [
+        "",
+        "## Where each version comes from",
+        "",
+    ]
+    for r in rows:
+        if r["pinned_by"]:
+            head.append(f"- **{r['name']}** is pinned at `{r['pinned_by']}`.")
+        else:
+            head.append(f"- **{r['name']}** is not pinned by a constant: {r['version']}.")
+    head += [
+        "",
+        "## What is never downloaded",
+        "",
+        "TAK Server is licensed to the operator. No Vantage program fetches it: you supply",
+        "the `.deb`, online or on a stick. `vantage-build-offline-bundle` carries one only",
+        "if you point it at yours.",
+        "",
+    ]
+    return "\n".join(head)
+
+
+def check(rows):
+    """Ask each upstream what it has released. Read-only, and it never fails the run: a
+    disconnected box is a supported way to use this product, not an error."""
+    import urllib.request
+    import urllib.error
+    behind = 0
+    for r in rows:
+        if not r["releases"]:
+            print(f"  --   {r['name'][:24]:24s} {str(r['version'])[:34]:34s} "
+                  f"no release feed, check {r['project']}")
+            continue
+        try:
+            req = urllib.request.Request(r["releases"], headers={"User-Agent": "vantage-baseline"})
+            with urllib.request.urlopen(req, timeout=15) as fh:
+                data = json.load(fh)
+            latest = data[0]["name"] if isinstance(data, list) else data.get("tag_name", "?")
+        except Exception as exc:  # offline, rate-limited, moved: all the same to us
+            print(f"  ?    {r['name'][:24]:24s} {r['version'][:34]:34s} could not ask ({type(exc).__name__})")
+            continue
+        if latest == r["version"]:
+            print(f"  ok   {r['name'][:24]:24s} {r['version'][:34]:34s} current")
+        else:
+            behind += 1
+            print(f"  ->   {r['name'][:24]:24s} {r['version'][:34]:34s} upstream has {latest}")
+    print()
+    print(f"{behind} component(s) behind upstream. Nothing was changed: moving a pin is a "
+          f"deliberate edit.")
+    return behind
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--json", action="store_true", help="machine-readable, for an agent")
+    ap.add_argument("--write", action="store_true", help="regenerate docs/THIRD-PARTY.md")
+    ap.add_argument("--check", action="store_true", help="ask upstream what it has released")
+    args = ap.parse_args()
+    rows = build()
+    if args.json:
+        print(json.dumps({"components": rows}, indent=2))
+        return 0
+    if args.write:
+        open(DOC, "w").write(as_markdown(rows))
+        # The console reads the JSON, not this program. On an installed box the provisioner
+        # scripts are not laid out the way they are in the repo, so the generator cannot run
+        # there; the cut is where the sources exist, so the cut is where the fact is made.
+        # Same reasoning as VERSIONS.
+        open(JSON_OUT, "w").write(json.dumps({"components": rows}, indent=2) + "\n")
+        print(f"wrote {os.path.relpath(DOC, ROOT)} and "
+              f"{os.path.relpath(JSON_OUT, ROOT)} ({len(rows)} components)")
+        return 0
+    if args.check:
+        print(f"Vantage third-party baseline, {len(rows)} components\n")
+        check(rows)
+        return 0
+    print(f"Vantage third-party baseline, {len(rows)} components\n")
+    for r in rows:
+        print(f"  {r['name'][:26]:26s} {str(r['version'])[:46]:46s} {r['licence'][:34]}")
+    print("\n--check asks upstream what it has released; --write regenerates the doc.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,136 @@
+{
+  "components": [
+    {
+      "id": "takserver",
+      "name": "TAK Server",
+      "what": "the server itself, on every box that runs one",
+      "project": "https://tak.gov/",
+      "releases": null,
+      "licence": "US Government / TAK Product Center terms, licensed to the operator",
+      "offline": "carried on the stick by you, never downloaded",
+      "note": null,
+      "version": "5.8 (the release the provisioner targets; the .deb is supplied by you)",
+      "pinned_by": null
+    },
+    {
+      "id": "postgresql",
+      "name": "PostgreSQL + PostGIS",
+      "what": "TAK Server's database",
+      "project": "https://www.postgresql.org/",
+      "releases": null,
+      "licence": "PostgreSQL Licence",
+      "offline": "yes, in the offline bundle",
+      "note": null,
+      "version": "18 with PostGIS 3, from the PGDG archive",
+      "pinned_by": null
+    },
+    {
+      "id": "openjdk",
+      "name": "OpenJDK JRE",
+      "what": "the Java runtime TAK Server's .deb depends on",
+      "project": "https://openjdk.org/",
+      "releases": null,
+      "licence": "GPL-2.0 with Classpath Exception",
+      "offline": "yes, in the offline bundle",
+      "note": null,
+      "version": "17 (headless), from the distribution archive",
+      "pinned_by": null
+    },
+    {
+      "id": "mediamtx",
+      "name": "MediaMTX",
+      "what": "the video server behind the Streams page",
+      "project": "https://github.com/bluenviron/mediamtx",
+      "releases": "https://api.github.com/repos/bluenviron/mediamtx/releases/latest",
+      "licence": "MIT",
+      "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+      "note": null,
+      "version": "v1.20.0",
+      "pinned_by": "console/provision/vantage-tak-provision.sh:MEDIAMTX_VER"
+    },
+    {
+      "id": "cloudtak",
+      "name": "CloudTAK",
+      "what": "the browser client, in docker",
+      "project": "https://github.com/dfpc-coe/CloudTAK",
+      "releases": "https://api.github.com/repos/dfpc-coe/CloudTAK/releases/latest",
+      "licence": "MIT",
+      "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+      "note": null,
+      "version": "v13.70.0",
+      "pinned_by": "console/provision/vantage-tak-provision.sh:CLOUDTAK_TAG"
+    },
+    {
+      "id": "mbtileserver",
+      "name": "mbtileserver",
+      "what": "serves the offline map tilesets",
+      "project": "https://github.com/consbio/mbtileserver",
+      "releases": "https://api.github.com/repos/consbio/mbtileserver/releases/latest",
+      "licence": "ISC",
+      "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+      "note": null,
+      "version": "v0.11.0",
+      "pinned_by": "console/provision/vantage-tak-provision.sh:MBTILESERVER_VER"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "what": "the local model runtime on a box that carries one",
+      "project": "https://github.com/ollama/ollama",
+      "releases": "https://api.github.com/repos/ollama/ollama/releases/latest",
+      "licence": "MIT",
+      "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+      "note": null,
+      "version": "v0.33.2",
+      "pinned_by": "console/provision/vantage-tak-provision.sh:OLLAMA_VER"
+    },
+    {
+      "id": "nodered",
+      "name": "Node-RED",
+      "what": "the automation flows, in docker",
+      "project": "https://nodered.org/",
+      "releases": null,
+      "licence": "Apache-2.0",
+      "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
+      "note": "pinned by image digest, which is the strongest pin here: a tag can be repointed at different bytes, a digest cannot",
+      "version": "nodered/node-red@sha256:7d8a2bc628f80d2efc9a21832eac7c579a2c9ea4cda9040d3b0d4d68a1e36bc4",
+      "pinned_by": "console/provision/vantage-tak-provision.sh:NODERED_IMAGE_DIGEST"
+    },
+    {
+      "id": "infratak",
+      "name": "infra-TAK",
+      "what": "an alternative stack, offered as a choice: its marketplace deploys the TAK ecosystem and Vantage manages the box underneath",
+      "project": "https://github.com/takwerx/infra-TAK",
+      "releases": "https://api.github.com/repos/takwerx/infra-TAK/tags",
+      "licence": "see the upstream repository",
+      "offline": "no",
+      "note": "every upstream release is tagged -alpha; there is no stable line, so the pin records what we have stood up rather than what is blessed",
+      "version": "v10.1.55-alpha",
+      "pinned_by": "console/provision/vantage-infratak-provision.sh:REF"
+    },
+    {
+      "id": "meshgateway",
+      "name": "TAK Meshtastic Gateway",
+      "what": "the mesh bridge on the Networks page",
+      "project": "https://github.com/brian7704/TAK-Meshtastic-Gateway",
+      "releases": null,
+      "licence": "GPL-3.0-or-later, shipped as a separate aggregated work (see NOTICE)",
+      "offline": "yes, it is carried as a bundle",
+      "note": null,
+      "version": "vendored as a MilUX bundle; the version travels with the bundle on the console's shelf, checked by its SHA at install (ADR-002)",
+      "pinned_by": null
+    },
+    {
+      "id": "hardening",
+      "name": "ufw, unattended-upgrades, qrencode",
+      "what": "the hardening set and the QR encoder device enrolment needs",
+      "project": "https://ubuntu.com/",
+      "releases": null,
+      "licence": "various, all distribution packages",
+      "offline": "yes, in the offline bundle",
+      "note": null,
+      "version": "whatever the distribution archive carries",
+      "pinned_by": null
+    }
+  ]
+}

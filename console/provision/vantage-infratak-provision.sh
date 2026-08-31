@@ -12,10 +12,18 @@
 #
 #   vantage-infratak-provision.sh [--ref <tag-or-branch>] [--dry-run]
 #
+# With no --ref it clones the pinned tag below, so two customers provisioned a month apart
+# get the same software. Pass --ref to move a box deliberately.
+#
 # On success it prints INFRATAK-READY with the URL and where the password lives.
 set -uo pipefail
 
-REF="main" DRY=0
+# The pinned baseline. infra-TAK tags every release -alpha and has no stable line, so this
+# is the tag we have actually stood up, not a claim about its maturity. Defaulting to a
+# branch made two installs a week apart different software with nothing recording why, which
+# is the one thing the header above promises not to do. Move this deliberately, with a note
+# in the changelog, exactly like MEDIAMTX_VER and the rest.
+REF="v10.1.55-alpha" DRY=0
 die() { echo "PROVISION-ERROR: $*" >&2; exit 2; }
 run() { if (( DRY )); then echo "DRY: $*"; else eval "$*"; fi; }
 

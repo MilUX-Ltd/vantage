@@ -35,7 +35,7 @@ set -uo pipefail
 # which version was actually running on which box, and the deployable kit is away with the
 # first one on it. A checker you cannot version is a checker you cannot trust
 # across an estate.
-VERSION="1.9.1"
+VERSION="1.10.0"
 SCHEMA="milux.tak-health/2"
 PROFILE=""
 JSON=0
@@ -371,12 +371,18 @@ component_services() { # token -> service names, or rc 1 for an unknown token
       mesh)      echo "tak-meshtastic-gateway" ;;
       tailscale) echo "tailscaled" ;;
       docker)    echo "docker" ;;
+      # infra-TAK (takwerx) is a stack CHOICE alongside the MilUX TAK Server: its own
+      # marketplace deploys the TAK ecosystem above it, so what this box owes us is the
+      # platform itself, on docker. What the marketplace puts on top is infra-TAK's
+      # business, not ours; a box running it declares infratak INSTEAD of takserver.
+      infratak)  echo "docker" ;;
       *) return 1 ;;
     esac
 }
 component_tcp() { # token -> TCP ports it must answer on
     case "$1" in
       takserver) echo "8089 8443 8446" ;;
+      infratak)  echo "5001" ;;
       mediamtx)  echo "1935 8554 8888" ;;
       maps)      echo "8080" ;;
       *) echo "" ;;
@@ -1311,6 +1317,9 @@ self_test() {
         "$([[ "$(component_tcp mediamtx)" == "1935 8554 8888" ]] && echo yes || echo no)"
     expect "lanntp brings udp 123"            yes \
         "$([[ "$(component_udp lanntp)" == "123" ]] && echo yes || echo no)"
+    expect "infratak is declarable, on its platform port" yes \
+        "$([[ "$(component_services infratak)" == "docker" \
+           && "$(component_tcp infratak)" == "5001" ]] && echo yes || echo no)"
     local tload; tload=$(mktemp)
     printf 'COMPONENTS=takserver,mediamtx\n' > "$tload"
     LOADOUT_FILE="$tload"; load_profile deployed
