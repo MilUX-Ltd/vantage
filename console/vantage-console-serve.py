@@ -32,7 +32,7 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.18.1"
+VERSION = "2.19.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
@@ -9319,6 +9319,49 @@ def check_vantage_release(timeout=10):
         return {"ok": False, "error": f"could not reach github.com: {ex}"[:180]}
 
 
+def fetch_release_manifest(tag, timeout=10):
+    """The VERSIONS manifest a release declares, read from the publish surface at that tag.
+
+    This is what turns "a newer Vantage exists" into "here is where your boxes deviate from
+    it". Same rules as the release check: operator-initiated, unauthenticated GET, honest
+    failure. A release cut before manifests existed simply has no VERSIONS file, and that is
+    reported as absent rather than as an error."""
+    import urllib.error as _ue
+    import urllib.request as _ur
+    url = f"https://raw.githubusercontent.com/{VANTAGE_REPO}/{tag}/VERSIONS"
+    req = _ur.Request(url, headers={"User-Agent": f"vantage-console/{VERSION}"})
+    try:
+        with _ur.urlopen(req, timeout=timeout) as r:
+            m = json.loads(r.read().decode("utf-8", "replace"))
+        return m if isinstance(m, dict) else None
+    except _ue.HTTPError as ex:
+        return None if ex.code == 404 else None      # absent, or unreadable: same answer
+    except Exception:
+        return None
+
+
+def release_deviation(manifest, state, desired):
+    """Where does this estate differ from what the release declares? Returns a list of rows,
+    one per component the release pins: what it ships, what the baseline says, and which
+    boxes actually run something else. TAK Server is not in a manifest (operator-supplied),
+    so it is never reported as deviating from a release that pins nothing."""
+    comps = (manifest or {}).get("components") or {}
+    base = desired or {}
+    rows = []
+    for comp in sorted(comps):
+        want = str(comps[comp])
+        boxes = []
+        for t in (state or {}).get("targets", []):
+            got = next((str(sw.get("version") or "") for sw in software_rows(t)
+                        if sw.get("name") == comp), None)
+            if got is not None and got and got != want:
+                boxes.append({"name": t.get("name", "?"), "version": got})
+        rows.append({"component": comp, "release": want,
+                     "baseline": str(base.get(comp, "")), "boxes": boxes,
+                     "baseline_differs": bool(base.get(comp)) and str(base.get(comp)) != want})
+    return rows
+
+
 def vantage_update_status(latest):
     """Compare what this box runs against what the surface carries. Returns (state, text)."""
     here = VANTAGE_RELEASE.lstrip("vV")
@@ -9385,21 +9428,61 @@ def render_operations(state):
         "<div id=upres class='a-res' role=status aria-live=polite></div></div>")
     doc.append("""<script>(function(){
 var b=document.getElementById('upchk'); if(!b)return;
+function el(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;}
 b.addEventListener('click',function(){
   var r=document.getElementById('upres');
-  b.disabled=true; r.textContent='Asking github.com\\u2026';
+  b.disabled=true; r.textContent='Asking github.com\u2026';
   fetch('/api/updates/check').then(function(x){return x.json();}).then(function(j){
-    b.disabled=false;
+    b.disabled=false; r.innerHTML=''; r.className='a-res';
     var l=j.latest||{};
     if(!l.ok){ r.textContent=j.text||'could not check'; r.className='a-res err'; return; }
+    r.appendChild(el('div',null,j.text));
     var where=(l.source==='release')?'published release':'latest tag';
-    r.innerHTML='';
-    var p=document.createElement('div'); p.textContent=j.text; r.appendChild(p);
-    var s=document.createElement('div'); s.className='meta';
-    s.textContent='The repository\\u2019s '+where+' is '+l.tag+(l.published?(' ('+l.published.slice(0,10)+')'):'')+'.';
-    r.appendChild(s);
-    if(l.url){ var a=document.createElement('a'); a.href=l.url; a.target='_blank';
-      a.rel='noopener noreferrer'; a.textContent='Open it on GitHub \\u203a'; r.appendChild(a); }
+    r.appendChild(el('div','meta','The repository\u2019s '+where+' is '+l.tag+
+      (l.published?(' ('+l.published.slice(0,10)+')'):'')+'.'));
+    if(l.url){var a=document.createElement('a');a.href=l.url;a.target='_blank';
+      a.rel='noopener noreferrer';a.textContent='Open it on GitHub \u203a';r.appendChild(a);}
+    var dev=j.deviation||[];
+    if(!j.manifest){
+      r.appendChild(el('div','meta','That release declares no component versions, so this '+
+        'console cannot say where the estate deviates from it.'));
+    } else if(dev.length){
+      var drift=dev.filter(function(d){return d.baseline_differs||(d.boxes&&d.boxes.length);});
+      var tb=el('table','tinv'); var hr=el('tr');
+      ['Component','This release','Your baseline','Boxes running something else'].forEach(function(h){
+        hr.appendChild(el('th',null,h));});
+      tb.appendChild(hr);
+      dev.forEach(function(d){
+        var tr=el('tr');
+        tr.appendChild(el('th',null,d.component));
+        tr.appendChild(el('td',null,d.release));
+        var tdb=el('td',d.baseline_differs?'b-drift':'b-ok',d.baseline||'\u2014');
+        tr.appendChild(tdb);
+        var names=(d.boxes||[]).map(function(x){return x.name+' ('+x.version+')';}).join(', ');
+        tr.appendChild(el('td',names?'b-drift':'b-ok',names||'none'));
+        tb.appendChild(tr);
+      });
+      r.appendChild(tb);
+      if(j.manifest.takserver){ r.appendChild(el('div','meta',j.manifest.takserver)); }
+      if(drift.length){
+        var btn=el('button','a-go','Adopt this release as the baseline');
+        btn.type='button';
+        btn.addEventListener('click',function(){
+          if(!confirm('Set the estate baseline to what '+l.tag+' ships?\n\n'+
+             'Drift is then measured against the published release instead of the values '+
+             'entered by hand. It changes no box.')) return;
+          btn.disabled=true; btn.textContent='Saving\u2026';
+          fetch('/api/setup/baseline',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({components:j.manifest.components})})
+            .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+            .then(function(x){ btn.textContent=(x.code===200)
+              ?'Baseline adopted. Reloading\u2026':(x.o.error||'failed');
+              if(x.code===200) setTimeout(function(){location.reload();},900); else btn.disabled=false;})
+            .catch(function(){btn.disabled=false;btn.textContent='could not reach the console';});
+        });
+        r.appendChild(btn);
+      }
+    }
     r.className='a-res '+((j.state==='behind')?'warn':'ok');
   }).catch(function(){ b.disabled=false;
     document.getElementById('upres').textContent='could not reach the console'; });
@@ -13739,11 +13822,14 @@ class Handler(BaseHTTPRequestHandler):
             # person pressed Check - the console never polls github.com on its own.
             latest = check_vantage_release()
             st, text = vantage_update_status(latest)
+            manifest = fetch_release_manifest(latest["tag"]) if latest.get("ok") else None
+            dev = release_deviation(manifest, state, load_desired()) if manifest else []
             audit({"action": "update-check", "result": "OK" if latest.get("ok") else "FAIL",
                    "detail": latest.get("tag") or latest.get("error", ""),
                    "client": self.address_string()})
             self._send(200, json.dumps({"here": VANTAGE_RELEASE, "state": st, "text": text,
-                                        "latest": latest, "repo": VANTAGE_REPO}),
+                                        "latest": latest, "repo": VANTAGE_REPO,
+                                        "manifest": manifest, "deviation": dev}),
                        "application/json")
         elif path == "/api/kiosk/status":
             # is a kiosk running on this box? the box's own view asks before it offers the

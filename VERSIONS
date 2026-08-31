@@ -1,0 +1,10 @@
+{
+  "vantage": "0.9.0-beta",
+  "console": "2.19.0",
+  "components": {
+    "tak-health": "1.9.0",
+    "cloudtak": "v13.70.0",
+    "mediamtx": "v1.20.0"
+  },
+  "takserver": "operator-supplied: this release pins no TAK Server version"
+}

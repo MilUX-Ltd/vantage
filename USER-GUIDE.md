@@ -348,9 +348,16 @@ which is not a fault. Two version numbers are in play and the panel keeps them a
 **Vantage release** (the public line, `0.9.x` through the beta) and the **console's own
 version**, which moves faster as the product is built.
 
+A release declares what it ships in a `VERSIONS` manifest, so the panel does not stop at
+"a newer Vantage exists": it lists each component the release pins, what your baseline says,
+and which boxes are running something else. **Adopt this release as the baseline** sets the
+baseline to what the release ships, so the drift shown on Overview is measured against what
+is published rather than values typed in by hand. It changes no box.
+
 Applying an update is not automatic and is not in this release: today the panel tells you
-what is current and links you to it. Pulling, verifying and applying a release, and doing
-the same from a USB bundle on a box with no internet, are the next steps (Spec 004).
+what is current, where you deviate, and links you to it. Pulling, verifying and applying a
+release, and doing the same from a USB bundle on a box with no internet, are the next steps
+(Spec 004).
 
 ## Modes: admin and client
 
