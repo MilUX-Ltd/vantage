@@ -211,6 +211,18 @@ Everything else lives in the same console:
 
 ## Connecting an AI assistant
 
+Vantage ships **an agent role and four skills**, so an AI you connect starts knowing the job
+rather than improvising against a tool list. See **[AGENT.md](AGENT.md)** for the full list of
+what it can read, what it can do, and what it will never do.
+
+In short: `vantage-agent` reads your estate, diagnoses what is wrong, and either proposes the fix
+or carries it out, depending on the autonomy you set. It comes with `vantage-lessons`
+(diagnosis, and which signals are worth believing), `vantage-redteam` (a security review that
+changes nothing), `update-estate` (where you stand against a release) and `estate-brief` (the
+standing brief it reads each session). They live in `agents/` and `skills/`, so you can read
+exactly what your agent has been told before you connect it.
+
+
 The Agent tab is a connection hub: you decide how AI connects and how much it may do.
 Nothing is mandated - the model that thinks is always the one you bring, so no route bills
 you for the AI itself.
