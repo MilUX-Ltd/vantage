@@ -6,7 +6,7 @@
 # outgoing federates sharing a host and port (DuplicateFederateException), so appending the same
 # partner under a second name does not fail the connect - it takes the whole server down on the
 # restart below. That happened to the NUC on 26 Aug 2026 ("Deployable-kit" + "deployed", both
-# milux-deployed:9001); the checker read FAIL until the duplicate was cut out by hand.
+# the deployed box:9001); the checker read FAIL until the duplicate was cut out by hand.
 #   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-federation-connect-priv
 set -euo pipefail
 deny(){ echo "ERR $*" >&2; exit 2; }

@@ -1,26 +1,26 @@
 {
-  "_comment": "Copy to /etc/vantage-console/targets.json. One entry per thing worth knowing about. Adding a non-TAK target is a new entry, not a code change.",
+  "_comment": "Copy to /etc/vantage-console/targets.json. One entry per thing worth knowing about. Adding a non-TAK target is a new entry, not a code change. Replace the example hosts with your own.",
   "targets": [
     {
       "name": "nuc",
-      "label": "Private TAK (office NUC)",
+      "label": "Private TAK (this box)",
       "kind": "local",
       "command": "/usr/local/bin/tak-health",
       "profile": "nuc"
     },
     {
       "name": "cloud",
-      "label": "Public TAK (tak.milux.co.uk)",
+      "label": "Public TAK (your public server)",
       "kind": "ssh",
-      "ssh": "takwatch@tak.milux.co.uk",
+      "ssh": "takwatch@tak.example.com",
       "identity": "/var/lib/vantage-console/.ssh/id_ed25519",
       "profile": "cloud"
     },
     {
       "name": "deployed",
-      "label": "Deployable kit (MINIX)",
+      "label": "Deployable kit",
       "kind": "ssh",
-      "ssh": "takwatch@milux-deployed.tail532ded.ts.net",
+      "ssh": "takwatch@deployed.example.com",
       "identity": "/var/lib/vantage-console/.ssh/id_ed25519",
       "profile": "deployed",
       "expected_offline": true,

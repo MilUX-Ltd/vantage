@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install-deployed-console.sh - stand up Vantage Deployed, the local console, on THIS box.
 #
-# Run as root on a deployed box (a MINIX-class forward kit). Installs the same single-file
+# Run as root on a deployed box (a deployable kit-class forward kit). Installs the same single-file
 # console the estate runs, but in the "deployed" edition: it manages only this box, from
 # Overview/Operations/Store/Vault, with no fleet surfaces. Health comes from the box's own
 # tak-health, polled by a local collector - there is no reach back to the estate console,

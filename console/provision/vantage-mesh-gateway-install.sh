@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # vantage-mesh-gateway-install.sh - stand up the Meshtastic TAK gateway on THIS box, from the
-# console's Networks page (Spec 001, card 6189). Streamed per-run through tak-mesh-deploy with
+# console's Networks page (Spec 001). Streamed per-run through tak-mesh-deploy with
 # its sha256; every parameter re-validated by the priv wrapper before this runs as root.
 #
 # Stages:

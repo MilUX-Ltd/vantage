@@ -8,7 +8,7 @@
 # Defence in depth: the unprivileged entry already checked the hash and syntax, and this
 # wrapper checks BOTH again (the file sat in /tmp between the two), then adds the gate that
 # matters most: the candidate must pass its own --self-test. A checker that cannot check
-# itself never lands (LESSONS.md lesson 2: check the checker).
+# itself never lands (the lessons log lesson 2: check the checker).
 set -euo pipefail
 
 deny() { echo "ERR $*" >&2; exit 2; }

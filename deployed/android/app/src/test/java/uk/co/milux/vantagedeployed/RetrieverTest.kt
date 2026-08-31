@@ -17,7 +17,7 @@ class RetrieverTest {
         val d = Files.createTempDirectory("vault").toFile()
         File(d, "Bold Quest").mkdirs()
         File(d, "Bold Quest/Kit power-up.md").writeText(
-            "# Kit power-up sequence\n\nRouter on first, then the MINIX, wait two minutes.\n" +
+            "# Kit power-up sequence\n\nRouter on first, then the deployable kit, wait two minutes.\n" +
             "Radios last, antennas on before power.\n")
         File(d, "Bold Quest/overview.md").writeText(
             "# Bold Quest overview\n\nDemonstration serial. Confirm the deployed picture on all clients.\n")

@@ -72,7 +72,7 @@ Device gate (the slice's named artefact, not an automated test): on the S23, Van
 Deployed joins the NUC's server from a minted payload, shows pending with the fingerprint,
 shows enrolled after `vd-confirm` on the NUC, and Test link returns green; a second press
 also green (counter advanced); after `vd-revoke` the ping is refused. Screenshots and the
-server's log are the evidence on card 6188.
+server's log are the evidence on an internal card.
 
 ## Out of scope
 

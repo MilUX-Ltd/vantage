@@ -18,7 +18,7 @@ rebuilds it. Nothing here is a source of truth.
 Standard library only. The NUC must not need pip to monitor itself, and the
 deployable kit has no internet at all.
 
-Argos, 2026-08-23. Businessmap card 6165.
+MilUX, 2026-08-23.
 """
 import json, os, subprocess, sys, tempfile, time
 from datetime import datetime, timezone
@@ -194,7 +194,7 @@ def main():
             worst = vr
 
     # A box running an old checker reports old truths. That is invisible unless
-    # something compares the versions, and the MINIX is away with the first
+    # something compares the versions, and the deployable kit is away with the first
     # build on it right now.
     seen = sorted({r.get("checker_version") for r in records
                    if r.get("checker_version")})

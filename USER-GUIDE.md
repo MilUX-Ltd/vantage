@@ -148,10 +148,15 @@ its own console then manages.
 ![Operations with the TAK server group open - and below, the audit log carrying the day's actual trail, denials included.](assets/screens/08-operations-with-the-tak-server-group-open-real-a.png)
 *Operations with the TAK server group open - and below, the audit log carrying the day's actual trail, denials included.*
 
-The full catalogue, grouped - TAK server, Federation, Software & updates, This box - with
-a box picker per action. Reads run on one click; writes state their consequence in a
-confirmation sentence and ask again; credential-minting actions require the operator
-password. Every run and refusal lands in the audit log.
+The estate, and the trail of what has been done to it. Operations lists the same servers
+Overview does; open one and its own page carries the full action set, already bound to that
+box. A few quick links on each tile - Logs, Restart, Certificates, Add device - jump
+straight to the common ones.
+
+A box is the unit of work, so there is nothing to manage here but the servers themselves.
+Reads run on one click; writes state their consequence in a confirmation sentence and ask
+again; credential-minting actions require the operator password. Every run and refusal
+lands in the audit log below.
 
 ## Federation
 
@@ -326,10 +331,59 @@ and revocation as it happens - the leash, visible.
 
 The gear, top right. Design is typeface and five colours - the whole console, its
 downloads page and its favicon follow. Console mode flicks this console between admin
-(full estate control) and client (watch and operate, never reshape). The PKI build
-defaults prefill every deploy, and you enter them once: a console installed from this
-one (Operations › Install a console) starts with the same design and defaults. AI
+(full estate control) and client (manages only its own box); see Modes below. The PKI
+build defaults prefill every deploy, and you enter them once: a console installed from
+this one (Operations › Install a console) starts with the same design and defaults. AI
 assistant set-up lives on the AI Connections page, not here.
+
+## Vantage updates
+
+At the foot of Operations: what Vantage release this box runs, and what the public
+repository publishes. Press **Check GitHub for updates** and the console asks
+`MilUX-Ltd/vantage` what its current release is, then tells you whether you are on it.
+
+The check happens only when you press it. The console does not poll GitHub, download
+anything, or send any credentials; a box with no route out says it could not reach GitHub,
+which is not a fault. Two version numbers are in play and the panel keeps them apart: the
+**Vantage release** (the public line, `0.9.x` through the beta) and the **console's own
+version**, which moves faster as the product is built.
+
+Applying an update is not automatic and is not in this release: today the panel tells you
+what is current and links you to it. Pulling, verifying and applying a release, and doing
+the same from a USB bundle on a box with no internet, are the next steps (Spec 004).
+
+## Modes: admin and client
+
+One console build, one setting. **Admin** mode manages the whole estate: every enrolled
+box, Deploy, enrolment, Federation. **Client** mode manages only its own box: install and
+configure this box's own TAK Server, its certificates, groups, loadout, and its own
+settings, and nothing beyond it. A new install comes up in client mode; the estate console
+is admin.
+
+Change the mode under Customize (the gear). Switching it asks you to confirm, takes the
+operator password, and reloads so the new surface shows. An admin box can also switch
+another box's mode from that box's server page. Promoting a box to admin gives it its own
+estate keys, so you can stand up a second admin console for resilience if the main one ever
+fails; demoting it returns it to its own box only.
+
+## Kiosk mode
+
+For a box with a screen. The kiosk boots the box straight into its own console, full
+screen, so powering it on lands on Vantage with nothing to log into. Install it and turn it
+on or off from the box's server page (Kiosk), or build it into a fresh box at Install time.
+
+**Getting out to a terminal.** The full-screen browser holds the keyboard, so the usual
+Ctrl+Alt+F-key console switch does nothing. Instead the console shows an **Exit to
+terminal** button (bottom right), and the shortcut **Ctrl+Alt+X**. Either stops the kiosk
+and hands the screen to a normal login prompt.
+
+**Getting back in.** Exiting only stops the kiosk for that session; it stays enabled. From
+the login prompt, sign in and run:
+
+    sudo systemctl start vantage-kiosk
+
+and the console returns to the screen. A reboot also brings it back, since the kiosk starts
+on boot.
 
 ## The security model
 

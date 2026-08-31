@@ -10,7 +10,7 @@
 # unprivileged with qrencode.
 #
 # The enrolment host is a per-box fact, NOT hostname -f (the cloud box's hostname is
-# 'milux' but phones enrol against tak.milux.co.uk). It is read from /etc/tak-enrol-host,
+# 'milux' but phones enrol against tak.example.com). It is read from /etc/tak-enrol-host,
 # a root-written one-line file; absent falls back to hostname -f with its eyes open.
 #
 # Output on success (stdout, one field per line, for the console to render):

@@ -24,7 +24,7 @@
 # After enrolment the box appears on the next poll: watched via its takwatch forced
 # command, actionable via its takadmin forced commands, judged against the baseline.
 #
-# Argos, 25 August 2026. Businessmap card 6165.
+# MilUX, 25 August 2026.
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 2; }
@@ -113,7 +113,7 @@ HOST="${ADMIN#*@}"
 # The guard is a marker, not a hostname: install-vantage.sh (or install-console.sh on the
 # MilUX estate) stamps /etc/vantage-console/console-host on the box that IS the console.
 # Any box can be a console; no box is one by accident.
-[[ -f /etc/vantage-console/console-host || "$(hostname -s)" == *openclaw* ]] \
+[[ -f /etc/vantage-console/console-host || "$(hostname -s)" == *the admin box* ]] \
     || die "run this on the console box (no /etc/vantage-console/console-host marker)"
 [[ "$(id -u)" == 0 ]] || die "run as root (sudo console-enrol-server ...)"
 [[ -f "$ARTEFACT" ]] || die "no checker artefact at $ARTEFACT"

@@ -47,5 +47,4 @@ This build is part of the development environment, running as a proof of concept
 is not a production credential system, so no standalone Compliance card is raised. The
 obligation kept is **tracking**: `docs/compliance-watch.md` lists everything in this design
 that would need compliance attention if it moves beyond demo use, and the watch list is
-reviewed whenever the product's status changes or at the Cyber Essentials Plus renewal
-(card 6181), whichever comes first.
+reviewed whenever the product's status changes or at the Cyber Essentials Plus renewal, whichever comes first.

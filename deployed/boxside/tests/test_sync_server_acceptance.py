@@ -2,7 +2,7 @@
 
 AC4 needs `cryptography` (real keys, real signatures) and is skipped where it is absent; it
 MUST be run on a box that has the library before the slice's gate is called met. The device
-gate itself (the S23 joining the NUC live) is a named artefact on card 6188, not a test here.
+gate itself (the S23 joining the NUC live) is a named artefact on an internal card, not a test here.
 Run: python3 -m unittest discover -s boxside/tests -v
 """
 import base64

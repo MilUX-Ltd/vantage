@@ -32,7 +32,7 @@ host=$(hostname -s 2>/dev/null || echo "")
 if [[ -z "$PROFILE" ]]; then
     case "$host" in
         *milux-dev*|*milux*) PROFILE=cloud ;;
-        *openclaw*)          PROFILE=firmbase ;;
+        *the admin box*)          PROFILE=firmbase ;;
         *deployed*)          PROFILE=deployed ;;
         *)                   PROFILE=firmbase ;;
     esac

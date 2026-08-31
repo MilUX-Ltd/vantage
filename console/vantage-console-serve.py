@@ -32,7 +32,12 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.12.1"
+VERSION = "2.18.1"
+# Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
+# The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
+# The update check compares THIS against what the publish surface carries, never VERSION.
+VANTAGE_RELEASE = "0.9.0-beta"
+VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
 ACTIONS_CONFIG = os.environ.get("VANTAGE_CONSOLE_ACTIONS", "/etc/vantage-console/actions.json")
@@ -55,7 +60,7 @@ INSTANCE_DEFAULTS = {
     "maker": "MilUX",
     "tagline": "fleet management for TAK",
     # the agent is generic until an instance names one, and hidden until one is wired
-    # in - a fresh install has nothing for a chat tab to talk to (card 6178)
+    # in - a fresh install has nothing for a chat tab to talk to
     "agent_name": "Agent",
     "agent_enabled": True,
     "console_mode": "admin",
@@ -113,7 +118,16 @@ _AUTH_LOCK = threading.Lock()
 
 AUTH_OPEN_PREFIXES = ("/store/file/", "/eud")
 AUTH_OPEN_PATHS = ("/login", "/healthz", "/api/health.json", "/favicon.svg",
-                   "/favicon.ico", "/api/propose", "/mcp")
+                   "/favicon.ico", "/api/propose", "/mcp",
+                   # the kiosk exit: loopback-gated in the handler, so the box's own
+                   # full-screen view can always drop to a terminal without a session
+                   "/api/kiosk/status", "/api/kiosk/exit")
+
+# In client mode the console manages only its own box (Spec 003). Most /api/setup/* is
+# estate machinery (baseline, deployment definitions, enrolling other boxes) and stays
+# blocked; these are the box's OWN settings and local build, so they are allowed. The set
+# grows as client-side local management does.
+CLIENT_SETUP_PATHS = ("/api/setup/instance", "/api/setup/password")
 
 
 def auth_configured():
@@ -305,7 +319,10 @@ PROPOSALS = os.environ.get("VANTAGE_CONSOLE_PROPOSALS", "/var/lib/vantage-consol
 # Chat with Sam: his own OpenClaw control UI, exposed on the tailnet by OpenClaw's Tailscale Serve
 # (gateway.tailscale.mode "serve"). This is Sam's real chat window; the console only links to it,
 # so an OpenClaw update cannot break it. Loopback + Serve is the documented, safe remote-access path.
-SAM_CHAT_URL = os.environ.get("VANTAGE_CONSOLE_SAM_CHAT", "https://openclaw-nuc.tail532ded.ts.net/")
+# No default: a console shipped to someone else must not point at MilUX's own box on
+# MilUX's tailnet. Set VANTAGE_CONSOLE_SAM_CHAT to the agent's own chat URL; unset, the
+# fallback link is simply not offered.
+SAM_CHAT_URL = os.environ.get("VANTAGE_CONSOLE_SAM_CHAT", "")
 # Native chat with Sam: the console is a paired OpenClaw client (sam_client.py) over loopback.
 # The device identity and the gateway token are written by bring-sam-online.sh (run once).
 SAM_IDENTITY = os.environ.get("SAM_IDENTITY", "/var/lib/vantage-console/agent/sam-device.json")
@@ -1118,7 +1135,7 @@ def agent_activity(limit=40):
         via = str(e.get("source", "") or "") + " " + str(e.get("client", "") or "")
         is_agent = (act in ("mcp-tool", "agent-connect", "agent-revoke", "agent-key",
                             "agent-autonomy", "agent-key-clear")
-                    or "mcp:" in via or "chat:" in via or "openclaw" in via)
+                    or "mcp:" in via or "chat:" in via or "the admin box" in via)
         if not is_agent:
             continue
         rows.append(e)
@@ -1212,15 +1229,18 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         # on one); a loopback dest (self-target) has no estate address, so fall through to
         # every interface - the box's firewall still governs. Literal addresses (old
         # callers) pass through untouched.
+        want_kiosk = str((inputs or {}).get("kiosk", "")) == "yes"
         if bind in ("estate", "local", "all"):
             dest_host = cfg["targets"][target].rsplit("@", 1)[-1]
             if bind == "local":
                 bind = "127.0.0.1:8090"
-            elif bind == "all" or dest_host in ("127.0.0.1", "localhost", "::1"):
+            elif bind == "all" or dest_host in ("127.0.0.1", "localhost", "::1") or want_kiosk:
+                # a kiosk box loads the console on loopback (127.0.0.1), so it MUST listen on
+                # all interfaces, loopback included, not only its estate address - binding to
+                # the estate address alone left the kiosk unable to reach its own console.
                 bind = "0.0.0.0:8090"
             else:
                 bind = f"{dest_host}:8090"
-        want_kiosk = str((inputs or {}).get("kiosk", "")) == "yes"
         # with kiosk, the installer lays down tak-kiosk-priv and runs its `install`; the kiosk
         # derives the box's own console URL itself, so nothing about it is passed from here
         try:
@@ -1330,7 +1350,7 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
 AGENT_CONN_FILE = os.environ.get("VANTAGE_CONSOLE_AGENT_CONNS",
                                  "/var/lib/vantage-console/agent/connections.json")
 AUTONOMY = ("observe", "propose", "act")
-AGENT_ROUTES = ("mcp", "apikey", "openclaw")
+AGENT_ROUTES = ("mcp", "apikey", "the admin box")
 
 
 def load_connections():
@@ -1666,13 +1686,15 @@ After=network-online.target
 Type=simple
 User=vantage-console
 Group=vantage-console
-Environment=VANTAGE_CONSOLE_EDITION=deployed
 Environment=VANTAGE_CONSOLE_BIND=__BIND__
 Environment=VANTAGE_CONSOLE_PORT=__PORT__
 ExecStart=/usr/bin/python3 /usr/local/lib/vantage-console/vantage-console-serve.py
 Restart=always
 RestartSec=5
-NoNewPrivileges=yes
+# NOT NoNewPrivileges: the console's only root path is `sudo -n console-setup-priv`
+# (its own scoped wrapper), and NoNewPrivileges blocks sudo outright - it broke every
+# local settings save and the kiosk exit on a deployed box (edge, 31 Aug). The wrapper's
+# sudoers rule is the boundary, not this flag.
 PrivateTmp=yes
 ProtectHome=yes
 [Install]
@@ -1708,11 +1730,24 @@ def build_console_installer(kiosk=False):
     if kiosk and os.path.isfile(kiosk_path):
         with open(kiosk_path, "rb") as fh:
             kiosk_priv_b64 = base64.b64encode(fh.read()).decode()
+    # console-self-enrol enrols the box into its OWN console (Spec 003): mint the console's
+    # own action keys, authorize them on the local takadmin, write actions.json self-target.
+    # Embedded and run at the end so a deployed box comes up managing its own server, not
+    # read-only. It needs the tak-* scripts + takadmin an estate-enrolled box already carries.
+    self_enrol_b64 = ""
+    se_path = os.path.join(libdir, "console-self-enrol.sh")
+    if os.path.isfile(se_path):
+        with open(se_path, "rb") as fh:
+            self_enrol_b64 = base64.b64encode(fh.read()).decode()
     unit_b64 = base64.b64encode(DEPLOYED_UNIT.encode()).decode()
     # "enter it once": the new console starts with THIS console's identity - design,
     # typeface, and the PKI build defaults - but only when the box has no instance.json
-    # yet, so a re-install never clobbers a box's own customization.
-    inst_b64 = base64.b64encode(json.dumps(load_instance()).encode()).decode()
+    # yet, so a re-install never clobbers a box's own customization. It comes up in CLIENT
+    # mode (manages only its own box, Spec 003) whatever mode the source console runs; an
+    # admin promotes it later. The old VANTAGE_CONSOLE_EDITION=deployed env did this job.
+    _seed_inst = dict(load_instance())
+    _seed_inst["console_mode"] = "client"
+    inst_b64 = base64.b64encode(json.dumps(_seed_inst).encode()).decode()
     # the health poll: without it the deployed console has no state to render and the board
     # sits at 503 forever. Same oneshot service + minute timer the admin installer lays down.
     # Only when the console ships a collector (it always does), and it runs a poll immediately
@@ -1766,6 +1801,11 @@ def build_console_installer(kiosk=False):
         "/etc/systemd/system/milux-console-collect.service "
         "/etc/systemd/system/milux-console-collect.timer\n"
         "  rm -rf /etc/systemd/system/milux-console.service.d\n"
+        # the console's sudoers rule names the user; the user was just renamed to
+        # vantage-console, so the rule must follow or every privileged local op (settings
+        # save, kiosk exit) is denied. This was the milux->vantage miss that broke edge.
+        "  [ -f /etc/sudoers.d/milux-console-setup ] && "
+        "sed -i 's/^milux-console /vantage-console /' /etc/sudoers.d/milux-console-setup || true\n"
         "  systemctl daemon-reload || true\n"
         "fi\n"
         "id vantage-console >/dev/null 2>&1 || useradd --system --home /var/lib/vantage-console "
@@ -1813,7 +1853,17 @@ def build_console_installer(kiosk=False):
             + "\nB64KIOSK\n"
             "chmod 755 /usr/local/bin/tak-kiosk-priv\n"
             "/usr/local/bin/tak-kiosk-priv install || echo 'WARN kiosk install did not complete'\n")
-           if kiosk and kiosk_priv_b64 else ""))
+           if kiosk and kiosk_priv_b64 else "")
+        # enrol the box into its own console so client mode can manage its own server, but
+        # only where the estate machinery (takadmin + the tak-* scripts) is already present.
+        + (("if id takadmin >/dev/null 2>&1; then\n"
+            "  base64 -d > /usr/local/bin/console-self-enrol <<'B64SE'\n" + self_enrol_b64
+            + "\nB64SE\n"
+            "  chmod 755 /usr/local/bin/console-self-enrol\n"
+            "  /usr/local/bin/console-self-enrol || echo 'WARN self-enrol did not complete'\n"
+            "else echo 'note: no takadmin here - enrol this box into the estate to manage it "
+            "locally'; fi\n")
+           if self_enrol_b64 else ""))
 
 
 def build_mission_pack(data, client):
@@ -2470,9 +2520,9 @@ def ingest_proposal(body, client):
     if tgt is not None and not action_applies(aid, tgt):
         return 400, {"error": "action does not apply to that box"}
     rationale = str(body.get("rationale", "")).strip()[:600]
-    source = str(body.get("source", "openclaw")).strip()[:48] or "openclaw"
+    source = str(body.get("source", "the admin box")).strip()[:48] or "the admin box"
     if not re.match(r"^[A-Za-z0-9 ._@:-]{1,48}$", source):
-        source = "openclaw"
+        source = "the admin box"
     rec = {"id": os.urandom(5).hex(),
            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
            "aid": aid, "target": target, "args": safe_inputs,
@@ -2592,7 +2642,7 @@ def forget_fedlink(source, address, port):
 # agent/jobs (the writable subdir), so a console restart loses nothing.
 JOBS_DIR = os.environ.get("VANTAGE_CONSOLE_JOBS", "/var/lib/vantage-console/agent/jobs")
 
-# 1.26.0 deployments (card 6172): a deployment is a named server-side record, not
+# 1.26.0 deployments: a deployment is a named server-side record, not
 # browser page state. The wizard autosaves into it and a reloaded page reopens it.
 # No secrets ever land here: no passphrase, no key material.
 DEPLOYMENTS_FILE = os.environ.get("VANTAGE_CONSOLE_DEPLOYMENTS",
@@ -4479,6 +4529,13 @@ details.tile[open]>summary .tile-toggle .chev{transform:rotate(45deg)}
 .tile-open{display:inline-block;margin-top:12px;font:600 12px var(--font-display);
  color:var(--acc);text-decoration:none}
 .tile-open:hover{text-decoration:underline}
+/* quick links into a box's own page (Operations): the common actions, one click away.
+   They sit inside the tile's summary, so stop the click from toggling the disclosure. */
+.tquick{display:flex;flex-wrap:wrap;gap:6px;margin:11px 0 2px}
+.tquick .qa{font:600 11px var(--font-display);letter-spacing:.02em;text-decoration:none;
+ color:var(--acc);border:1px solid var(--line);border-radius:7px;padding:4px 9px;
+ background:var(--card);white-space:nowrap}
+.tquick .qa:hover{border-color:var(--acc);text-decoration:none}
 /* issues surfaced on the tile face, so a problem shows without expanding */
 .tissues{list-style:none;margin:11px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
 .tissues .iss{display:flex;gap:7px;align-items:baseline;font-size:11.5px;line-height:1.35}
@@ -6560,7 +6617,14 @@ def page_head(title, inst=None):
             "<a class=skip href='#main'>Skip to content</a>"]
 
 
-EDITION = os.environ.get("VANTAGE_CONSOLE_EDITION", "estate")   # "estate" | "deployed"
+def console_is_admin(inst=None):
+    """The single capability axis (Spec 003). Admin mode manages the whole estate; client
+    mode manages only this box. One build - the mode lives in instance.json and is changed,
+    password-gated, by Customize or the console-mode action, both of which restart the
+    console. Default admin so an existing box with no declaration (the first admin console)
+    is never silently downgraded; the installer seeds console_mode=client for a new box."""
+    inst = inst if inst is not None else load_instance()
+    return inst.get("console_mode", "admin") == "admin"
 
 
 def nav_html(state, active, inst=None):
@@ -6572,7 +6636,7 @@ def nav_html(state, active, inst=None):
     e = html.escape
     inst = inst or load_instance()
     agent_name = inst["agent_name"]
-    if EDITION == "deployed":
+    if not console_is_admin(inst):
         items = [("/", "Overview", active == "estate", "Overview"),
                  ("/operations", "Operations", active == "operations", "Operations"),
                  ("/store", "File store", active == "store", "File store"),
@@ -6627,7 +6691,7 @@ def header_html(state, ev, age, active, crumb="Overview"):
             + ("<a id=gearbtn class=themebtn href='/customization' title='Customize this "
                "console' aria-label='Customize'"
                + (" aria-current=page" if active == "customization" else "")
-               + ">⚙</a>" if EDITION != "deployed" else "")
+               + ">⚙</a>")   # Customize is the box's own settings (password, design, console role) - both modes
             + ("<a id=outbtn class=themebtn href='/logout' title='Sign out' "
                "aria-label='Sign out'>"
                "<svg viewBox='0 0 24 24' width=15 height=15 fill=none stroke=currentColor "
@@ -6638,6 +6702,40 @@ def header_html(state, ev, age, active, crumb="Overview"):
             + "<button id=themebtn class=themebtn type=button onclick=cycleTheme() "
             "aria-label='Toggle light or dark theme'>◐</button>"
             "</div>" + nav_html(state, active, inst) + "</header>")
+
+
+# The kiosk exit. When the console is shown full-screen by the kiosk (cage + a browser),
+# cage grabs the keyboard, so Ctrl+Alt+F-keys never reach the kernel to switch to a text VT
+# (verified on edge, 31 Aug). Keys and clicks that land on the PAGE do get through, so the
+# exit lives here: a control the console shows only to the box's own loopback view when a
+# kiosk is actually running. It works by mouse (click) AND keyboard (Ctrl+Alt+X), and stops
+# the kiosk so the screen drops to the login terminal. Inert on any non-kiosk view.
+KIOSK_EXIT_JS = r"""
+(function(){
+  var h=location.hostname;
+  if(!(h==='127.0.0.1'||h==='localhost'||h==='::1'||h==='[::1]')) return;  // the box's own view only
+  fetch('/api/kiosk/status').then(function(r){return r.ok?r.json():null;}).then(function(j){
+    if(!j||!j.active) return;                                              // only when a kiosk is running
+    var b=document.createElement('button');
+    b.id='kioskexit'; b.type='button'; b.textContent='Exit to terminal';
+    b.title='Stop the kiosk and drop to a login terminal (or press Ctrl+Alt+X)';
+    b.setAttribute('style','position:fixed;right:14px;bottom:14px;z-index:99999;padding:10px 16px;'
+      +'font:600 14px system-ui,sans-serif;background:#113308;color:#F7F6EB;'
+      +'border:1px solid #B5B171;border-radius:10px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)');
+    function doExit(){
+      b.disabled=true; b.textContent='Returning to terminal…';
+      fetch('/api/kiosk/exit',{method:'POST'}).then(function(r){
+        if(!r.ok){ b.disabled=false; b.textContent='Exit failed – try again'; }
+      }).catch(function(){ b.disabled=false; b.textContent='Exit failed – try again'; });
+    }
+    b.addEventListener('click',doExit);
+    document.body.appendChild(b);
+    document.addEventListener('keydown',function(ev){
+      if(ev.ctrlKey&&ev.altKey&&(ev.key==='x'||ev.key==='X')){ ev.preventDefault(); doExit(); }
+    });
+  }).catch(function(){});
+})();
+"""
 
 
 def footer_html(state, acts):
@@ -6659,6 +6757,7 @@ def footer_html(state, acts):
     if acts:
         out.append(f"<script>{ACTION_JS}</script>")
         out.append(f"<script>{UPGRADE_PICK_JS}</script>")
+    out.append(f"<script>{KIOSK_EXIT_JS}</script>")
     out.append("</body></html>")
     return "".join(out)
 
@@ -6726,7 +6825,7 @@ def action_form_html(aid, targets=None, fixed=None, prefill=None):
     out = [f"<form class=action id='act-{e(aid)}' data-id='{e(aid)}' "
            f"data-pass='{1 if a['needs_passphrase'] else 0}' "
            f"data-read='{1 if a.get('read') else 0}' "
-           f"data-confirm=\"{e(a['confirm'])}\" data-result='{e(a['result'])}'>"
+           f"data-confirm=\"{e(a.get('confirm', ''))}\" data-result='{e(a.get('result', 'text'))}'>"
            f"<div class=a-h><h3 class=a-t>{e(a['label'])}</h3><span class=a-tags>"
            f"<span class='a-tag {e(risk)}'>{e(a.get('tag', risk))}</span>"
            + ("<span class='a-tag pass'>Passphrase</span>" if a['needs_passphrase'] else "")
@@ -6843,7 +6942,12 @@ def actions_grouped_html(aids, targets=None, fixed=None, collapsible=False):
     e = html.escape
     out = []
     for gid, glabel in ACTION_GROUPS:
-        here = [a for a in aids if ACTIONS[a].get("group", "box") == gid]
+        # catalogue:False actions (console-mode, kiosk, destroy-server, load-images) carry no
+        # generic form - they render through their own controls on the server page - so they
+        # never belong in the Operations grid. Including them crashed action_form_html (no
+        # 'confirm') the moment a client enabled them.
+        here = [a for a in aids if ACTIONS[a].get("group", "box") == gid
+                and ACTIONS[a].get("catalogue", True) is not False]
         if not here:
             continue
         n = len(here)
@@ -7109,14 +7213,22 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
    'maps_key','org','org_unit','country','state','city'].forEach(function(k){
     var el=document.getElementById('cz-'+k); if(el) body[k]=el.value;
   });
-  // the password only travels when the mode is genuinely changing
+  // a console-role change is a deliberate commit: confirm it, require the operator
+  // password, and reload so the new mode's surface (admin estate vs this box only) shows.
   var m=document.getElementById('cz-console_mode'),pw=document.getElementById('cz-modepw');
-  if(m&&pw&&m.value!==m.getAttribute('data-orig')){
-    if(!pw.value){r.textContent='enter your operator password to change console mode';return;}
-    body.mode_passphrase=pw.value;}
+  var modeChanging=!!(m&&m.value!==m.getAttribute('data-orig'));
+  if(modeChanging){
+    if(pw&&!pw.value){r.textContent='enter your operator password to change console mode';return;}
+    if(!confirm('Change this console to '+m.value.toUpperCase()+' mode?\\n\\n'+
+        (m.value==='admin'?'It will be able to manage the WHOLE ESTATE.'
+                          :'It will manage ONLY this box.')+
+        '\\n\\nThe page reloads to apply it.')){r.textContent='Role change cancelled.';return;}
+    if(pw)body.mode_passphrase=pw.value;}
   fetch('/api/setup/instance',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)}).then(function(x){return x.json().then(function(j){return{code:x.status,j:j};});})
-  .then(function(x){if(x.code===200){r.textContent='Saved. Reloading\\u2026';setTimeout(function(){location.reload();},900);}
+  .then(function(x){if(x.code===200){
+      r.textContent=(modeChanging?'Console role changed. Reloading\\u2026':'Saved. Reloading\\u2026');
+      setTimeout(function(){location.reload();},900);}
     else{r.textContent=x.j.error||'failed';}}).catch(function(){r.textContent='could not reach the console';});
 });})();</script>""")
     doc.append(footer_html(state, acts))
@@ -7134,6 +7246,200 @@ def render_error(err, active="estate"):
                f"<main id=main class=wrap><div class='banner stale'>"
                f"<b>Board unavailable.</b> {e(err)}</div></main></body></html>")
     return "".join(doc)
+
+
+# ---------------------------------------------------------------------------
+# The server board. Overview and Operations show the SAME estate, so there is ONE
+# renderer: Operations adds a few quick links into each box's own page, which is where
+# every action lives. Two copies of a tile would drift the way the component allowlist
+# once did, so these helpers sit at module level and both pages call the same function.
+# ---------------------------------------------------------------------------
+
+# The handful of actions worth reaching in one click from the estate list. Each is a LINK
+# into that box's server page, anchored at the action itself - the server page owns the
+# form, the confirm and the passphrase, so nothing is duplicated here.
+# The services a tile can show, each with its hover tooltip. Module level: both the
+# tile renderer and the Overview key read the same dict.
+_SVC_ICONS = {
+    "takserver": ("TAK Server",
+                  "<svg viewBox='0 0 24 24' fill=none stroke=currentColor stroke-width=2>"
+                  "<rect x=3 y=4 width=18 height=7 rx=1.5 />"
+                  "<rect x=3 y=13 width=18 height=7 rx=1.5 />"
+                  "<path d='M7 7.5h.01M7 16.5h.01' stroke-linecap=round /></svg>"),
+    "cloudtak": ("CloudTAK web map",
+                 "<svg viewBox='0 0 24 24' fill=none stroke=currentColor stroke-width=2 "
+                 "stroke-linejoin=round><path d='M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z'/>"
+                 "<path d='M9 4v14M15 6v14'/></svg>"),
+    "mediamtx": ("MediaMTX video",
+                 "<svg viewBox='0 0 24 24' fill=none stroke=currentColor stroke-width=2 "
+                 "stroke-linejoin=round><rect x=3 y=6 width=13 height=12 rx=2 />"
+                 "<path d='M16 10l5-3v10l-5-3'/></svg>"),
+}
+
+
+QUICK_ACTIONS = (("tail-logs", "Logs"), ("restart-service", "Restart"),
+                 ("list-certs", "Certificates"), ("enrol-device", "Add device"))
+
+
+def tile_awaiting(t):
+    """An enrolled box the wizard has not yet built - reachable, failing, and with no
+    takserver in its software inventory - is AWAITING BUILD, not FAIL. The checker is
+    rightly honest about an empty box; the estate should not scream about a server that
+    does not exist yet."""
+    if t.get("result") != "FAIL" or not t.get("reachable"):
+        return False
+    rows = software_rows(t)
+    return bool(rows) and not any(s.get("name") == "takserver" for s in rows)
+
+
+def tile_is_admin_box(t, chost):
+    """Is this the box running the console being looked at?"""
+    if not chost:
+        return False
+    fq = str(t.get("fqdn") or "")
+    return (t.get("name") == chost or fq.split(".")[0] == chost or chost in fq)
+
+
+def _tile_svc_row(t):
+    e = html.escape
+    spans = []
+    for s in software_rows(t):
+        ic = _SVC_ICONS.get(s.get("name"))
+        if not ic:
+            continue
+        tip = f"{ic[0]} {s.get('version', '')} · {s.get('state', '')}".strip(" ·")
+        spans.append(f"<span class=svc title='{e(tip)}'>{ic[1]}</span>")
+    return f"<div class=svcrow>{''.join(spans)}</div>" if spans else ""
+
+
+def _tile_mesh_row(t):
+    # Spec 001's AC6 contract: output, not process. ok only when a packet has actually been
+    # forwarded; an active gateway that has never forwarded shows quiet, and so does a
+    # missing radio. The data-mesh marker is the tested contract.
+    e = html.escape
+    m = t.get("mesh") or {}
+    if not m:
+        return ""
+    ok = bool(m.get("last_forwarded"))
+    n = m.get("nodes_seen", 0) or 0
+    if ok:
+        lbl = f"mesh · {n} node{'s' if n != 1 else ''}"
+    elif not m.get("radio_present"):
+        lbl = "mesh · radio missing"
+    else:
+        lbl = "mesh · quiet, nothing forwarded"
+    return (f"<div class='meshline {'m-ok' if ok else 'm-quiet'}' "
+            f"data-mesh={'ok' if ok else 'quiet'}>{e(lbl)}</div>")
+
+
+def _tile_issues(t):
+    # the FAIL/WARN checks, on the tile face, so a problem shows without expanding
+    e = html.escape
+    bad = [ck for ck in (t.get("checks") or []) if ck.get("status") in ("FAIL", "WARN")]
+    if not bad:
+        return ""
+    bad.sort(key=lambda ck: 0 if ck.get("status") == "FAIL" else 1)
+    items = []
+    for ck in bad[:3]:
+        st = ck.get("status", "")
+        nm = f"{ck.get('category', '')} › {ck.get('name', '')}".strip(" ›")
+        dt = ck.get("detail", "")
+        items.append(f"<li class='iss {e(st)}'><span class=iss-st>{e(st)}</span>"
+                     f"<span class=iss-nm>{e(nm)}</span>"
+                     + (f"<span class=iss-dt>{e(dt)}</span>" if dt else "") + "</li>")
+    if len(bad) > 3:
+        items.append(f"<li class=iss-more>+{len(bad) - 3} more</li>")
+    return f"<ul class=tissues>{''.join(items)}</ul>"
+
+
+def _tile_inventory(t, desired):
+    # what is on THIS box, each component against the baseline
+    e = html.escape
+    base = desired or {}
+    rows = []
+    for comp in ("tak-health", "takserver", "cloudtak", "mediamtx"):
+        row = next((s for s in software_rows(t) if s.get("name") == comp), None)
+        want = base.get(comp, "")
+        if row is None and not want:
+            continue
+        ver = (row or {}).get("version") or ""
+        if row is None:
+            cell, cls = "not installed", "b-abs"
+        elif not ver:
+            cell, cls = "present", "b-abs"
+        elif want and version_current(ver, want):
+            cell, cls = ver, "b-ok"
+        elif want:
+            cell, cls = ver, "b-drift"
+        else:
+            cell, cls = ver, ""
+        rows.append(f"<tr><th scope=row>{e(comp)}</th>"
+                    f"<td class='{cls}'>{e(cell)}</td>"
+                    f"<td class=b-abs>{e(want or '—')}</td></tr>")
+    if not rows:
+        return "<div class=meta style='margin-top:12px'>No software inventory reported yet.</div>"
+    return ("<table class=tinv><tr><th>Component</th><th>On this box</th>"
+            "<th>Baseline</th></tr>" + "".join(rows) + "</table>")
+
+
+def _tile_quick(name, acts, act_targets):
+    """A few one-click links into this box's own page. Only actions this console actually
+    has enabled, and only for a box it can act on."""
+    e = html.escape
+    if name not in act_targets:
+        return ""
+    links = [f"<a class=qa href='/server/{e(name)}#act-{e(aid)}' "
+             f"onclick='event.stopPropagation()'>{e(label)}</a>"
+             for aid, label in QUICK_ACTIONS if aid in acts]
+    if not links:
+        return ""
+    return f"<div class=tquick>{''.join(links)}</div>"
+
+
+def server_board_html(state, history=None, desired=None, cfg=None, quick=False):
+    """The estate as tiles. `quick` adds the per-box quick links (Operations); Overview
+    renders the same board without them. Every tile opens that box's own server page,
+    which is where the full action set lives."""
+    e = html.escape
+    targets = state.get("targets", [])
+    awaiting = {t.get("name") for t in targets if tile_awaiting(t)}
+    chost = str(state.get("console_host") or "")
+    acts = enabled_actions(cfg) if quick else []
+    act_targets = set((cfg or {}).get("targets", {}).keys()) if quick else set()
+    out = ["<div class=board>"]
+    for t in targets:
+        res, name = t.get("result", "UNKNOWN"), t.get("name", "?")
+        c = t.get("counts") or {}
+        if name in awaiting:
+            res_cls, chip = "BUILD", "AWAITING BUILD"
+            sub = "enrolled - TAK Server not yet installed"
+        else:
+            res_cls, chip = res, res
+            sub = str(t.get("fqdn") or t.get("profile") or "")
+        admin = ("<span class=chip-admin title='this box runs the console you are "
+                 "looking at'>admin</span>" if tile_is_admin_box(t, chost) else "")
+        out.append(f"<details class='tile {e(res_cls)}' data-name='{e(name)}'><summary>"
+                   f"<div class=t1><div><div class=nm>{e(t.get('label', name))}{admin}</div>"
+                   f"<div class=sub>{e(sub)}</div>{_tile_svc_row(t)}{_tile_mesh_row(t)}</div>"
+                   f"<span class='chip c-{e(res_cls)}'>{e(chip)}</span></div>")
+        if c:
+            out.append("<div class=counts>"
+                       f"<span class=k-ok><b>{c.get('ok', 0)}</b> ok</span>"
+                       f"<span class=k-warn><b>{c.get('warn', 0)}</b> warn</span>"
+                       f"<span class=k-fail><b>{c.get('fail', 0)}</b> fail</span>"
+                       f"<span><b>{c.get('skip', 0)}</b> skip</span></div>")
+        out.append(_tile_issues(t))
+        if history is not None:
+            out.append(uptime_strip(history, name, 48, mini=True))
+        if quick:
+            out.append(_tile_quick(name, acts, act_targets))
+        out.append("<div class=tile-toggle><span class=chev></span>"
+                   "What's installed &amp; baseline</div></summary>")
+        out.append("<div class=tile-body>" + _tile_inventory(t, desired)
+                   + f"<a class=tile-open href='/server/{e(name)}'>"
+                     "Open server page &rsaquo;</a></div></details>")
+    out.append("</div>")
+    return "".join(out)
 
 
 def render_estate(state):
@@ -7154,13 +7460,7 @@ def render_estate(state):
     # with no takserver in its software inventory - is AWAITING BUILD, not FAIL. The
     # checker is rightly honest about an empty box; the estate page should not scream
     # about a server that does not exist yet, nor let it drag the estate verdict red.
-    def _awaiting(t):
-        if t.get("result") != "FAIL" or not t.get("reachable"):
-            return False
-        rows = software_rows(t)
-        return bool(rows) and not any(s.get("name") == "takserver" for s in rows)
-
-    awaiting = {t.get("name") for t in targets if _awaiting(t)}
+    awaiting = {t.get("name") for t in targets if tile_awaiting(t)}
     band_note = ""
     if awaiting:
         rest = [t.get("result", "UNKNOWN") for t in targets if t.get("name") not in awaiting]
@@ -7181,7 +7481,7 @@ def render_estate(state):
     # would silently strip its handlers (inserted <script> does not execute). A form is
     # not a monitor: only a populated estate refreshes itself.
     doc.append("<main id=main class=wrap" + (" data-live=1" if targets else "") + ">")
-    if AUTH_OPEN_MODE and not auth_configured() and EDITION != "deployed":
+    if AUTH_OPEN_MODE and not auth_configured() and console_is_admin():
         doc.append("<div class='banner drift'><b>Running open by choice.</b><span> "
                    "VANTAGE_CONSOLE_AUTH=open is set and no password exists; anyone who "
                    "can reach this console can use it. Set a password under Customize "
@@ -7198,7 +7498,7 @@ def render_estate(state):
     # An empty estate's Overview IS the first-run screen: the whole first build happens
     # right here - upload, the few details that matter, dry run, live run - and the
     # section is gone the moment anything is enrolled.
-    if not targets and EDITION != "deployed":
+    if not targets and console_is_admin():
         inst_fr = load_instance()
         # a box that already runs TAK Server gets ENROLLED, not built over - the
         # provisioner would rightly refuse, so the screen offers the right verb up front
@@ -7319,137 +7619,9 @@ def render_estate(state):
     # carries - tiny icons from the health inventory, each with a hover tooltip. Only what
     # the inventory can prove; a box running a deployed-edition console is not detectable
     # from here, so no false "client" badges.
-    _SVC_ICONS = {
-        "takserver": ("TAK Server",
-                      "<svg viewBox='0 0 24 24' fill=none stroke=currentColor stroke-width=2>"
-                      "<rect x=3 y=4 width=18 height=7 rx=1.5 />"
-                      "<rect x=3 y=13 width=18 height=7 rx=1.5 />"
-                      "<path d='M7 7.5h.01M7 16.5h.01' stroke-linecap=round /></svg>"),
-        "cloudtak": ("CloudTAK web map",
-                     "<svg viewBox='0 0 24 24' fill=none stroke=currentColor stroke-width=2 "
-                     "stroke-linejoin=round><path d='M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z'/>"
-                     "<path d='M9 4v14M15 6v14'/></svg>"),
-        "mediamtx": ("MediaMTX video",
-                     "<svg viewBox='0 0 24 24' fill=none stroke=currentColor stroke-width=2 "
-                     "stroke-linejoin=round><rect x=3 y=6 width=13 height=12 rx=2 />"
-                     "<path d='M16 10l5-3v10l-5-3'/></svg>"),
-    }
     _chost = str(state.get("console_host") or "")
-
-    def _is_admin_box(t):
-        if not _chost:
-            return False
-        fq = str(t.get("fqdn") or "")
-        return (t.get("name") == _chost or fq.split(".")[0] == _chost
-                or (_chost and _chost in fq))
-
-    def _svc_row(t):
-        spans = []
-        for s in software_rows(t):
-            ic = _SVC_ICONS.get(s.get("name"))
-            if not ic:
-                continue
-            tip = f"{ic[0]} {s.get('version', '')} · {s.get('state', '')}".strip(" ·")
-            spans.append(f"<span class=svc title='{e(tip)}'>{ic[1]}</span>")
-        return f"<div class=svcrow>{''.join(spans)}</div>" if spans else ""
-
-    def _tile_issues(t):
-        # the FAIL/WARN checks, on the tile face, so a problem shows without expanding
-        bad = [ck for ck in (t.get("checks") or [])
-               if ck.get("status") in ("FAIL", "WARN")]
-        if not bad:
-            return ""
-        bad.sort(key=lambda ck: 0 if ck.get("status") == "FAIL" else 1)
-        items = []
-        for ck in bad[:3]:
-            st = ck.get("status", "")
-            nm = f"{ck.get('category', '')} › {ck.get('name', '')}".strip(" ›")
-            dt = ck.get("detail", "")
-            items.append(f"<li class='iss {e(st)}'><span class=iss-st>{e(st)}</span>"
-                         f"<span class=iss-nm>{e(nm)}</span>"
-                         + (f"<span class=iss-dt>{e(dt)}</span>" if dt else "") + "</li>")
-        if len(bad) > 3:
-            items.append(f"<li class=iss-more>+{len(bad) - 3} more</li>")
-        return f"<ul class=tissues>{''.join(items)}</ul>"
-
-    def _tile_inventory(t):
-        # what is on THIS box, each component against the baseline - the detail that used
-        # to be a per-server column in the baseline table, now folded into the tile
-        base = desired or {}
-        rows = []
-        for comp in ("tak-health", "takserver", "cloudtak", "mediamtx"):
-            row = next((s for s in software_rows(t) if s.get("name") == comp), None)
-            want = base.get(comp, "")
-            if row is None and not want:
-                continue
-            ver = (row or {}).get("version") or ""
-            if row is None:
-                cell, cls = "not installed", "b-abs"
-            elif not ver:
-                cell, cls = "present", "b-abs"
-            elif want and version_current(ver, want):
-                cell, cls = ver, "b-ok"
-            elif want:
-                cell, cls = ver, "b-drift"
-            else:
-                cell, cls = ver, ""
-            rows.append(f"<tr><th scope=row>{e(comp)}</th>"
-                        f"<td class='{cls}'>{e(cell)}</td>"
-                        f"<td class=b-abs>{e(want or '—')}</td></tr>")
-        if not rows:
-            return "<div class=meta style='margin-top:12px'>No software inventory reported yet.</div>"
-        return ("<table class=tinv><tr><th>Component</th><th>On this box</th>"
-                "<th>Baseline</th></tr>" + "".join(rows) + "</table>")
-
-    def _mesh_row(t):
-        # Spec 001's AC6 contract: output, not process. ok only when a packet has actually
-        # been forwarded; an active gateway that has never forwarded shows quiet, and so
-        # does a missing radio. The data-mesh marker is the tested contract - it stays out
-        # of the CSS and the JS so the page carries exactly one per gateway box.
-        m = t.get("mesh") or {}
-        if not m:
-            return ""
-        ok = bool(m.get("last_forwarded"))
-        n = m.get("nodes_seen", 0) or 0
-        if ok:
-            lbl = f"mesh · {n} node{'s' if n != 1 else ''}"
-        elif not m.get("radio_present"):
-            lbl = "mesh · radio missing"
-        else:
-            lbl = "mesh · quiet, nothing forwarded"
-        return (f"<div class='meshline {'m-ok' if ok else 'm-quiet'}' "
-                f"data-mesh={'ok' if ok else 'quiet'}>{e(lbl)}</div>")
-
-    doc.append("<h2 class=sec-eye>Servers</h2><div class=board>")
-    for t in targets:
-        res, name = t.get("result", "UNKNOWN"), t.get("name", "?")
-        c = t.get("counts") or {}
-        if name in awaiting:
-            res_cls, chip = "BUILD", "AWAITING BUILD"
-            sub = "enrolled - TAK Server not yet installed"
-        else:
-            res_cls, chip = res, res
-            sub = str(t.get("fqdn") or t.get("profile") or "")
-        admin = ("<span class=chip-admin title='this box runs the console you are "
-                 "looking at'>admin</span>" if _is_admin_box(t) else "")
-        doc.append(f"<details class='tile {e(res_cls)}' data-name='{e(name)}'><summary>"
-                   f"<div class=t1><div><div class=nm>{e(t.get('label', name))}{admin}</div>"
-                   f"<div class=sub>{e(sub)}</div>{_svc_row(t)}{_mesh_row(t)}</div>"
-                   f"<span class='chip c-{e(res_cls)}'>{e(chip)}</span></div>")
-        if c:
-            doc.append("<div class=counts>"
-                       f"<span class=k-ok><b>{c.get('ok', 0)}</b> ok</span>"
-                       f"<span class=k-warn><b>{c.get('warn', 0)}</b> warn</span>"
-                       f"<span class=k-fail><b>{c.get('fail', 0)}</b> fail</span>"
-                       f"<span><b>{c.get('skip', 0)}</b> skip</span></div>")
-        doc.append(_tile_issues(t))
-        doc.append(uptime_strip(history, name, 48, mini=True))
-        doc.append("<div class=tile-toggle><span class=chev></span>"
-                   "What's installed &amp; baseline</div></summary>")
-        doc.append("<div class=tile-body>" + _tile_inventory(t)
-                   + f"<a class=tile-open href='/server/{e(name)}'>"
-                     "Open server page &rsaquo;</a></div></details>")
-    doc.append("</div>")
+    doc.append("<h2 class=sec-eye>Servers</h2>")
+    doc.append(server_board_html(state, history=history, desired=desired))
 
     # the key: name every marker the tiles above actually carry, because a hover tooltip
     # is easy to miss. Only the services present somewhere in the estate, plus the admin
@@ -7459,7 +7631,7 @@ def render_estate(state):
         if any(s.get("name") == nm for t in targets for s in software_rows(t)):
             present.append(nm)
     key_bits = []
-    if any(_is_admin_box(t) for t in targets):
+    if any(tile_is_admin_box(t, _chost) for t in targets):
         key_bits.append("<span class=ki><span class=chip-admin>admin</span>"
                         "runs this console</span>")
     for nm in present:
@@ -7490,7 +7662,7 @@ def render_estate(state):
     # the estate has boxes, so one with no baseline can create one; "Take current
     # inventory" adopts what is installed now - the one-click fix when a new release makes
     # an old baseline read backwards (a box AHEAD of the baseline still shows as drift).
-    if targets and EDITION != "deployed":
+    if targets and console_is_admin():
         KNOWN_COMPONENTS = ("tak-health", "takserver", "cloudtak", "mediamtx")
         base = desired or {}
         inv_now = {}
@@ -9093,6 +9265,76 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
     return "".join(doc)
 
 
+def _release_rank(tag):
+    """Sort tags newest-first by their numbers, so 'v0.10.0' beats 'v0.9.0-beta'. Anything
+    unparseable sorts last rather than throwing: a repo may carry tags we did not write."""
+    nums = [int(n) for n in re.findall(r"\d+", str(tag))[:3]]
+    return (nums + [0, 0, 0])[:3] if nums else [-1, -1, -1]
+
+
+def check_vantage_release(timeout=10):
+    """What does the publish surface say the current Vantage release is? (Spec 004, slice 1.)
+
+    Operator-initiated ONLY - the console never phones home, so this runs when a person asks
+    and never on a timer. It is a plain unauthenticated GET to github.com: no credentials
+    leave the box, nothing is downloaded, and a box with no route out gets an honest error
+    rather than a stall or a retry loop.
+
+    A published release is the answer when there is one; today the repo publishes only tags
+    (its sole release is an unpublished draft), so the newest tag is the fallback. The reply
+    says which of the two answered, because 'latest tag' and 'latest release' are not the
+    same promise."""
+    import urllib.error as _ue
+    import urllib.request as _ur
+
+    def _get(url):
+        req = _ur.Request(url, headers={"User-Agent": f"vantage-console/{VERSION}",
+                                        "Accept": "application/vnd.github+json"})
+        with _ur.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+
+    base = f"https://api.github.com/repos/{VANTAGE_REPO}"
+    try:
+        try:
+            rel = _get(base + "/releases/latest")
+            tag = str(rel.get("tag_name") or "")
+            if tag:
+                return {"ok": True, "source": "release", "tag": tag,
+                        "name": str(rel.get("name") or tag),
+                        "url": str(rel.get("html_url") or ""),
+                        "published": str(rel.get("published_at") or "")}
+        except _ue.HTTPError as ex:
+            if ex.code != 404:          # 404 = no published release; anything else is real
+                raise
+        tags = _get(base + "/tags")
+        if not isinstance(tags, list) or not tags:
+            return {"ok": False, "error": "the repository publishes no releases or tags yet"}
+        newest = sorted(tags, key=lambda t: _release_rank(t.get("name")), reverse=True)[0]
+        tag = str(newest.get("name") or "")
+        return {"ok": True, "source": "tag", "tag": tag, "name": tag,
+                "url": f"https://github.com/{VANTAGE_REPO}/releases/tag/{tag}",
+                "published": ""}
+    except Exception as ex:
+        # offline is normal for a deployed box; say so plainly and stop
+        return {"ok": False, "error": f"could not reach github.com: {ex}"[:180]}
+
+
+def vantage_update_status(latest):
+    """Compare what this box runs against what the surface carries. Returns (state, text)."""
+    here = VANTAGE_RELEASE.lstrip("vV")
+    if not latest.get("ok"):
+        return "unknown", latest.get("error", "could not check")
+    there = str(latest.get("tag", "")).lstrip("vV")
+    if not there:
+        return "unknown", "the repository named no version"
+    if here == there:
+        return "current", f"This box is on the current Vantage release ({VANTAGE_RELEASE})."
+    if _release_rank(here) > _release_rank(there):
+        return "ahead", (f"This box runs {VANTAGE_RELEASE}, ahead of the published "
+                         f"{latest['tag']} - it is a build, not a release.")
+    return "behind", f"An update is available: {latest['tag']} (this box runs {VANTAGE_RELEASE})."
+
+
 def render_operations(state):
     """The whole catalogue with a box picker, and the audit log made visible."""
     e = html.escape
@@ -9101,7 +9343,6 @@ def render_operations(state):
     ev = state.get("estate_result", "UNKNOWN")
     cfg = load_actions_config()
     acts = enabled_actions(cfg)
-    targets = target_options(cfg, state)
 
     doc = page_head("Operations — " + load_instance()["product_name"])
     doc.append(header_html(state, ev, age, "operations", crumb="Operations"))
@@ -9110,19 +9351,59 @@ def render_operations(state):
     doc.append("<main id=main class=wrap>")
     doc.append(stale_banner(age, stale))
 
-    if acts:
-        doc.append("<section class=actions aria-label='Estate actions'><div class=ah>"
-                   "<h2 class=title>Estate actions</h2><span class=meta>The full catalogue, "
-                   "any box. Each server's own page carries the same actions pre-bound. "
-                   "Reads run on one click, writes confirm, all are logged."
-                   "</span></div>")
-        doc.append(actions_grouped_html(acts, targets=targets, collapsible=True))
-        doc.append("</section>")
-    else:
+    # Operations is the estate, not a catalogue. The old page listed every action with a box
+    # picker, which asked the operator to hold two things in their head at once (which action,
+    # which box) and buried the estate itself. A box is the unit of work, so this shows the
+    # same tiles Overview does: open a server and its own page carries the full action set,
+    # already bound to that box. The quick links jump straight to the common ones.
+    doc.append("<section aria-label='Servers'><div class=ah>"
+               "<h2 class=title>Servers</h2><span class=meta>Every box in the estate. Open a "
+               "server to manage it: its page carries the full action set, pre-bound to that "
+               "box, with reads on one click and writes behind a confirm. Everything is "
+               "logged below.</span></div>")
+    doc.append(server_board_html(state, history=load_history(), desired=load_desired(),
+                                 cfg=cfg, quick=True))
+    doc.append("</section>")
+    if not acts:
         doc.append("<div class=meta style='margin-top:18px'>No actions enabled. The console "
                    "is read-only until <code>/etc/vantage-console/actions.json</code> exists.</div>")
 
     entries = load_audit()
+    # Spec 004 slice 1: what Vantage this box is on, and what the repo publishes. The check
+    # is a button, never automatic - this console does not call out unless asked, and a box
+    # with no route to github.com simply says so.
+    doc.append("<h2 class=sec-eye>Vantage updates</h2>")
+    doc.append(
+        "<div class=depcard><p class=meta>This box runs Vantage "
+        f"<b>{e(VANTAGE_RELEASE)}</b> (console {e(VERSION)}). Check what "
+        f"<code>{e(VANTAGE_REPO)}</code> publishes, and see whether an update is waiting. "
+        "The check calls github.com only when you press it; nothing is downloaded and no "
+        "credentials leave this box. An offline box will say it could not reach GitHub, "
+        "which is not a fault.</p>"
+        "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "
+        "updates</button></div>"
+        "<div id=upres class='a-res' role=status aria-live=polite></div></div>")
+    doc.append("""<script>(function(){
+var b=document.getElementById('upchk'); if(!b)return;
+b.addEventListener('click',function(){
+  var r=document.getElementById('upres');
+  b.disabled=true; r.textContent='Asking github.com\\u2026';
+  fetch('/api/updates/check').then(function(x){return x.json();}).then(function(j){
+    b.disabled=false;
+    var l=j.latest||{};
+    if(!l.ok){ r.textContent=j.text||'could not check'; r.className='a-res err'; return; }
+    var where=(l.source==='release')?'published release':'latest tag';
+    r.innerHTML='';
+    var p=document.createElement('div'); p.textContent=j.text; r.appendChild(p);
+    var s=document.createElement('div'); s.className='meta';
+    s.textContent='The repository\\u2019s '+where+' is '+l.tag+(l.published?(' ('+l.published.slice(0,10)+')'):'')+'.';
+    r.appendChild(s);
+    if(l.url){ var a=document.createElement('a'); a.href=l.url; a.target='_blank';
+      a.rel='noopener noreferrer'; a.textContent='Open it on GitHub \\u203a'; r.appendChild(a); }
+    r.className='a-res '+((j.state==='behind')?'warn':'ok');
+  }).catch(function(){ b.disabled=false;
+    document.getElementById('upres').textContent='could not reach the console'; });
+});})();</script>""")
     doc.append("<h2 class=sec-eye>Audit log</h2>")
     if entries:
         doc.append("<div class=tablewrap><table class=dtable>"
@@ -9319,7 +9600,7 @@ def render_agent(state):
     doc.append("<div class=route-tabs>"
                "<button type=button class='route-tab on' data-r=mcp>MCP connection</button>"
                "<button type=button class=route-tab data-r=apikey>Built-in chat (API key)</button>"
-               "<button type=button class=route-tab data-r=openclaw>Resident agent</button></div>")
+               "<button type=button class=route-tab data-r=the admin box>Resident agent</button></div>")
 
     # MCP panel
     _tls_fqdn = next((str(t.get("fqdn") or "") for t in state.get("targets", [])
@@ -9403,7 +9684,7 @@ def render_agent(state):
     doc.append("</div>")
 
     # OpenClaw panel
-    doc.append("<div class=route-panel data-r=openclaw hidden>"
+    doc.append("<div class=route-panel data-r=the admin box hidden>"
                "<p class=doct>Install a resident OpenClaw agent on a box - a standing "
                "assistant that lives with the estate and works even with the network closed, "
                "optionally on a local model. This is the pattern " + e(inst["agent_name"])
@@ -9420,7 +9701,7 @@ def render_agent(state):
         doc.append("<div class=conns>")
         for c in conns:
             rlabel = {"mcp": "MCP socket", "apikey": "API key",
-                      "openclaw": "OpenClaw"}.get(c.get("route"), c.get("route"))
+                      "the admin box": "OpenClaw"}.get(c.get("route"), c.get("route"))
             au = c.get("autonomy", "observe")
             opts = "".join(
                 f"<option value='{a}'" + (" selected" if a == au else "") + f">{a}</option>"
@@ -9888,7 +10169,7 @@ SAMCHAT_JS = """
 """
 
 
-# ---------- Networks: the Meshtastic TAK gateway (Spec 001, card 6189) -------------------------
+# ---------- Networks: the Meshtastic TAK gateway (Spec 001) -------------------------
 # The bearer layer, distinct from Federation (TAK-to-TAK): networks that devices ride. First
 # member: a Meshtastic LoRa mesh bridged into TAK by the vendored gateway (ADR-002). Channels
 # are minted here - name plus 256-bit PSK - and held in the console's writable state; the PSK
@@ -10968,11 +11249,17 @@ def render_chat(state):
                    "once on the NUC (it pairs the console's device and stores the gateway token), "
                    "then reload this page.</div>")
     doc.append("</div>")
-    doc.append("<div class=samcard>"
-               f"<a class=samgo href='{e(SAM_CHAT_URL)}' target=_blank rel=noopener>Open Sam's own chat</a>"
-               f"<div class=meta>The fallback: opens <code>{e(SAM_CHAT_URL)}</code> on the tailnet, "
-               "Sam's own OpenClaw window. First visit pairs your browser with Sam (device auth); "
-               "after that it just opens.</div></div>")
+    if SAM_CHAT_URL:
+        doc.append("<div class=samcard>"
+                   f"<a class=samgo href='{e(SAM_CHAT_URL)}' target=_blank rel=noopener>"
+                   "Open the assistant's own chat</a>"
+                   f"<div class=meta>The fallback: opens <code>{e(SAM_CHAT_URL)}</code>, the "
+                   "assistant's own window. First visit pairs your browser with it (device auth); "
+                   "after that it just opens.</div></div>")
+    else:
+        doc.append("<div class=samcard><div class=meta>No direct chat URL is set for the "
+                   "assistant. Set <code>VANTAGE_CONSOLE_SAM_CHAT</code> on this console's "
+                   "service to offer a link straight to its own window.</div></div>")
     doc.append("<h2 class=sec-eye>How it fits together</h2>"
                "<p class=doct>The panel above talks to Sam through the console: one POST per "
                "message, relayed to his OpenClaw gateway over loopback by the console's paired "
@@ -11524,7 +11811,7 @@ SETUP_JS = """
       }).catch(function(){});
     },2500);
   }
-  /* 1.26.0 (card 6172): a deployment is a named server-side record, not page state.
+  /* 1.26.0: a deployment is a named server-side record, not page state.
      Everything the operator types autosaves into it (debounced, no secrets), the
      strip above the wizard lists the records, and clicking one reopens it. */
   var depT=null;
@@ -13286,7 +13573,7 @@ def render_deploy(state):
     doc.append("<pre id=deplog class=deplog aria-label='Provision log'></pre>")
     doc.append("</div>")                              # close flow-provision
 
-    # infra-TAK as a stack choice (card 6175): deploy takwerx's platform on an enrolled box
+    # infra-TAK as a stack choice: deploy takwerx's platform on an enrolled box
     # instead of a TAK Server. Vantage stands it up and monitors the box; the stack is run
     # from infra-TAK's own console. Credit + limits stated plainly (Matt).
     if "provision-infratak" in acts:
@@ -13391,7 +13678,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, favicon_svg(), "image/svg+xml", cache="no-store")
             return
         if path == "/welcome":
-            if EDITION == "deployed" or auth_configured():
+            if not console_is_admin() or auth_configured():
                 self.send_response(302)
                 self.send_header("Location", "/")
                 self.end_headers()
@@ -13401,7 +13688,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/estate/export", "/api/vault/export"):
             self.do_GET_peer(path)
             return
-        if EDITION != "deployed" and not AUTH_OPEN_MODE and not auth_configured() \
+        if console_is_admin() and not AUTH_OPEN_MODE and not auth_configured() \
                 and auth_required(path) and path != "/welcome":
             # a fresh console's FIRST screen is setting the operator password - not an
             # open estate with a polite banner
@@ -13447,8 +13734,34 @@ class Handler(BaseHTTPRequestHandler):
                        "application/json")
         elif path == "/healthz":
             self._send(200 if not err else 503, "ok\n" if not err else err, "text/plain")
-        elif EDITION == "deployed" and (path in ("/deploy", "/federation", "/networks",
-                "/agent", "/chat", "/customization") or path.startswith("/api/setup/")
+        elif path == "/api/updates/check":
+            # Spec 004 slice 1: what does the publish surface carry? Runs only because a
+            # person pressed Check - the console never polls github.com on its own.
+            latest = check_vantage_release()
+            st, text = vantage_update_status(latest)
+            audit({"action": "update-check", "result": "OK" if latest.get("ok") else "FAIL",
+                   "detail": latest.get("tag") or latest.get("error", ""),
+                   "client": self.address_string()})
+            self._send(200, json.dumps({"here": VANTAGE_RELEASE, "state": st, "text": text,
+                                        "latest": latest, "repo": VANTAGE_REPO}),
+                       "application/json")
+        elif path == "/api/kiosk/status":
+            # is a kiosk running on this box? the box's own view asks before it offers the
+            # Exit control. Loopback only; a read (systemctl is-active needs no privilege).
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._send(403, json.dumps({"error": "local only"}), "application/json")
+                return
+            active = False
+            try:
+                active = subprocess.run(["systemctl", "is-active", "vantage-kiosk.service"],
+                                        capture_output=True, text=True,
+                                        timeout=5).stdout.strip() == "active"
+            except Exception:
+                pass
+            self._send(200, json.dumps({"active": active}), "application/json")
+        elif not console_is_admin() and (path in ("/deploy", "/federation", "/networks",
+                "/agent", "/chat")
+                or (path.startswith("/api/setup/") and path not in CLIENT_SETUP_PATHS)
                 or path in ("/api/sam/chat", "/api/propose", "/api/propose/dismiss",
                             "/api/fedlink/forget", "/api/fedmap/pos",
                             "/api/networks/channel/qr", "/api/networks/map")):
@@ -13758,7 +14071,7 @@ class Handler(BaseHTTPRequestHandler):
         if auth_configured() and auth_required(path) and not session_valid(self):
             self._send(401, json.dumps({"error": "sign in first"}), "application/json")
             return
-        if EDITION != "deployed" and not AUTH_OPEN_MODE and not auth_configured() \
+        if console_is_admin() and not AUTH_OPEN_MODE and not auth_configured() \
                 and auth_required(path) and path != "/api/setup/password":
             self._send(401, json.dumps({"error": "set the operator password first"}),
                        "application/json")
@@ -13766,7 +14079,8 @@ class Handler(BaseHTTPRequestHandler):
         # the deployed edition serves one box and holds no estate machinery: setup, the
         # agent, federation and library-fetch APIs simply are not there. Store and vault
         # writes (local file management) and box-scoped actions stay.
-        if EDITION == "deployed" and (path.startswith("/api/setup/")
+        if not console_is_admin() and (
+                (path.startswith("/api/setup/") and path not in CLIENT_SETUP_PATHS)
                 or path in ("/api/propose", "/api/propose/dismiss", "/api/sam/chat",
                             "/api/fedlink/forget", "/api/fedmap/pos",
                             "/api/library/upload", "/api/library/upload-image",
@@ -13790,6 +14104,7 @@ class Handler(BaseHTTPRequestHandler):
                             "/api/enrol-batch", "/api/usb-copy", "/api/module/load-offline",
                             "/api/usb-list", "/api/usb-import", "/api/software/current",
                             "/api/destroy", "/api/console/set-mode", "/api/console/kiosk",
+                            "/api/kiosk/exit",
                             "/api/store/mkdir", "/api/store/move", "/api/store/delete",
                             "/api/vault/save", "/api/networks/channel",
                             "/api/networks/channel/adopt",
@@ -13902,6 +14217,19 @@ class Handler(BaseHTTPRequestHandler):
             code, res = set_console_mode_api(data, client)
         elif path == "/api/console/kiosk":
             code, res = set_kiosk_api(data, client)
+        elif path == "/api/kiosk/exit":
+            # the on-screen exit from kiosk mode. Loopback only: the box's own full-screen
+            # view stops its kiosk and the screen drops to a login terminal. cage grabs the
+            # keyboard so a VT-switch key cannot do this; a click or Ctrl+Alt+X on the page can.
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                code, res = 403, {"error": "the kiosk exit is available on the box's screen only"}
+            else:
+                ok, txt = setup_helper("kiosk-exit", "kiosk")
+                if ok:
+                    audit({"action": "kiosk-exit", "result": "OK", "client": client})
+                    code, res = 200, {"exited": True}
+                else:
+                    code, res = 500, {"error": (txt or "could not exit the kiosk")[:200]}
         elif path.startswith("/api/setup/"):
             code, res = setup_api(path, data, client)
         elif path == "/api/library/delete":
@@ -14006,7 +14334,7 @@ def sweep_orphaned_jobs():
     their records would say 'running' forever, leaving the operator staring at a frozen
     log with no verdict (bitten live, 27 Aug). At startup, any record still marked
     running is marked failed with an honest note. The real fix - jobs that survive
-    restarts - is card 6172; until then the console at least never lies."""
+    restarts - is an internal card; until then the console at least never lies."""
     try:
         for fn in os.listdir(JOBS_DIR):
             if not fn.endswith(".json"):

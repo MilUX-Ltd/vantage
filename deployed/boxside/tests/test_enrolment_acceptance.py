@@ -1,7 +1,7 @@
 """Acceptance tests for Spec 001 (QR enrolment, box side). Committed failing first.
 
 AC10 needs `cryptography` and is skipped where it is absent; it MUST be run on a box that has
-the library before the slice's gate is called met (see CLAUDE.md: a suite only ever seen
+the library before the slice's gate is called met (see the project notes: a suite only ever seen
 skipping is not evidence). Run: python3 -m unittest discover -s boxside/tests -v
 """
 import base64

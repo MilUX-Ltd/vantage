@@ -1,6 +1,6 @@
-# ADR-001: Vantage Deployed derives from the Deployed builds and lives in milux-tak
+# ADR-001: Vantage Deployed derives from the Deployed builds and lives in the development repository
 
-**Status:** Accepted (Matt, 30 Aug 2026, card 6188). **Owner:** Matt.
+**Status:** Accepted (Matt, 30 Aug 2026). **Owner:** Matt.
 
 ## Context
 
@@ -14,7 +14,7 @@ The live Deployed app and its Meshtastic build must not break while this is buil
 
 1. **A new app, Vantage Deployed**, derived from the Deployed builds, not a mutation of them.
    The estate's app keeps running until this product reaches parity and Matt cuts over.
-2. **Development home is `milux-tak`**, in this `vantage-deployed/` subtree, because every
+2. **Development home is `the development repository`**, in this `vantage-deployed/` subtree, because every
    feature spans the console (mints the QR), the box (serves enrolment and sync) and the app
    (joins): one PR per feature under the repo's trunk-and-PR workflow. The public
    `MilUX-Ltd/vantage` repo stays the publish surface, fed by the tarball cut.
@@ -24,7 +24,7 @@ The live Deployed app and its Meshtastic build must not break while this is buil
    `milux-vault-sync` remains the MilUX estate instance, mirroring the product-versus-estate
    split the console made. New product code (enrolment) is written here.
 4. **The python package keeps the name `vaultsync`** until the Vantage 2.0 namespace
-   migration renames the product's surfaces in one deliberate breaking release (card 6174's
+   migration renames the product's surfaces in one deliberate breaking release (an internal card's
    interim rule: new files take vantage names, existing names do not churn; the package name is
    inherited, not new).
 5. **The Meshtastic mesh bearer is kept**, capability-gated: offered when a bound box has a

@@ -43,7 +43,7 @@ log() {
 
 op="${1:-}"; shift || true
 name="${1:-}"; shift || true
-[[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import)$ ]] || deny "unknown operation"
+[[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import|kiosk-exit)$ ]] || deny "unknown operation"
 [[ "$name" =~ ^[a-z0-9-]{1,24}$ ]] || deny "key name must match [a-z0-9-], max 24"
 key="$STORE/$name"
 install -d -m 700 -o root -g root /var/lib/console-setup "$STORE"
@@ -498,5 +498,14 @@ shred)
     else
         echo "OK no key to destroy"
     fi
+    ;;
+kiosk-exit)
+    # the on-screen exit from kiosk mode: stop the full-screen browser and hand the box's
+    # screen back to a login terminal. The console gates the caller (loopback only); this
+    # just does the privileged toggle. Idempotent - no kiosk, no harm.
+    systemctl stop vantage-kiosk.service 2>/dev/null || true
+    systemctl start getty@tty1.service 2>/dev/null || true
+    log "kiosk-exit"
+    echo "OK kiosk stopped; the screen is a login terminal"
     ;;
 esac

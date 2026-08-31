@@ -3,11 +3,11 @@
 #
 # COMPAT MARKER (do not remove until every enrolled box has been re-enrolled with a 2.0
 # tak-provision gate): a box enrolled before the rename carries a tak-provision forced command
-# that greps the pushed payload for the literal 'milux-tak-provision' before it will run it
+# that greps the pushed payload for the literal 'the development repository-provision' before it will run it
 # (the sha256 is the actual security; this grep only checks the payload looks like a known
-# provisioner). This file was formerly named milux-tak-provision.sh; the token on the next
+# provisioner). This file was formerly named the development repository-provision.sh; the token on the next
 # line keeps those pre-2.0 boxes accepting it. 2.0 boxes gate on 'vantage-tak-provision',
-# already present above. Marker token: milux-tak-provision
+# already present above. Marker token: the development repository-provision
 #
 # This is the deterministic, no-AI, no-TUI replacement for driving installTAK's ncurses
 # wizard by hand. It reimplements the same install (the build-log's stated right answer:
@@ -33,7 +33,7 @@
 # On success the server is running and this prints ENROL-READY with the facts the console
 # needs to auto-enrol it to the estate.
 #
-# Argos, 25 August 2026. Businessmap card 6165. Reference: myTeckNet installTAK (sequence),
+# MilUX, 25 August 2026. Reference: myTeckNet installTAK (sequence),
 # servers/cloud/build-log.md (decisions), the working cloud box (ground truth).
 set -uo pipefail
 
@@ -625,7 +625,7 @@ comp_lanntp() {
     export DEBIAN_FRONTEND=noninteractive
     run "apt-get install -y -qq chrony"
     # The box's REAL LAN, not the first kernel route: on a box with Docker that
-    # is 172.17.0.0/16, the bridge (the MINIX build hit the same trap). Prefer
+    # is 172.17.0.0/16, the bridge (the deployable kit build hit the same trap). Prefer
     # the default route's interface; offline (no default route), take the first
     # kernel route on a physical-looking interface.
     local dev net

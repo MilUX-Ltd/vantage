@@ -6,7 +6,7 @@
 #   servers/nuc/scripts/tak-health.sh   (credential-free discipline, on-the-wire cert reads)
 #   servers/deployed/verify-kit.sh      (output-based checks, real handshakes, tile counts)
 #
-# Principle, from LESSONS.md lesson 1: check what a service PRODUCES, not whether
+# Principle, from the lessons log lesson 1: check what a service PRODUCES, not whether
 # systemd says it is active. An mbtileserver serving an empty directory is active.
 # A mediamtx with every port firewalled off is active. Neither is working.
 #
@@ -23,7 +23,7 @@
 #
 # Exit: 0 all OK, 1 warnings only, 2 one or more failures.
 #
-# Argos, 2026-08-23. Businessmap card 6165. See also card 5123.
+# MilUX, 2026-08-23.
 
 set -uo pipefail
 
@@ -32,10 +32,10 @@ set -uo pipefail
 # carry the same number; bump both together.
 #
 # This exists because after five pushes in one afternoon there was no way to tell
-# which version was actually running on which box, and the MINIX is away with the
+# which version was actually running on which box, and the deployable kit is away with the
 # first one on it. A checker you cannot version is a checker you cannot trust
 # across an estate.
-VERSION="1.8.3"
+VERSION="1.9.0"
 SCHEMA="milux.tak-health/2"
 PROFILE=""
 JSON=0
@@ -96,7 +96,7 @@ record() { # category name status detail [value] [unit]
 # ---------------------------------------------------------------------------
 # Portability helpers
 #
-# LESSONS.md lesson 11: macOS is not Linux, and these scripts run on both.
+# the lessons log lesson 11: macOS is not Linux, and these scripts run on both.
 # `date -d` is GNU only; BSD date needs -j -f. --self-test must run on Matt's Air.
 # `bc` is not installed everywhere, so all arithmetic is bash or awk.
 # ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ json_escape() {
 # JUDGES - pure functions, no I/O. These are what --self-test exercises.
 #
 # Every judgement in this script goes through one of these. That is the whole
-# point: LESSONS.md lesson 2 records four "faults" on 8 August that were bugs in
+# point: the lessons log lesson 2 records four "faults" on 8 August that were bugs in
 # the checking code, not the system. A checker nobody has watched fail is not a
 # checker.
 # ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ load_profile() {
       cloud)
         P_DESC="Public cloud VPS, QR-join, Let's Encrypt"
         P_FQDN=""
-        P_HOSTMATCH="milux"      # verified off the box, 23 Aug 2026
+        P_HOSTMATCH=""           # set per box by enrolment (/etc/tak-health.conf HOSTMATCH=)
         P_PROBE="127.0.0.1"
         P_SERVICES="takserver postgresql"
         P_TCP="8089 8443 8446"
@@ -324,9 +324,9 @@ load_profile() {
         P_LVMSNAP="/dev/ubuntu-vg/tak-preinstall"
         ;;
       deployed)
-        P_DESC="Deployable MINIX kit, must work with the cable out"
+        P_DESC="Deployable kit, must work with the cable out"
         P_FQDN=""
-        P_HOSTMATCH="milux-deployed"   # UNVERIFIED - confirm with `hostname -s` when the kit is back
+        P_HOSTMATCH=""                 # set per box by enrolment (/etc/tak-health.conf HOSTMATCH=)
         P_PROBE="127.0.0.1"
         P_SERVICES="takserver mediamtx mbtileserver chrony postgresql takbot mosquitto node-red ollama tailscaled docker tak-meshtastic-gateway"
         P_TCP="8089 8443 8446 1935 8554 8888 8080"
@@ -334,7 +334,7 @@ load_profile() {
         P_PUBLIC=0
         P_LETSENCRYPT=0
         # AS-BUILT.md records six tilesets; verify-kit.sh expected 5. Set to 6,
-        # flagged on card 6165 for confirmation when the kit is back from Alpena.
+        # flagged on an internal card for confirmation when the kit is back from the field.
         P_TILESETS=6
         P_MEDIA=1
         P_CHRONY=1
@@ -417,7 +417,7 @@ load_loadout() {
 
 apply_loadout() {
     # Narrow the profile's expectations to the declared loadout (ADR 004). A
-    # rejected or absent declaration leaves the profile untouched: the MINIX,
+    # rejected or absent declaration leaves the profile untouched: the deployable kit,
     # which declares nothing, behaves exactly as before this feature existed.
     # (Removal condition for that fallback: when every estate box carries a
     # declaration, the profile service lists shrink to takserver+postgresql
@@ -467,7 +467,7 @@ apply_loadout() {
 }
 
 # the box's own FQDN and hostname are recorded at enrolment in /etc/tak-health.conf,
-# so a second cloud box does not warn forever for not being tak.milux.co.uk. The
+# so a second cloud box does not warn forever for not being tak.example.com. The
 # file is parsed, never sourced: only FQDN= and HOSTMATCH= lines are read, and only
 # hostname-shaped values are accepted. CLI flags beat the file.
 apply_overrides() {
@@ -591,6 +591,12 @@ check_firewall() {
 check_resolution() {
     if getent hosts "$P_FQDN" >/dev/null 2>&1; then
         record dns "$P_FQDN" OK "$(getent hosts "$P_FQDN" | awk '{print $1}' | head -1)"
+    elif [[ "$PROFILE" == "deployed" ]]; then
+        # a deployed box lives on an isolated mesh with no DNS of its own; its name not
+        # resolving locally is expected there, not a fault. The estate console reaches it
+        # by address and proves that separately, so DNS is not applicable - SKIP, never a
+        # red FAIL that reddens a box that is actually up.
+        record dns "$P_FQDN" SKIP "not applicable (deployed box - reachable by address)"
     else
         record dns "$P_FQDN" FAIL "does not resolve"
     fi
@@ -1129,7 +1135,7 @@ render_json() {
 }
 
 # ---------------------------------------------------------------------------
-# SELF-TEST - LESSONS.md lesson 2, "check the checker"
+# SELF-TEST - the lessons log lesson 2, "check the checker"
 #
 # Every judge is driven in both directions with synthetic values. This is the
 # part that would have caught the four false faults of 8 August: the /dev/tcp
@@ -1243,9 +1249,9 @@ self_test() {
     expect "UNREADABLE journal SKIPS"         SKIP "$(judge_takbot_workers 0 0)"
 
     echo "--- hostname guard ---"
-    expect "openclaw matches nuc profile"     OK   "$(judge_hostname openclaw openclaw)"
-    expect "milux matches cloud profile"      OK   "$(judge_hostname milux milux)"
-    expect "milux rejects nuc profile"        FAIL "$(judge_hostname milux openclaw)"
+    expect "matching host passes its profile" OK   "$(judge_hostname boxone boxone)"
+    expect "matching host passes cloud"       OK   "$(judge_hostname boxtwo boxtwo)"
+    expect "wrong host is refused"            FAIL "$(judge_hostname boxtwo boxone)"
     # The severity mapping is the part that got it wrong live on 23 Aug.
     expect "matching host is OK"              OK   "$(judge_guard_severity OK 0)"
     expect "wrong host WARNS, never FAILS"    WARN "$(judge_guard_severity FAIL 0)"
@@ -1366,7 +1372,7 @@ tak-health.sh - read-only health check for MilUX TAK servers
   --fqdn <name>                    this box's FQDN, overriding the profile default
   --hostmatch <substr>             this box's hostname guard, overriding the default
                                    (both also read from /etc/tak-health.conf)
-  --json                           machine-readable output (for the console, Sam, Argos)
+  --json                           machine-readable output (for the console, Sam, MilUX)
   --print-profile                  print the resolved expectations (profile + conf +
                                    declared loadout) and exit; nothing is probed
   --self-test                      drive every judge in both directions, no server needed
