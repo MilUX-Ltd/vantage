@@ -125,12 +125,17 @@ the public face of your DNS from outside the kit, or over DNS-over-HTTPS.
 
 ## Install the console
 
+Vantage releases on the **0.9.x** line through the beta. The products inside it carry
+their own baselines - the console and the health checker each version independently - so
+the release number and a component's number are not the same thing and are not expected
+to match.
+
 Copy the release archive to the server and run the installer:
 
 ```bash
-scp vantage-2.0.0.tgz root@your-server:/root/
+scp vantage-0.9.0-beta.tgz root@your-server:/root/
 ssh root@your-server
-tar -xzf vantage-2.0.0.tgz
+tar -xzf vantage-0.9.0-beta.tgz
 cd vantage/console
 ./install-vantage.sh --bind YOUR.SERVER.IP.ADDRESS
 ```
