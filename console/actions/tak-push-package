@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# tak-push-package - the ONE operation the console's package-push key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-push-package",restrict ssh-ed25519 AAAA... vantage-console-pkgpush
+#
+# The console pipes a package (a TAK Server .deb) on stdin; the sha256 and the filename
+# travel as the two arguments. The file lands in takadmin's own staging inbox and NOTHING
+# is installed: installation is a separate action behind its own key and its own root
+# wrapper, which re-verifies the hash from scratch. This script needs no sudo at all -
+# it writes only where takadmin may write.
+#
+# Output on success:
+#     OK staged <filename> (<sha256>)
+# Any failure prints "ERR <reason>" to stderr and exits non-zero.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+INBOX="$HOME/package-inbox"
+
+read -r verb digest fname extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+if [[ "$verb" == "have-package" ]]; then
+    # read-only: is this exact package already staged? Lets a re-run (or a package
+    # side-loaded past a slow path) skip the stream; the installer re-hashes anyway.
+    [[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]] || deny "expected a sha256 digest"
+    if [[ -f "$HOME/package-inbox/$digest.deb" || -f "$HOME/package-inbox/$digest.tgz" ]]; then
+        echo "HELD"
+    else
+        echo "ABSENT"
+    fi
+    exit 0
+fi
+[[ "$verb" == "push-package" ]]        || deny "only push-package and have-package are permitted on this key"
+[[ -z "${extra:-}" ]]                  || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]]  || deny "expected a sha256 digest"
+# Two package shapes ride this key: TAK Server .deb (upgrade-server) and the mesh gateway
+# bundle .tgz (deploy-mesh-gateway). Both land hash-named; both installers re-hash.
+[[ "${fname:-}" =~ ^[A-Za-z0-9._+-]{1,80}\.(deb|tgz)$ ]] || deny "filename must be [A-Za-z0-9._+-] ending .deb or .tgz"
+[[ "$fname" != *".."* ]]               || deny "illegal filename"
+
+mkdir -p "$INBOX"
+# One package at a time: the inbox is staging, not storage.
+find "$INBOX" -maxdepth 1 \( -name '*.deb' -o -name '*.tgz' \) -mmin +180 -delete 2>/dev/null || true
+
+tmp=$(mktemp "$INBOX/.push.XXXXXX") || deny "mktemp failed"
+trap 'rm -f "$tmp"' EXIT
+# Size-capped read: a TAK Server .deb is ~650 MB; 1.5 GB is generous.
+head -c 1500000000 > "$tmp"
+[[ -s "$tmp" ]] || deny "no payload arrived on stdin"
+
+got=$(sha256sum "$tmp" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "payload hash mismatch: got $got"
+case "$fname" in
+    *.deb)
+        head -c 8 "$tmp" | grep -q '!<arch>' || deny "payload is not a Debian package"
+        mv "$tmp" "$INBOX/$digest.deb"
+        ;;
+    *.tgz)
+        # gzip magic: 1f 8b
+        head -c 2 "$tmp" | od -An -tx1 | grep -q '1f 8b' || deny "payload is not gzip"
+        mv "$tmp" "$INBOX/$digest.tgz"
+        ;;
+esac
+trap - EXIT
+echo "OK staged $fname ($digest)"

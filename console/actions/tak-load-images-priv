@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# tak-load-images-priv - load the Docker image tarball that tak-load-images verified, then
+# apply the module's pinned compose. Re-checks the hash (the file sat in /tmp between the
+# gates), docker load, then `docker compose up -d --no-build` - never a pull, never a build.
+#
+# Root-only via the sudoers-scoped rule:
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-load-images-priv
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+
+src="${1:-}"; digest="${2:-}"; module="${3:-}"
+[[ "$src" =~ ^/tmp/tak-load-images-push\.[A-Za-z0-9]+$ ]] || deny "unexpected payload path"
+[[ -f "$src" ]]                              || deny "payload file is missing"
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]]            || deny "bad digest"
+[[ "$module" =~ ^(cloudtak|mediamtx)$ ]]     || deny "bad module"
+got=$(sha256sum "$src" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "hash mismatch at the privileged gate"
+command -v docker >/dev/null 2>&1 || deny "docker is not installed"
+
+# per-box compose dirs: deliberate constants, like the update-cloudtak allowlist. The console
+# cannot point this elsewhere. MediaMTX rides the CloudTAK compose on our estate; a box that
+# splits them sets its own dir here.
+case "$module" in
+    cloudtak) COMPOSE_DIR="/home/matt/CloudTAK" ;;
+    mediamtx) COMPOSE_DIR="/home/matt/CloudTAK" ;;
+esac
+
+echo "== loading images (docker load, offline) =="
+if ! out=$(docker load -i "$src" 2>&1); then
+    printf '%s\n' "$out" | tail -12 >&2
+    deny "docker load failed"
+fi
+printf '%s\n' "$out" | tail -12
+
+if [[ -f "$COMPOSE_DIR/docker-compose.yml" ]]; then
+    echo "== applying pinned compose ($module) =="
+    cd "$COMPOSE_DIR"
+    if ! out=$(docker compose up -d --no-build 2>&1); then
+        printf '%s\n' "$out" | tail -12 >&2
+        deny "compose up failed"
+    fi
+    printf '%s\n' "$out" | tail -12
+    docker compose ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null || true
+    if [[ "$module" == "cloudtak" ]]; then
+        ver=$(git -c safe.directory='*' -C "$COMPOSE_DIR" describe --tags --always 2>/dev/null || true)
+        if [[ -n "$ver" ]]; then
+            printf '%s\n' "$ver" > /etc/tak-cloudtak-version
+            chmod 0644 /etc/tak-cloudtak-version
+        fi
+    fi
+else
+    echo "== images loaded; no compose at $COMPOSE_DIR to apply (load-only) =="
+fi
+echo "OK $module images loaded"

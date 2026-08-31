@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# tak-firewall - the ONE operation the console's firewall key is allowed to run: read the
+# firewall's drift against this box's declared policy, or reconcile it.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-firewall",restrict ssh-ed25519 AAAA... vantage-console-firewall
+#
+# $SSH_ORIGINAL_COMMAND is exactly "firewall plan" or "firewall apply". plan is read-only.
+# apply hands the single privileged step to the root wrapper, which reconciles ufw to the
+# ports the health profile declares for this box - and no others it manages.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb mode extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "firewall" ]]         || deny "only firewall is permitted on this key"
+[[ -z "${extra:-}" ]]               || deny "too many arguments"
+[[ "$mode" =~ ^(plan|apply)$ ]]     || deny "mode must be plan or apply"
+
+exec sudo -n /usr/local/bin/tak-firewall-priv "$mode"

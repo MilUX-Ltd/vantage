@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# tak-tail-logs - read-only: show the tail of an allowlisted unit's journal from the console.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-tail-logs",restrict ssh-ed25519 AAAA... vantage-console-logs
+# It runs UNPRIVILEGED (takadmin); the journal read (which needs root for system units) is the one
+# privileged step, handed to tak-tail-logs-priv, which re-validates and enforces the unit allowlist.
+# This is a READ: it never writes, restarts, or changes anything. It cannot run a free-text command.
+#
+# $SSH_ORIGINAL_COMMAND is "tail-logs <unit> [lines]". Validated hard; the WHICH-units allowlist is
+# enforced in the wrapper. Output is the raw journal tail, streamed straight back to the console.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb unit lines extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "tail-logs" ]] || deny "only tail-logs is permitted on this key"
+[[ -z "${extra:-}" ]]        || deny "too many arguments"
+[[ -n "${unit:-}" ]]         || deny "no unit given"
+[[ "$unit" =~ ^[a-z0-9@._-]{1,60}$ ]] || deny "unit must match [a-z0-9@._-], 1-60 chars"
+[[ "$unit" != *".."* ]]      || deny "illegal unit name"
+lines="${lines:-80}"
+[[ "$lines" =~ ^[0-9]{1,4}$ ]] || deny "lines must be a number, up to 4 digits"
+
+exec sudo -n /usr/local/bin/tak-tail-logs-priv "$unit" "$lines"

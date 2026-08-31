@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# tak-mesh-deploy - the ONE operation the console's mesh-deploy key is allowed to run: install
+# the Meshtastic TAK gateway on THIS box from the console's Networks page.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-mesh-deploy",restrict ssh-ed25519 AAAA... vantage-console-meshdeploy
+#
+# The console pipes vantage-mesh-gateway-install.sh on stdin and passes its sha256 plus ONE
+# base64 blob of JSON parameters (radio path, region, channel, filter group, the channel URL,
+# and the sha256 of the gateway bundle already staged in the package inbox). Nothing arriving
+# here is trusted: the read is size-capped, the hash is compared against the argument, the
+# payload must parse as bash and look like the installer, and the privileged wrapper
+# re-verifies all of it and re-validates every parameter. Two gates, not one - the
+# tak-provision shape.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb digest argsb64 extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "deploy-mesh-gateway" ]] || deny "only deploy-mesh-gateway is permitted on this key"
+[[ -z "${extra:-}" ]]                  || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]]  || deny "expected a sha256 digest"
+[[ "${argsb64:-}" =~ ^[A-Za-z0-9+/=_-]{2,8192}$ ]] || deny "expected base64 parameters"
+
+tmp=$(mktemp /tmp/tak-mesh-deploy-push.XXXXXX) || deny "mktemp failed"
+trap 'rm -f "$tmp"' EXIT
+head -c 2000000 > "$tmp"
+[[ -s "$tmp" ]] || deny "no payload arrived on stdin"
+
+got=$(sha256sum "$tmp" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "payload hash mismatch: got $got"
+bash -n "$tmp"            || deny "payload does not parse as bash"
+grep -q 'vantage-mesh-gateway-install' "$tmp" || deny "payload is not the mesh installer"
+
+exec sudo -n /usr/local/bin/tak-mesh-deploy-priv "$tmp" "$digest" "$argsb64"

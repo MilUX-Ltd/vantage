@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# tak-vpn-priv - join, leave and report this box's membership of a private network.
+# One case per provider; the contract is identical for all of them:
+#   install is folded into join (idempotent), join material arrives base64 once and is
+#   written root-only, status is one honest line per fact, leave disables at boot and
+#   shreds the material. Secrets are never echoed and never logged.
+#
+# Root-only via the sudoers-scoped wrapper:
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-vpn-priv
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1
+
+provider="${1:-}"; mode="${2:-}"; conf_b64="${3:-}"
+[[ "$provider" =~ ^(wireguard|tailscale|openvpn)$ ]] || deny "unknown provider"
+[[ "$mode" =~ ^(status|join|leave)$ ]] || deny "unknown mode"
+
+iface_up() {
+    ip -4 addr show "$1" 2>/dev/null | awk '/inet /{print $2; found=1} END{exit !found}'
+}
+
+case "$provider" in
+wireguard)
+    case "$mode" in
+    join)
+        [[ -n "$conf_b64" ]] || deny "join needs the wg-quick config"
+        command -v wg >/dev/null 2>&1 || apt-get install -y -qq wireguard-tools >/dev/null 2>&1 \
+            || deny "could not install wireguard-tools"
+        install -d -m 700 /etc/wireguard
+        umask 077
+        if ! printf '%s' "$conf_b64" | base64 -d > /etc/wireguard/wg0.conf 2>/dev/null; then
+            rm -f /etc/wireguard/wg0.conf; deny "config did not decode"
+        fi
+        grep -q '^\[Interface\]' /etc/wireguard/wg0.conf \
+            || { shred -u /etc/wireguard/wg0.conf; deny "that is not a wg-quick config"; }
+        systemctl enable wg-quick@wg0 >/dev/null 2>&1 || true
+        systemctl restart wg-quick@wg0 \
+            || { echo "ERR wg-quick could not bring wg0 up - the config's keys or"; \
+                 echo "ERR addresses are wrong; nothing was enabled"; \
+                 systemctl disable --now wg-quick@wg0 >/dev/null 2>&1; exit 2; }
+        addr=$(iface_up wg0 || true)
+        echo "OK joined via WireGuard"
+        echo "IFACE wg0 ${addr:-up, no v4 address}"
+        ;;
+    status)
+        if ! command -v wg >/dev/null 2>&1; then echo "NONE wireguard is not installed"; exit 0; fi
+        if addr=$(iface_up wg0); then
+            peers=$(wg show wg0 peers 2>/dev/null | wc -l)
+            hs=$(wg show wg0 latest-handshakes 2>/dev/null | awk '$2>0{c++} END{print c+0}')
+            echo "OK wg0 $addr - $peers peer(s), $hs with a recent handshake"
+        else
+            echo "DOWN wg0 is not up"
+        fi
+        ;;
+    leave)
+        systemctl disable --now wg-quick@wg0 >/dev/null 2>&1 || true
+        [[ -f /etc/wireguard/wg0.conf ]] && shred -u /etc/wireguard/wg0.conf
+        echo "OK left - wg0 down, config shredded"
+        ;;
+    esac
+    ;;
+tailscale)
+    case "$mode" in
+    join)
+        [[ -n "$conf_b64" ]] || deny "join needs an auth key"
+        key=$(printf '%s' "$conf_b64" | base64 -d 2>/dev/null) || deny "key did not decode"
+        [[ "$key" =~ ^tskey-[A-Za-z0-9-]{10,120}$ ]] || deny "that is not a tailscale auth key"
+        if ! command -v tailscale >/dev/null 2>&1; then
+            curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1 \
+                || deny "could not install tailscale"
+        fi
+        tailscale up --authkey="$key" >/dev/null 2>&1 \
+            || deny "tailscale rejected the key (expired, used, or not pre-authorised?)"
+        addr=$(tailscale ip -4 2>/dev/null | head -1)
+        echo "OK joined via Tailscale"
+        echo "IFACE tailscale0 ${addr:-up}"
+        ;;
+    status)
+        if ! command -v tailscale >/dev/null 2>&1; then echo "NONE tailscale is not installed"; exit 0; fi
+        if st=$(tailscale status --self=true --peers=false 2>/dev/null | head -1) && [[ -n "$st" ]]; then
+            echo "OK $st"
+        else
+            echo "DOWN tailscale is installed but not up"
+        fi
+        ;;
+    leave)
+        if command -v tailscale >/dev/null 2>&1; then
+            tailscale logout >/dev/null 2>&1 || tailscale down >/dev/null 2>&1 || true
+        fi
+        echo "OK left - logged out of the tailnet"
+        ;;
+    esac
+    ;;
+openvpn)
+    case "$mode" in
+    join)
+        [[ -n "$conf_b64" ]] || deny "join needs the client .ovpn"
+        command -v openvpn >/dev/null 2>&1 || apt-get install -y -qq openvpn >/dev/null 2>&1 \
+            || deny "could not install openvpn"
+        install -d -m 700 /etc/openvpn/client
+        umask 077
+        if ! printf '%s' "$conf_b64" | base64 -d > /etc/openvpn/client/vantage.conf 2>/dev/null; then
+            rm -f /etc/openvpn/client/vantage.conf; deny "profile did not decode"
+        fi
+        grep -qE '^(client|remote )' /etc/openvpn/client/vantage.conf \
+            || { shred -u /etc/openvpn/client/vantage.conf; deny "that is not a client .ovpn"; }
+        systemctl enable openvpn-client@vantage >/dev/null 2>&1 || true
+        systemctl restart openvpn-client@vantage || deny "openvpn would not start"
+        sleep 3
+        if addr=$(iface_up tun0); then
+            echo "OK joined via OpenVPN"
+            echo "IFACE tun0 $addr"
+        else
+            echo "OK openvpn started; tun0 not up yet (it keeps retrying the server) -"
+            echo "OK check VPN status in a minute"
+        fi
+        ;;
+    status)
+        if ! command -v openvpn >/dev/null 2>&1; then echo "NONE openvpn is not installed"; exit 0; fi
+        if ! systemctl is-active --quiet openvpn-client@vantage; then
+            echo "DOWN the openvpn client service is not running"
+        elif addr=$(iface_up tun0); then
+            echo "OK tun0 $addr"
+        else
+            echo "DOWN service running but tun0 has no address - the server is not answering"
+        fi
+        ;;
+    leave)
+        systemctl disable --now openvpn-client@vantage >/dev/null 2>&1 || true
+        [[ -f /etc/openvpn/client/vantage.conf ]] && shred -u /etc/openvpn/client/vantage.conf
+        echo "OK left - tunnel down, profile shredded"
+        ;;
+    esac
+    ;;
+esac

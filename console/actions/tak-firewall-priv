@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# tak-firewall-priv - the single privileged step behind the firewall action: read or
+# reconcile ufw against this box's DECLARED policy. Runs as root, reachable ONLY through a
+# scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-firewall-priv
+#
+# The declared policy is the health profile's own numbers, read from /etc/tak-health.conf
+# and the checker's profile table. The reconcile is deliberately CONSERVATIVE:
+#   - it ENSURES every declared TAK port is allowed (scoped: Anywhere on a public/cloud
+#     box, tailnet-only on a private one), and
+#   - on a private box it REMOVES stray Anywhere rules for the TAK ports (the exact drift
+#     the health checker flags), and
+#   - it NEVER touches port 22, the tailscale interface rules, or any rule for a port it
+#     does not manage. A human's own extra rule is left alone.
+#
+# ufw is enabled if it is inactive (with 22 allowed FIRST, so enabling never locks anyone
+# out). Every change is echoed. plan makes no change at all.
+set -uo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+MODE="${1:-}"
+[[ "$MODE" =~ ^(plan|apply)$ ]] || deny "mode must be plan or apply"
+command -v ufw >/dev/null 2>&1 || deny "ufw is not installed on this box"
+
+# --- what SHOULD be open here: TAK's own ports, and whether they face Anywhere ----------------
+# Mirror the checker's profile table. FQDN/profile come from the enrolment conf when present.
+PROFILE=""
+[[ -r /etc/tak-health.conf ]] && PROFILE=$(sed -n 's/^PROFILE=//p' /etc/tak-health.conf)
+# fall back: infer from hostname the way the checker's hostmatch does
+host=$(hostname -s 2>/dev/null || echo "")
+if [[ -z "$PROFILE" ]]; then
+    case "$host" in
+        *milux-dev*|*milux*) PROFILE=cloud ;;
+        *openclaw*)          PROFILE=firmbase ;;
+        *deployed*)          PROFILE=deployed ;;
+        *)                   PROFILE=firmbase ;;
+    esac
+fi
+case "$PROFILE" in
+    cloud)              TCP="8089 8443 8446"; PUBLIC=1 ;;
+    firmbase|nuc)       TCP="8089 8443 8446"; PUBLIC=0 ;;
+    deployed)           TCP="8089 8443 8446 1935 8554 8888 8080"; PUBLIC=0 ;;
+    *)                  deny "unknown profile '$PROFILE'" ;;
+esac
+
+ufw_status=$(ufw status verbose 2>/dev/null || echo "inactive")
+active=no; grep -q "Status: active" <<<"$ufw_status" && active=yes
+
+echo "PROFILE $PROFILE"
+echo "DECLARED tcp: $TCP  facing: $([[ $PUBLIC == 1 ]] && echo Anywhere || echo tailnet-only)"
+echo "UFW $([[ $active == yes ]] && echo active || echo inactive)"
+
+# compute drift: which declared ports lack ANY rule, and (private only) which have a
+# genuinely UNSCOPED Anywhere rule - one with no "on <iface>" clause. A rule scoped to an
+# interface (on tailscale0, on br-cloudtak, ...) is NOT stray: it is exactly how a private
+# box exposes TAK to the tailnet and to the CloudTAK bridge. Matching "Anywhere" alone was
+# wrong - "Anywhere" is the SOURCE column, present on scoped rules too.
+rules=$(ufw status 2>/dev/null || true)
+missing=""; stray=""
+for p in $TCP; do
+    # any rule at all for this port (scoped or not)?
+    if ! grep -qE "(^|[^0-9])$p(,[0-9]+)*/tcp" <<<"$rules"; then missing="$missing $p"; fi
+    if [[ $PUBLIC == 0 ]]; then
+        # a stray rule: the port, ALLOW, and NO " on <iface>" clause on that line
+        if grep -E "(^|[^0-9])$p(,[0-9]+)*/tcp[^A-Za-z]" <<<"$rules" \
+           | grep -v " on " | grep -qi "ALLOW"; then
+            stray="$stray $p"
+        fi
+    fi
+done
+echo "MISSING${missing:-  none}"
+echo "STRAY-ANYWHERE${stray:-  none}"
+
+if [[ "$MODE" == "plan" ]]; then
+    if [[ -z "${missing// }" && -z "${stray// }" ]]; then echo "OK firewall matches policy"; fi
+    exit 0
+fi
+
+# ---- apply ----------------------------------------------------------------------------------
+tsif=$(ip -o link show 2>/dev/null | awk -F': ' '/tailscale/{print $2; exit}')
+if [[ "$active" != yes ]]; then
+    ufw allow 22/tcp >/dev/null 2>&1 || true      # 22 FIRST, always, before enabling
+    ufw --force enable >/dev/null 2>&1 || deny "could not enable ufw"
+    echo "CHANGED enabled ufw (22/tcp allowed first)"
+fi
+for p in $TCP; do
+    if [[ $PUBLIC == 1 ]]; then
+        ufw allow "$p/tcp" >/dev/null 2>&1 && echo "CHANGED allow $p/tcp (Anywhere)"
+    else
+        if [[ -n "$tsif" ]]; then
+            ufw allow in on "$tsif" to any port "$p" proto tcp >/dev/null 2>&1 \
+                && echo "CHANGED allow $p/tcp on $tsif"
+        else
+            ufw allow "$p/tcp" >/dev/null 2>&1 && echo "CHANGED allow $p/tcp"
+        fi
+    fi
+done
+# private box: delete only genuinely UNSCOPED Anywhere rules for the declared ports.
+# `ufw delete allow <p>/tcp` removes the plain rule and leaves interface-scoped rules
+# (on tailscale0, on br-cloudtak) untouched - those are a different rule spec.
+if [[ $PUBLIC == 0 ]]; then
+    for p in $stray; do
+        yes | ufw delete allow "$p/tcp" >/dev/null 2>&1 && echo "CHANGED removed unscoped $p/tcp"
+    done
+fi
+echo "OK firewall reconciled to $PROFILE policy"

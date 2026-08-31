@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# tak-set-group-priv - the privileged step: add a user to a group in UserAuthenticationFile.xml.
+#
+# ADDS the group, never drops existing ones (idempotent), so a group edit can never silently strip a
+# user of access. Enforces a per-box allowlist of group names. Backs the file up first.
+#
+# It does NOT restart the server: the change applies on the client's next reconnect. To force it
+# immediately (the x509 group cache needs clearing - learned 25 Aug 2026), restart takserver via the
+# restart-service action. Keeping the restart out of here means a group edit is never a surprise
+# estate-wide client drop.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+user="${1:-}"; group="${2:-}"
+[[ "$user"  =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "user must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$group" =~ ^[A-Za-z0-9_-]{1,40}$ ]]  || deny "group must match [A-Za-z0-9_-], 1-40 chars"
+
+# --- per-box allowlist of group names -------------------------------------------------------------
+ALLOWED_GROUPS="MilUX Hackathon ULOTC Playground __ANON__"
+# --------------------------------------------------------------------------------------------------
+case " $ALLOWED_GROUPS " in *" $group "*) : ;; *) deny "group '$group' is not in this box's allowed set";; esac
+
+UAF=/opt/tak/UserAuthenticationFile.xml
+[[ -f "$UAF" ]] || deny "no UserAuthenticationFile at $UAF"
+cp -a "$UAF" "$UAF.bak-$(date +%Y%m%d-%H%M%S)"
+
+out=$(python3 - "$UAF" "$user" "$group" <<'PY'
+import sys, xml.dom.minidom as m
+uaf, user, group = sys.argv[1:4]
+d = m.parse(uaf)
+us = [u for u in d.getElementsByTagName("User") if u.getAttribute("identifier") == user]
+if not us:
+    print("no user '%s' in the auth file" % user); sys.exit(3)
+u = us[0]
+groups = [gl.firstChild.data.strip() for gl in u.getElementsByTagName("groupList") if gl.firstChild]
+if group in groups:
+    print("NOCHANGE %s already in %s (groups: %s)" % (user, group, ", ".join(groups)))
+else:
+    gl = d.createElement("groupList"); gl.appendChild(d.createTextNode(group)); u.appendChild(gl)
+    open(uaf, "w").write(d.toxml())
+    print("CHANGED %s now in: %s" % (user, ", ".join(groups + [group])))
+PY
+) || deny "${out:-set-group failed}"
+
+echo "OK set-group"
+echo "$out"
+[[ "$out" == CHANGED* ]] && \
+  echo "NOTE applies on the client's next reconnect; restart takserver to force it immediately" || true

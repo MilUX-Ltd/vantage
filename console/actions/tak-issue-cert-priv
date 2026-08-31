@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# tak-issue-cert-priv - the single privileged step behind the cert action: issue one TAK client
+# certificate with the kit's own makeCert, and hand back the .p12.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-issue-cert-priv
+# It re-validates its one argument (defence in depth: never trust that the caller validated) and
+# refuses to overwrite an existing certificate, so the action can create but never silently replace.
+#
+# It wraps the deployable kit's makeCert; it does not reimplement any cert logic. The CA and its
+# passphrase handling stay entirely inside makeCert / the kit's cert-metadata, off this script.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+name="${1:-}"
+[[ "$name" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "name must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$name" != "." && "$name" != ".." && "$name" != *".."* ]] || deny "illegal name"
+
+CERTS=/opt/tak/certs
+P12="$CERTS/files/$name.p12"
+[[ -e "$P12" ]] && deny "certificate '$name' already exists; refusing to overwrite"
+[[ -x "$CERTS/makeCert.sh" ]] || deny "makeCert.sh not found at $CERTS"
+
+cd "$CERTS"
+# makeCert reads the CA and its passphrase from the kit's cert-metadata.sh in this directory.
+if ! ./makeCert.sh client "$name" >/tmp/.issue-cert.$$ 2>&1; then
+    rm -f "/tmp/.issue-cert.$$"
+    deny "makeCert failed for '$name'"
+fi
+rm -f "/tmp/.issue-cert.$$"
+[[ -e "$P12" ]] || deny "makeCert reported success but $name.p12 was not produced"
+
+fp=$(openssl x509 -in "$CERTS/files/$name.pem" -noout -fingerprint -sha256 2>/dev/null \
+     | sed 's/.*=//' || echo "unknown")
+echo "OK $name"
+echo "FP $fp"
+echo "P12 $(base64 -w0 "$P12")"

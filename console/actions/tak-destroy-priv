@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# tak-destroy-priv - erase the estate footprint from this box. Stops the estate services,
+# then removes ONLY the known, named estate paths - never a blanket rm, never a path outside
+# this list. Reports each step so the console shows a precise confirmation of what was erased.
+# Irreversible. Root-only via:  takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-destroy-priv
+set -euo pipefail
+say() { echo "$*"; }
+
+host=$(hostname -s)
+say "== DESTROY on $host - erasing the estate footprint =="
+
+# 1. stop + disable TAK Server
+if systemctl list-unit-files takserver.service >/dev/null 2>&1; then
+    systemctl stop takserver 2>/dev/null && say "stopped takserver" || true
+    systemctl disable takserver 2>/dev/null || true
+fi
+
+# 2. bring down the CloudTAK/MediaMTX compose (and its volumes), if present
+if command -v docker >/dev/null 2>&1 && [[ -f /home/matt/CloudTAK/docker-compose.yml ]]; then
+    ( cd /home/matt/CloudTAK && docker compose down -v --remove-orphans 2>/dev/null ) \
+        && say "CloudTAK/MediaMTX stack down, volumes removed" || say "CloudTAK stack: nothing to stop"
+fi
+
+# 3. remove ONLY these known estate paths - an explicit allowlist, never anything else
+for p in /opt/tak /srv/vault /home/matt/CloudTAK /etc/tak-cloudtak-version /etc/tak-enrol-host; do
+    if [[ -e "$p" ]]; then
+        rm -rf -- "$p" && say "erased $p" || say "could NOT erase $p"
+    fi
+done
+
+# 4. purge the TAK Server package if it was installed from a .deb
+if dpkg -l takserver >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y takserver >/dev/null 2>&1 \
+        && say "purged the takserver package" || say "takserver package: purge skipped"
+fi
+
+say "DESTROYED $host - the estate footprint is gone. Remove the box from monitoring in the console."

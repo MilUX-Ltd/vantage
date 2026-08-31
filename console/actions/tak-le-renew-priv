@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# tak-le-renew-priv - the one privileged step behind le-renew: run certbot's renewal.
+#
+# `certbot renew` is a no-op unless a cert is within its renewal window, so this is safe to run any
+# time. Only meaningful on the public box (the one with a Let's Encrypt cert). Reports what certbot
+# did; the operator can see whether anything renewed.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+command -v certbot >/dev/null 2>&1 || deny "certbot is not installed on this box (le-renew is for the public box)"
+
+echo "OK le-renew"
+echo "----"
+certbot renew --no-random-sleep-on-renew 2>&1 | tail -n 25

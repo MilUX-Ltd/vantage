@@ -1,0 +1,25 @@
+Vantage
+Copyright © 2026 MilUX Ltd.
+
+Required Notice: Vantage © 2026 MilUX Ltd. Source-available under the Vantage
+Community Licence (see LICENSE). Commercial, government, and MOD use require a
+licence: matt@milux.co.uk
+
+Vantage is source-available, not open-source: free for personal, hobby, and
+other non-commercial, non-production use, and licensed separately by MilUX Ltd
+for any commercial, governmental, military, or production use — including use
+by or for the UK Ministry of Defence.
+
+Commercial licensing: matt@milux.co.uk
+
+Third-party components
+----------------------
+
+The Meshtastic TAK gateway bundle deployed by the Networks page vendors
+TAK-Meshtastic-Gateway (OpenTAKServer / brian7704) and the Meshtastic Python
+library, both GPL-3.0-or-later, together with MilUX patches published under the
+same licence. The bundle is a separate aggregated work: it is transported and
+installed by Vantage, never linked into it, and every cut bundle carries its
+upstream licence texts and patch set (see
+common/install-files/meshtastic-gateway/). The Vantage Community Licence does
+not apply to that bundle.

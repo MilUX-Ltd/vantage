@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# tak-view-coreconfig - the ONE operation the console's view-coreconfig key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-view-coreconfig",restrict ssh-ed25519 AAAA... vantage-console-cfgview
+#
+# Returns a READABLE, REDACTED summary of the TAK server's CoreConfig.xml: the network
+# inputs and connectors, TLS keystores (paths, never passwords), the x509 auth posture, and
+# federation state. It never returns the raw file, because CoreConfig carries four keystore
+# passwords and an LDAP credential. Redaction is an ALLOWLIST of elements plus a denylist of
+# secret-shaped attributes: belt and braces, so a secret leaks only if it is BOTH in an
+# allowed element AND named nothing like a secret, which the parser still refuses.
+#
+# This is deliberately view + backup, NOT edit. Arbitrary CoreConfig editing is a config
+# shell, and the estate console is a catalogue of known operations, never a shell. Specific
+# bounded toggles (flat-file auth on/off, say) can join the catalogue as their own actions
+# when a customer needs them.
+#
+# result: read (rendered in the console's mono panel).
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "view-coreconfig" ]] || deny "only view-coreconfig is permitted on this key"
+[[ -z "${extra:-}" ]]              || deny "this action takes no arguments"
+
+exec sudo -n /usr/local/bin/tak-view-coreconfig-priv

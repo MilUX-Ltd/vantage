@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# tak-push-checker - the ONE operation the console's push-checker key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-push-checker",restrict ssh-ed25519 AAAA... vantage-console-checker
+#
+# The console pipes the new tak-health build on stdin and passes its sha256 as the single
+# argument. Nothing arriving here is trusted: the read is size-capped, the hash is compared
+# against the argument, the payload must parse as bash and look like tak-health, and the
+# privileged install re-verifies all of it again. Two gates, not one.
+#
+# Output on success (stdout, for the console to show):
+#     OK installed
+#     WAS tak-health.sh <old version>
+#     NOW tak-health.sh <new version>
+# Any failure prints "ERR <reason>" to stderr and exits non-zero.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+# Parse the forced-command channel: exactly "push-checker <sha256>", nothing else.
+read -r verb digest extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "push-checker" ]]     || deny "only push-checker is permitted on this key"
+[[ -z "${extra:-}" ]]               || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]] || deny "expected a sha256 digest as the one argument"
+
+# Take the payload off stdin, size-capped: the checker is ~45 KB, 1 MB is generous.
+tmp=$(mktemp /tmp/tak-health-push.XXXXXX) || deny "mktemp failed"
+trap 'rm -f "$tmp"' EXIT
+head -c 1000000 > "$tmp"
+[[ -s "$tmp" ]] || deny "no payload arrived on stdin"
+
+got=$(sha256sum "$tmp" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "payload hash mismatch: got $got"
+bash -n "$tmp"            || deny "payload does not parse as bash"
+grep -q '^VERSION=' "$tmp" || deny "payload carries no VERSION line - this is not tak-health"
+
+# Hand the single privileged step to the root wrapper, which re-validates everything and
+# runs the candidate's own self-test before it is allowed to replace the installed checker.
+sudo -n /usr/local/bin/tak-push-checker-priv "$tmp" "$digest"

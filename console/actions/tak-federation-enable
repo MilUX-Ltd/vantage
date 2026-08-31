@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# tak-federation-enable - the ONE operation the console's federation-enable key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-federation-enable",restrict ssh-ed25519 AAAA... vantage-console-fed-en
+#
+# Turns ON this TAK server's federation server: it starts listening on the v2 federation port
+# (9001) so other servers can connect to it, and it can hold outbound connections. Manual,
+# directional group mapping is set on (federatedGroupMapping=true, automaticGroupMapping=false)
+# so nothing crosses a link until a human maps it - the safe default for defence federation.
+#
+# One of the four federation primitives (enable, ca, trust, connect) the console composes into a
+# "Federate A with B" orchestration. Idempotent: if federation is already enabled, it says so and
+# does not restart. A restart is required to open 9001, so this is a brief-outage action.
+#
+# Output (stdout): "OK federation enabled" + "V2PORT 9001", or "OK already enabled".
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "federation-enable" ]] || deny "only federation-enable is permitted on this key"
+[[ -z "${extra:-}" ]]                || deny "this action takes no arguments"
+
+exec sudo -n /usr/local/bin/tak-federation-enable-priv

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# tak-upgrade-server - the ONE operation the console's upgrade key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-upgrade-server",restrict ssh-ed25519 AAAA... vantage-console-upgrade
+#
+# The single argument is the sha256 of a package already staged by tak-push-package.
+# Everything privileged - hash re-verification, backup, stop, install, database
+# migration, start - happens in tak-upgrade-server-priv behind a scoped sudoers rule.
+# Two gates, not one.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb digest extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "upgrade-server" ]]     || deny "only upgrade-server is permitted on this key"
+[[ -z "${extra:-}" ]]                 || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]] || deny "expected a sha256 digest as the one argument"
+
+exec sudo -n /usr/local/bin/tak-upgrade-server-priv "$digest"

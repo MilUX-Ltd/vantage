@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# tak-set-loadout - the ONE operation the console's loadout key may run: set or clear
+# this box's declared loadout (/etc/tak-health.d/loadout.conf, Spec 002, ADR 004).
+# Narrowing the declaration reduces monitoring coverage, so the console gates the whole
+# action behind the operator password; here we enforce the single-verb contract and the
+# first validation gate. Tokens are only ever map keys; the priv half revalidates.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-set-loadout",restrict ssh-ed25519 AAAA... vantage-console-loadout
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+read -r verb comps tiles extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "set-loadout" ]] || deny "only set-loadout is permitted on this key"
+[[ -z "${extra:-}" ]] || deny "unexpected extra arguments"
+[[ -n "${comps:-}" ]] || deny "usage: set-loadout <components-csv|clear> [tilesets|-]"
+if [[ "$comps" != "clear" ]]; then
+    [[ ${#comps} -le 200 ]] || deny "components list too long"
+    [[ "$comps" =~ ^[a-z]+(,[a-z]+)*$ ]] || deny "components must be a comma list of [a-z]+ tokens"
+fi
+tiles="${tiles:--}"
+[[ "$tiles" == "-" || "$tiles" =~ ^[0-9]{1,3}$ ]] || deny "tilesets must be a small number or -"
+exec sudo -n /usr/local/bin/tak-set-loadout-priv "$comps" "$tiles"

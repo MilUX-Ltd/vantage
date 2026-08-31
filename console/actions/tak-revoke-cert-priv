@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# tak-revoke-cert-priv - the single privileged step behind the revoke action: revoke one client
+# certificate with the kit's own revokeCert.sh, which adds it to the CRL the server enforces
+# (x509checkRevocation="true" in CoreConfig).
+#
+# revokeCert.sh takes THREE arguments - <cert> <CA-key-basename> <CA-cert-basename> - and reads the
+# CA passphrase from cert-metadata.sh in the certs dir. The signing-CA basename differs between
+# boxes (makeCert uses "ca"; the installTAK public box uses "MILUX-ISSUING-CA"), so we DETECT it
+# rather than guess: the CA in files/ whose subject equals this certificate's issuer and whose .key
+# is present. If none is found we refuse - never a wrong revoke.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+name="${1:-}"
+[[ "$name" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "name must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$name" != "." && "$name" != ".." && "$name" != *".."* ]] || deny "illegal name"
+
+CERTS=/opt/tak/certs
+[[ -e "$CERTS/files/$name.pem" ]] || deny "no certificate '$name' to revoke"
+[[ -x "$CERTS/revokeCert.sh" ]]   || deny "revokeCert.sh not found at $CERTS"
+
+# find the signing CA: the cert in files/ whose subject == this cert's issuer, with a private key.
+cd "$CERTS/files"
+issuer=$(openssl x509 -in "$name.pem" -noout -issuer -nameopt RFC2253 2>/dev/null | sed 's/^issuer=//')
+[[ -n "$issuer" ]] || deny "could not read the issuer of '$name'"
+CA=""
+for c in *.pem; do
+    [[ -e "$c" ]] || continue
+    b="${c%.pem}"
+    case "$b" in *-trusted) continue ;; esac
+    [[ -e "$b.key" ]] || continue
+    subj=$(openssl x509 -in "$c" -noout -subject -nameopt RFC2253 2>/dev/null | sed 's/^subject=//')
+    if [[ "$subj" == "$issuer" ]]; then CA="$b"; break; fi
+done
+[[ -n "$CA" ]] || deny "could not find the signing CA (with key) for '$name'"
+
+cd "$CERTS"
+if ! ./revokeCert.sh "$name" "$CA" "$CA" >/tmp/.revoke-cert.$$ 2>&1; then
+    err=$(tail -3 "/tmp/.revoke-cert.$$" 2>/dev/null); rm -f "/tmp/.revoke-cert.$$"
+    deny "revokeCert failed for '$name': ${err:-unknown}"
+fi
+rm -f "/tmp/.revoke-cert.$$"
+
+echo "OK revoked $name (signed by CA '$CA')"
+echo "NOTE added to the CRL; the server enforces x509checkRevocation"

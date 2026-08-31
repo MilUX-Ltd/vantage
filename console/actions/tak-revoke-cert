@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# tak-revoke-cert - revoke ONE TAK client certificate. The credential-killing twin of issue-cert.
+#
+# Forced-command entry, runs UNPRIVILEGED (takadmin); the privileged revoke goes to
+# tak-revoke-cert-priv. $SSH_ORIGINAL_COMMAND is "revoke-cert <name>", validated hard. Revocation is
+# a credential operation, so the console requires the operator passphrase before it ever gets here.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb name extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "revoke-cert" ]] || deny "only revoke-cert is permitted on this key"
+[[ -z "${extra:-}" ]]          || deny "too many arguments"
+[[ -n "${name:-}" ]]           || deny "no certificate name given"
+[[ "$name" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "name must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$name" != "." && "$name" != ".." && "$name" != *".."* ]] || deny "illegal name"
+
+exec sudo -n /usr/local/bin/tak-revoke-cert-priv "$name"

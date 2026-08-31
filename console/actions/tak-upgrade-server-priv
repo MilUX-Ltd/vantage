@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# tak-upgrade-server-priv - the single privileged step behind the upgrade-server action:
+# upgrade THIS box's TAK Server in place from a staged, hash-named package.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-upgrade-server-priv
+#
+# The contract, in order:
+#   - the package must sit in takadmin's inbox under its own sha256 name, re-hashed here
+#   - takserver must ALREADY be installed: this upgrades, it never first-installs
+#     (first installs go through the Deploy wizard's provisioner, which refuses the
+#     opposite case - the two tools cover the two cases with no overlap)
+#   - CoreConfig.xml and the certificate store are backed up to /root first
+#   - stop, apt-get install (dpkg upgrades in place, preserving /opt/tak data),
+#     re-run TAK's own DB setup script (written re-runnable; performs schema upgrade),
+#     start, and wait up to 15 minutes for 8089 - first boot after a version change
+#     runs migrations (the 5.8 lesson, 26 Aug 2026)
+#   - no automatic rollback: on failure the service state is reported honestly and the
+#     backup path is printed; rolling back a half-migrated database automatically is
+#     how data is lost
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+digest="${1:-}"
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || deny "expected a sha256 digest"
+
+deb="/home/takadmin/package-inbox/$digest.deb"
+[[ -f "$deb" ]] || deny "no staged package for $digest - push it first"
+got=$(sha256sum "$deb" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "staged package hash mismatch"
+head -c 8 "$deb" | grep -q '!<arch>' || deny "staged file is not a Debian package"
+
+dpkg-query -W -f '${Status}' takserver 2>/dev/null | grep -q "install ok installed" \
+    || deny "takserver is not installed on this box - a first install goes through the Deploy wizard"
+was=$(dpkg-query -W -f '${Version}' takserver 2>/dev/null || echo "?")
+
+ts=$(date -u +%Y%m%dT%H%M%SZ)
+bak="/root/pre-upgrade-$ts"
+mkdir -p "$bak"
+cp -a /opt/tak/CoreConfig.xml "$bak/" 2>/dev/null || true
+tar czf "$bak/certs-files.tgz" -C /opt/tak certs/files 2>/dev/null || true
+# the database is the part with no undo: dump it while it is still running
+if sudo -u postgres pg_dumpall 2>/dev/null | gzip > "$bak/db-dumpall.sql.gz"; then
+    echo "BACKUP $bak (CoreConfig.xml, certs/files, full DB dump)"
+else
+    rm -f "$bak/db-dumpall.sql.gz"
+    echo "BACKUP $bak (CoreConfig.xml, certs/files; DB dump FAILED - continuing, dpkg keeps the cluster)"
+fi
+
+echo "STOPPING takserver ($was)"
+systemctl stop takserver || deny "could not stop takserver"
+
+export DEBIAN_FRONTEND=noninteractive
+echo "INSTALLING $(basename "$deb")"
+if ! apt-get install -y -qq "$deb"; then
+    state=$(systemctl is-active takserver 2>/dev/null || true)
+    deny "package install failed; takserver is '$state'; backup at $bak"
+fi
+
+# A TAK major release can move to a new PostgreSQL major (5.8: PG15 -> PG18). When an
+# older cluster still holds the data and the new binaries are installed, the right tool
+# is TAK's own upgrade-db.sh (Debian: pg_upgradecluster, then the setup script); running
+# setup-db.sh alone fails with "Cannot find PostgreSQL data directory" (cloud, 27 Aug
+# 2026). Old cluster is kept, stopped, on another port - that is the rollback.
+new_major=$(ls /usr/lib/postgresql 2>/dev/null | sort -n | tail -1)
+old_online=$(pg_lsclusters --no-header 2>/dev/null | awk -v M="$new_major" '$1 < M && $4 == "online" {print $1; exit}')
+if [[ -n "$old_online" && -x /opt/tak/db-utils/upgrade-db.sh ]] \
+   && ! pg_lsclusters --no-header 2>/dev/null | awk -v M="$new_major" '$1 == M && $4 == "online"' | grep -q .; then
+    echo "DATABASE major upgrade: PostgreSQL $old_online -> $new_major via TAK's upgrade-db.sh"
+    (cd /tmp && /opt/tak/db-utils/upgrade-db.sh) || deny "database major upgrade failed; backup at $bak"
+elif [[ -x /opt/tak/db-utils/takserver-setup-db.sh ]]; then
+    echo "DATABASE takserver-setup-db.sh (re-runnable; migrates the schema)"
+    (cd /tmp && /opt/tak/db-utils/takserver-setup-db.sh) || deny "database migration failed; backup at $bak"
+fi
+
+systemctl daemon-reload
+systemctl start takserver || deny "could not start takserver after upgrade; backup at $bak"
+
+ok=0
+for i in $(seq 1 180); do
+    ss -ltn 2>/dev/null | grep -qE '[:.]8089 ' && { ok=1; break; }
+    sleep 5
+done
+(( ok )) || deny "takserver did not open 8089 within ~15min after upgrade; backup at $bak (journalctl -u takserver)"
+
+now=$(dpkg-query -W -f '${Version}' takserver 2>/dev/null || echo "?")
+rm -f "$deb"
+echo "OK upgraded"
+echo "WAS takserver $was"
+echo "NOW takserver $now"

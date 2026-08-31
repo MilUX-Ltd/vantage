@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# tak-enrol-device-priv - the single privileged step behind enrol-device: create or reset
+# ONE enrolment credential in this TAK server's UserAuthenticationFile.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-enrol-device-priv
+#
+# The password is generated here BY DEFAULT; the operator MAY supply their own, which
+# arrives base64-encoded and is validated against the same policy the generator meets:
+# 15-64 chars, upper + lower + digit + a symbol, from a charset that stays URL-safe
+# unencoded in the enrolment QR (letters, digits, ! . _ ~ -). Weak cannot arrive,
+# whoever chose it. UserManager quirk, learned the hard way: it has no flag parser -
+# '--help' becomes a username - so arguments are re-validated hard and dashes are refused.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+user="${1:-}"; group="${2:-}"; pwb64="${3:-}"
+[[ "$user"  =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "user must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$user" != -* ]]                      || deny "user may not begin with a dash"
+[[ "$group" =~ ^[A-Za-z0-9_-]{1,40}$ ]]  || deny "group must match [A-Za-z0-9_-], 1-40 chars"
+[[ "$group" != -* ]]                     || deny "group may not begin with a dash"
+if [[ -n "$pwb64" ]]; then
+    [[ "$pwb64" =~ ^[A-Za-z0-9+/=]{4,88}$ ]] || deny "bad password encoding"
+    pass=$(printf '%s' "$pwb64" | base64 -d 2>/dev/null) || deny "password does not decode"
+    [[ "$pass" =~ ^[A-Za-z0-9._~!-]{15,64}$ ]] \
+        || deny "password policy: 15-64 chars from letters, digits and ! . _ ~ -"
+    [[ "$pass" =~ [A-Z] && "$pass" =~ [a-z] && "$pass" =~ [0-9] && "$pass" =~ [._~!-] ]] \
+        || deny "password policy: needs an upper, a lower, a digit and a symbol (! . _ ~ -)"
+else
+    # 14 random alphanumerics + a fixed class-completing tail = 18 chars, policy-satisfying.
+    rand=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14) || true
+    [[ ${#rand} -eq 14 ]] || deny "could not gather randomness"
+    pass="${rand}Xk7!"
+fi
+
+[[ -f /opt/tak/utils/UserManager.jar ]]  || deny "no UserManager.jar on this box"
+
+
+cd /opt/tak
+if ! out=$(timeout 30 java -jar utils/UserManager.jar usermod -g "$group" -p "$pass" "$user" 2>&1); then
+    printf '%s\n' "$out" | tail -4 >&2
+    deny "UserManager failed"
+fi
+grep -qiE "error|not.*usable" <<<"$out" && { printf '%s\n' "$out" | tail -4 >&2; deny "UserManager reported a problem"; }
+
+# Persist the token so the console can re-render this QR later (fetch-credential). The store is
+# root-owned 0700, one file per user 0600 - a bearer credential, held exactly as tightly as the
+# UserAuthenticationFile it mirrors. Best-effort: a failure here must not fail the enrolment,
+# which already succeeded above, so the QR still reaches the operator.
+store=/var/lib/tak-credentials/enrol
+if install -d -m 700 -o root -g root /var/lib/tak-credentials "$store" 2>/dev/null; then
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    tmp=$(mktemp "$store/.$user.XXXXXX") && {
+        printf '{"user":"%s","group":"%s","token":"%s","created":"%s"}\n' \
+            "$user" "$group" "$pass" "$now" > "$tmp"
+        chmod 600 "$tmp"; mv -f "$tmp" "$store/$user.json"
+    } || true
+fi
+
+echo "USER $user"
+echo "PASS $pass"

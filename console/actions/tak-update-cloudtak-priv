@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# tak-update-cloudtak-priv - the single privileged step behind update-cloudtak: apply the
+# pinned CloudTAK compose on this box. Pull the pinned images, recreate what changed, report.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-update-cloudtak-priv
+#
+# COMPOSE_DIR is a deliberate per-box constant, like the restart allowlist: the console cannot
+# point this at a different directory. --no-build is load-bearing: this action refreshes the
+# PINNED images in the compose file and never builds from source. Moving the pin (editing the
+# compose, bumping the checkout) stays a reviewed, human change on the box.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+# --- the one directory this box is willing to have applied from the console ---------------------
+COMPOSE_DIR="/home/matt/CloudTAK"
+# ------------------------------------------------------------------------------------------------
+
+[[ -f "$COMPOSE_DIR/docker-compose.yml" ]] || deny "no CloudTAK compose at $COMPOSE_DIR on this box"
+command -v docker >/dev/null 2>&1          || deny "docker is not installed on this box"
+
+cd "$COMPOSE_DIR"
+
+echo "== pulling pinned images =="
+if ! out=$(docker compose pull --quiet 2>&1); then
+    printf '%s\n' "$out" | tail -8 >&2
+    deny "compose pull failed"
+fi
+printf '%s\n' "$out" | tail -8
+
+echo "== applying =="
+if ! out=$(docker compose up -d --no-build 2>&1); then
+    printf '%s\n' "$out" | tail -12 >&2
+    deny "compose up failed"
+fi
+printf '%s\n' "$out" | tail -12
+
+echo "== state =="
+docker compose ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null || docker compose ps
+
+# Version breadcrumb: root writes the deployed version world-readable, so the
+# unprivileged health checker can report it without reading this home-dir checkout.
+ver=$(git -c safe.directory='*' -C "$COMPOSE_DIR" describe --tags --always 2>/dev/null || true)
+if [[ -n "$ver" ]]; then
+    printf '%s\n' "$ver" > /etc/tak-cloudtak-version
+    chmod 0644 /etc/tak-cloudtak-version
+    echo "VERSION $ver (breadcrumb written)"
+fi
+
+echo "OK cloudtak stack applied"

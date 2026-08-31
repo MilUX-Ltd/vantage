@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# tak-provision-priv - the single privileged step behind provision-server: run ONE verified
+# vantage-tak-provision.sh on this box with validated parameters.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-provision-priv
+#
+# Defence in depth: the entry already hashed and syntax-checked the payload; this wrapper
+# checks BOTH again (the file sat in /tmp between the two, owned by takadmin - the re-hash
+# pins the content whatever happened to it), then decodes the base64 JSON parameters and
+# validates EVERY field against its own strict pattern before any of them reaches a command
+# line. Unknown keys are refused. The provisioner's own stage-3 guard still refuses to
+# reinstall over a live TAK server, so the worst a mis-aimed run can do on a working box is
+# print a refusal.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+src="${1:-}"; digest="${2:-}"; argsb64="${3:-}"
+[[ "$src" =~ ^/tmp/tak-provision-push\.[A-Za-z0-9]+$ ]] || deny "unexpected payload path"
+[[ -f "$src" ]]                    || deny "payload file is missing"
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]]  || deny "bad digest"
+
+got=$(sha256sum "$src" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "hash mismatch at the privileged gate"
+bash -n "$src"            || deny "payload does not parse as bash"
+
+# infra-TAK provisioner: a different, small parameter set (ref, dry_run). Branch here so
+# the two stacks share the same gated push key but never each other's validation.
+if grep -q 'vantage-infratak-provision' "$src"; then
+    mapfile -t ikv < <(printf '%s' "$argsb64" | base64 -d 2>/dev/null \
+        | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+allowed = ["ref", "dry_run"]
+for k in d:
+    if k not in allowed: raise SystemExit(f"unknown parameter {k}")
+for k in allowed: print(f"{k}={d.get(k, \"\")}")' ) || deny "infratak parameters do not decode"
+    declare -A IP
+    for line in "${ikv[@]}"; do IP["${line%%=*}"]="${line#*=}"; done
+    [[ -z "${IP[ref]}" || "${IP[ref]}" =~ ^[A-Za-z0-9._/-]{1,60}$ ]] || deny "bad ref"
+    [[ "${IP[dry_run]}" =~ ^[01]$ ]] || deny "bad dry_run"
+    iargs=()
+    [[ -n "${IP[ref]}" ]] && iargs+=(--ref "${IP[ref]}")
+    [[ "${IP[dry_run]}" == "1" ]] && iargs+=(--dry-run)
+    exec timeout 3600 bash "$src" "${iargs[@]}"
+fi
+
+# Decode and validate the parameters. python3 does the JSON; every value is then re-matched
+# in bash so nothing depends on a single parser's opinion.
+mapfile -t kv < <(printf '%s' "$argsb64" | base64 -d 2>/dev/null \
+    | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+allowed = ["fqdn", "le_email", "org", "org_unit", "country", "state", "city", "deb",
+           "components", "dry_run", "stage", "ca_pass"]
+for k in d:
+    if k not in allowed:
+        raise SystemExit(f"unknown parameter {k}")
+for k in allowed:
+    print(f"{k}={d.get(k, '')}")' ) || deny "parameters do not decode"
+
+declare -A P
+for line in "${kv[@]}"; do P["${line%%=*}"]="${line#*=}"; done
+
+[[ "${P[fqdn]}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || deny "bad fqdn"
+[[ "${P[le_email]}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || deny "bad le_email"
+[[ "${P[org]}" =~ ^[A-Za-z0-9._\ -]{1,40}$ ]]      || deny "bad org"
+[[ "${P[org_unit]}" =~ ^[A-Za-z0-9._\ -]{1,40}$ ]] || deny "bad org_unit"
+[[ "${P[country]}" =~ ^[A-Z]{2}$ ]]                || deny "bad country"
+[[ "${P[state]}" =~ ^[A-Za-z\ ]{2,30}$ ]]          || deny "bad state"
+[[ "${P[city]}" =~ ^[A-Za-z\ .-]{2,40}$ ]]         || deny "bad city"
+[[ "${P[deb]}" =~ ^/[A-Za-z0-9._/-]{4,200}\.deb$ ]] || deny "bad deb path"
+# must match the tokens the provisioner's components stage installs (its case dispatch) and
+# the console's provision-server 'components' input; the provisioner allowlists again. Drift
+# here rejected the new modules on the box with "bad components" after the console let them by.
+[[ "${P[components]}" =~ ^((cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp)(,(cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp))*)?$ ]] || deny "bad components"
+[[ "${P[dry_run]}" =~ ^[01]$ ]]                    || deny "bad dry_run"
+# stage scoping: empty = the full build; "components" = install extras on a built box
+# (the server page's Modules panel). Other single stages stay operator-SSH territory.
+[[ "${P[stage]}" =~ ^(components)?$ ]]             || deny "bad stage"
+[[ -z "${P[ca_pass]}" || "${P[ca_pass]}" =~ ^[A-Za-z0-9._!-]{8,64}$ ]] || deny "bad ca_pass"
+
+args=(--fqdn "${P[fqdn]}" --le-email "${P[le_email]}" --org "${P[org]}"
+      --org-unit "${P[org_unit]}" --country "${P[country]}" --state "${P[state]}"
+      --city "${P[city]}" --deb "${P[deb]}")
+[[ -n "${P[components]}" ]] && args+=(--components "${P[components]}")
+[[ "${P[dry_run]}" == "1" ]] && args+=(--dry-run)
+[[ -n "${P[stage]}" ]] && args+=(--stage "${P[stage]}")
+[[ -n "${P[ca_pass]}" ]] && args+=(--ca-pass "${P[ca_pass]}")
+
+# An hour is generous for a full install on modest hardware; a hang past that is a fault,
+# and the console's job view will carry the timeout as the final line.
+exec timeout 3600 bash "$src" "${args[@]}"

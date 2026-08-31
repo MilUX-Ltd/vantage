@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# tak-tail-logs-priv - the one privileged step behind tail-logs: read an allowlisted unit's journal.
+#
+# Runs as root via a scoped sudoers rule from takadmin. Re-validates its arguments and enforces a
+# hard ALLOWLIST of units whose logs the console may read. It ONLY ever reads the journal - no
+# writes, no restarts. Reading logs is low-risk, so this allowlist is a superset of the restart one
+# (it may include the TAK Server itself and the OS services worth debugging).
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+unit="${1:-}"; lines="${2:-80}"
+[[ "$unit" =~ ^[a-z0-9@._-]{1,60}$ ]] || deny "unit must match [a-z0-9@._-], 1-60 chars"
+[[ "$unit" != *".."* ]]               || deny "illegal unit name"
+[[ "$lines" =~ ^[0-9]{1,4}$ ]]        || deny "lines must be a number, up to 4 digits"
+
+# --- allowlist: units whose journals the console may read on this box -----------------------------
+ALLOW=(
+  tak-meshtastic-gateway cloudtak edge-selfmarker vantage-console-collect vantage-console
+  takserver takserver-messaging takserver-api takserver-config gpsd chrony
+)
+# --------------------------------------------------------------------------------------------------
+
+base="${unit%.service}"
+ok=0
+for u in "${ALLOW[@]}"; do [[ "$base" == "$u" ]] && ok=1; done
+[[ "$ok" == 1 ]] || deny "unit '$unit' is not in this box's log allowlist"
+
+echo "OK tail-logs $unit ($lines lines)"
+echo "----"
+journalctl -u "$unit" -n "$lines" --no-pager 2>&1 | tail -n "$lines"

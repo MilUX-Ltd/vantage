@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# tak-federation-enable-priv - the single privileged step behind federation-enable: switch on the
+# TAK server's federation server in CoreConfig and restart so it opens the v2 port.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-federation-enable-priv
+#
+# Adds enableFederation="true" to the <federation> element, plus federatedGroupMapping="true"
+# and automaticGroupMapping="true": groups map by NAME across a federation link, so MilUX
+# trackers on one box appear to MilUX users on the other the moment the link is live. That is
+# the point of federating, and the deliberate gate is still there - it moved, it did not go.
+# Nothing crosses unless BOTH sides' CAs trust each other, and trust is its own reviewed step
+# (tak-federation-trust). Matt set the acceptance test on 26 Aug 2026: federate two boxes and
+# the deployed kit's trackers show on the NUC; manual per-federate mapping failed that test by
+# default and needed config no console surface offered.
+# Validates the XML before restarting, and backs the config up first. Idempotent.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+CFG=/opt/tak/CoreConfig.xml
+[[ -f "$CFG" ]] || deny "no CoreConfig.xml on this box"
+grep -q "<federation " "$CFG" || deny "no <federation> element in CoreConfig"
+
+if grep -qE '<federation [^>]*enableFederation="true"' "$CFG" \
+   && grep -qE '<federation [^>]*automaticGroupMapping="true"' "$CFG"; then
+    echo "OK already enabled"
+    echo "V2PORT $(sed -nE 's/.*v2port="([0-9]+)".*/\1/p' "$CFG" | head -1)"
+    exit 0
+fi
+
+cp "$CFG" "${CFG}.pre-fed-enable"
+# Rewrite the attributes on the opening <federation> tag only. STRIP any existing values first,
+# then insert fresh ones: a plain prepend duplicated the attribute when the tag already carried
+# enableFederation="false" (a disabled or previously-toggled box), and TAK Server itself rewrites
+# CoreConfig at runtime, so the tag's exact shape can never be assumed.
+python3 - "$CFG" <<'PYEOF' || { cp "${CFG}.pre-fed-enable" "$CFG"; deny "attribute edit failed - reverted"; }
+import re, sys
+p = sys.argv[1]
+src = open(p).read()
+m = re.search(r"<federation\b[^>]*>", src)
+if not m:
+    raise SystemExit("no federation tag")
+tag = m.group(0)
+new = tag
+for attr in ("enableFederation", "federatedGroupMapping", "automaticGroupMapping"):
+    new = re.sub(r'\s+' + attr + r'="[^"]*"', "", new)
+new = new.replace("<federation",
+                  '<federation enableFederation="true" federatedGroupMapping="true" '
+                  'automaticGroupMapping="true"', 1)
+open(p, "w").write(src.replace(tag, new, 1))
+PYEOF
+python3 -c "import xml.etree.ElementTree as ET; ET.parse('$CFG')" 2>/dev/null || {
+    cp "${CFG}.pre-fed-enable" "$CFG"; deny "edit produced invalid XML - reverted";
+}
+chown tak:tak "$CFG"
+
+# Open the federation port in the firewall so partners can actually connect - the accepting
+# side's ufw blocked 9001 and silently failed every connection until opened (dev<->cloud
+# experiment, 25 Aug 2026). Federation is mutual-TLS authenticated, so only trusted federates
+# get past the handshake. Scoped to the tailnet where ufw is interface-aware, else Anywhere.
+v2port=$(sed -nE 's/.*v2port="([0-9]+)".*/\1/p' "$CFG" | head -1); v2port="${v2port:-9001}"
+if command -v ufw >/dev/null 2>&1; then
+    if ip -o link show tailscale0 >/dev/null 2>&1; then
+        ufw allow in on tailscale0 to any port "$v2port" proto tcp comment "TAK federation" >/dev/null 2>&1 || true
+    else
+        ufw allow "$v2port"/tcp comment "TAK federation" >/dev/null 2>&1 || true
+    fi
+fi
+
+systemctl restart takserver
+# wait for the federation v2 port to open (TAK is slow to boot; up to ~5 min)
+v2=$(sed -nE 's/.*v2port="([0-9]+)".*/\1/p' "$CFG" | head -1); v2="${v2:-9001}"
+for i in $(seq 1 72); do
+    ss -ltn 2>/dev/null | grep -qE "[:.]${v2} " && { echo "OK federation enabled"; echo "V2PORT $v2"; exit 0; }
+    sleep 5
+done
+deny "federation enabled in config but port $v2 did not open within ~6min (check journalctl -u takserver)"

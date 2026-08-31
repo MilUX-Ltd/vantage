@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Import a validated partner CA into fed-truststore.jks under <alias>, keyed with the CA password.
+# A federation trust change needs a restart to take effect, so this restarts takserver.
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-federation-trust-priv
+set -euo pipefail
+deny(){ echo "ERR $*" >&2; exit 2; }
+alias="${1:-}"; src="${2:-}"
+[[ "$alias" =~ ^[A-Za-z0-9._-]{1,48}$ ]] || deny "bad alias"
+[[ -f "$src" ]] || deny "cert file missing"
+openssl x509 -in "$src" -noout 2>/dev/null || deny "not a certificate"
+pass=$(head -1 /opt/tak/certs/.milux-capass 2>/dev/null || grep -oE 'CAPASS=\$\{CAPASS:-[^}]+' /opt/tak/certs/cert-metadata.sh | sed 's/.*-//')
+ts=/opt/tak/certs/files/fed-truststore.jks
+[[ -f "$ts" ]] || deny "no fed-truststore.jks"
+keytool -delete -alias "$alias" -keystore "$ts" -storepass "$pass" 2>/dev/null || true   # idempotent
+keytool -importcert -noprompt -alias "$alias" -file "$src" -keystore "$ts" -storepass "$pass" 2>&1 | tail -1
+chown tak:tak "$ts"
+systemctl restart takserver
+echo "OK trusted $alias"

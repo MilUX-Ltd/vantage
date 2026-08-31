@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# tak-provision - the ONE operation the console's provision key is allowed to run: stand up a
+# MilUX TAK Server on THIS box, non-interactively, from a form in the console.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-provision",restrict ssh-ed25519 AAAA... vantage-console-provision
+#
+# The console pipes vantage-tak-provision.sh on stdin and passes its sha256 plus ONE base64 blob
+# of JSON parameters. Nothing arriving here is trusted: the read is size-capped, the hash is
+# compared against the argument, the payload must parse as bash and look like the provisioner,
+# and the privileged wrapper re-verifies all of it and re-validates every parameter against its
+# own patterns. Two gates, not one - the same shape as tak-push-checker.
+#
+# Output streams through live (the provisioner logs its stages), so the console can show a
+# running install rather than a spinner. Exit code is the provisioner's own.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb digest argsb64 extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "provision" ]]          || deny "only provision is permitted on this key"
+[[ -z "${extra:-}" ]]                 || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]] || deny "expected a sha256 digest"
+[[ "${argsb64:-}" =~ ^[A-Za-z0-9+/=_-]{2,4096}$ ]] || deny "expected base64 parameters"
+
+tmp=$(mktemp /tmp/tak-provision-push.XXXXXX) || deny "mktemp failed"
+trap 'rm -f "$tmp"' EXIT
+head -c 2000000 > "$tmp"
+[[ -s "$tmp" ]] || deny "no payload arrived on stdin"
+
+got=$(sha256sum "$tmp" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "payload hash mismatch: got $got"
+bash -n "$tmp"            || deny "payload does not parse as bash"
+grep -qE 'vantage-tak-provision|vantage-infratak-provision' "$tmp" || deny "payload is not a known provisioner"
+
+exec sudo -n /usr/local/bin/tak-provision-priv "$tmp" "$digest" "$argsb64"

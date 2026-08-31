@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# tak-update-cloudtak - the ONE operation the console's update-cloudtak key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-update-cloudtak",restrict ssh-ed25519 AAAA... vantage-console-cloudtak
+#
+# Takes NO arguments and NO payload: what it applies is the pinned compose already on the box,
+# reviewed and placed there by a human. This is deliberately an "apply the known configuration"
+# button, not a deployment channel - the console cannot choose what gets deployed, only when
+# the pinned state is applied.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "update-cloudtak" ]] || deny "only update-cloudtak is permitted on this key"
+[[ -z "${extra:-}" ]]              || deny "this action takes no arguments"
+
+exec sudo -n /usr/local/bin/tak-update-cloudtak-priv

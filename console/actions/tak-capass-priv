@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# tak-capass-priv - print this box's certificate password: what protects every .p12 issued
+# here, and what a device asks for when importing one. The password lives root-only at
+# /opt/tak/certs/.milux-capass (written by the provisioner - chosen by the operator or
+# generated). Vantage builds always write the file; on a box built by hand (or by another
+# tool) it may not exist, in which case the honest answer is that this box uses TAK's
+# stock password unless whoever built it changed one.
+#
+# This IS secret material: the console shows it only after the operator re-enters their
+# password, and the reveal is audited like any gated action. Root-only via the sudoers-
+# scoped wrapper:
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-capass-priv
+set -euo pipefail
+
+capass_file=/opt/tak/certs/.milux-capass
+
+if [[ -s "$capass_file" ]]; then
+    printf 'CAPASS %s\n' "$(cat "$capass_file")"
+else
+    echo "NONE this box has no stored certificate password - it was not built by this console. Unless whoever built it changed one, TAK's stock password is atakatak"
+fi

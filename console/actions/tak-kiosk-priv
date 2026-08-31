@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# tak-kiosk-priv - the single privileged step behind the kiosk action, and the ONE source of
+# the boot-to-console kiosk (cage + a browser). It is run two ways, both as root:
+#   - directly, by the console installer when a box is built with the kiosk option; and
+#   - through sudo, by the tak-kiosk forced command, to add or toggle the kiosk after the fact.
+# There is exactly one copy of the install logic, here, so the installer and the action can
+# never drift (the lesson from the component-allowlist that lived in three places).
+#
+#   install   set the kiosk up (idempotent) and turn it on: the box's screen shows its console
+#   on        enable + start the kiosk (the screen shows the console)
+#   off       stop + disable the kiosk and hand the screen back to a normal text login
+#   status    print INSTALLED yes|no and ON yes|no, for the console to render the right control
+#
+# The kiosk points at the box's OWN console, on loopback, derived from the deployed unit - never
+# a value the caller supplies.
+set -uo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+op="${1:-}"
+[[ "$op" =~ ^(install|on|off|status)$ ]] || deny "op must be install, on, off or status"
+
+UNIT=/etc/systemd/system/vantage-kiosk.service
+CONSOLE_UNIT_D="/etc/systemd/system/vantage-console-deployed.service"
+CONSOLE_UNIT_A="/etc/systemd/system/vantage-console.service"
+
+# the box's own console URL, derived - a 0.0.0.0 bind is reached on loopback; a specific bind
+# at its own address; https only when the console actually carries a certificate.
+kiosk_url() {
+    local bind addr port proto
+    bind=$(grep -hoE 'VANTAGE_CONSOLE_BIND=[^ "]*' "$CONSOLE_UNIT_D" "$CONSOLE_UNIT_A" \
+           /etc/systemd/system/vantage-console-deployed.service.d/*.conf 2>/dev/null | tail -1 | cut -d= -f2)
+    bind="${bind:-127.0.0.1}"
+    addr="${bind%%:*}"; port="${bind##*:}"; [[ "$port" == "$bind" ]] && port=8090
+    [[ "$addr" == "0.0.0.0" || -z "$addr" ]] && addr=127.0.0.1
+    proto=http; [[ -f /etc/vantage-console/tls/fullchain.pem ]] && proto=https
+    echo "$proto://$addr:$port/"
+}
+
+do_install() {
+    echo "installing the kiosk (cage + a browser)..."
+    apt-get install -y -qq cage seatd >/dev/null 2>&1 || deny "could not install cage/seatd"
+    local CHROME="" c
+    for c in chromium chromium-browser /snap/bin/chromium; do command -v "$c" >/dev/null 2>&1 && CHROME="$c" && break; done
+    if [[ -z "$CHROME" ]]; then
+        apt-get install -y -qq chromium-browser >/dev/null 2>&1 || snap install chromium >/dev/null 2>&1 || true
+        for c in chromium chromium-browser /snap/bin/chromium; do command -v "$c" >/dev/null 2>&1 && CHROME="$c" && break; done
+    fi
+    [[ -n "$CHROME" ]] || deny "no chromium available for the kiosk"
+    id kiosk >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin kiosk
+    usermod -aG video,input,render,seat kiosk 2>/dev/null || usermod -aG video,input,render kiosk 2>/dev/null || true
+    systemctl enable --now seatd >/dev/null 2>&1 || true
+    local KURL; KURL=$(kiosk_url)
+    cat > "$UNIT" <<KSVC
+[Unit]
+Description=Vantage kiosk - boot to the console
+After=vantage-console-deployed.service seatd.service systemd-user-sessions.service
+Wants=vantage-console-deployed.service
+Conflicts=getty@tty1.service
+[Service]
+User=kiosk
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+ExecStartPre=/bin/sh -c 'for i in \$(seq 1 60); do curl -sk -o /dev/null "$KURL" && exit 0; sleep 2; done; exit 0'
+ExecStart=/usr/bin/cage -d -- $CHROME --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --check-for-update-interval=31536000 --ignore-certificate-errors --app=$KURL
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=graphical.target
+KSVC
+    local dm
+    for dm in gdm3 gdm lightdm sddm; do systemctl disable "$dm" >/dev/null 2>&1 || true; done
+    systemctl set-default graphical.target >/dev/null 2>&1 || true
+    systemctl daemon-reload
+    systemctl enable vantage-kiosk.service >/dev/null 2>&1 || true
+    systemctl start vantage-kiosk.service 2>/dev/null || true
+    echo "OK kiosk installed and on (screen -> $KURL)"
+}
+
+do_on() {
+    [[ -f "$UNIT" ]] || deny "kiosk is not installed on this box - install it first"
+    systemctl set-default graphical.target >/dev/null 2>&1 || true
+    systemctl enable --now vantage-kiosk.service 2>/dev/null || deny "could not start the kiosk"
+    echo "OK kiosk on ($(kiosk_url))"
+}
+
+do_off() {
+    systemctl stop vantage-kiosk.service 2>/dev/null || true
+    systemctl disable vantage-kiosk.service 2>/dev/null || true
+    # hand the screen back to a normal text login
+    systemctl start getty@tty1.service 2>/dev/null || true
+    echo "OK kiosk off - the screen is a text login again"
+}
+
+do_status() {
+    local inst=no on=no
+    [[ -f "$UNIT" ]] && inst=yes
+    systemctl is-active --quiet vantage-kiosk.service 2>/dev/null && on=yes
+    echo "INSTALLED $inst"
+    echo "ON $on"
+}
+
+case "$op" in
+    install) do_install ;;
+    on)      do_on ;;
+    off)     do_off ;;
+    status)  do_status ;;
+esac

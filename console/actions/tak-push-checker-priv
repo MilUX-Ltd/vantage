@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# tak-push-checker-priv - the single privileged step behind push-checker: install ONE verified
+# tak-health build to /usr/local/bin/tak-health on this box.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-push-checker-priv
+#
+# Defence in depth: the unprivileged entry already checked the hash and syntax, and this
+# wrapper checks BOTH again (the file sat in /tmp between the two), then adds the gate that
+# matters most: the candidate must pass its own --self-test. A checker that cannot check
+# itself never lands (LESSONS.md lesson 2: check the checker).
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+src="${1:-}"; digest="${2:-}"
+[[ "$src" =~ ^/tmp/tak-health-push\.[A-Za-z0-9]+$ ]] || deny "unexpected payload path"
+[[ -f "$src" ]]                    || deny "payload file is missing"
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]]  || deny "bad digest"
+
+got=$(sha256sum "$src" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "hash mismatch at the privileged gate"
+bash -n "$src"            || deny "payload does not parse as bash"
+
+if ! out=$(bash "$src" --self-test 2>&1); then
+    printf '%s\n' "$out" | tail -5 >&2
+    deny "candidate failed its own self-test - not installed"
+fi
+
+old=$(/usr/local/bin/tak-health --version 2>/dev/null || echo "none")
+install -m 0755 "$src" /usr/local/bin/tak-health
+new=$(/usr/local/bin/tak-health --version 2>/dev/null || echo "unknown")
+
+echo "OK installed"
+echo "WAS $old"
+echo "NOW $new"

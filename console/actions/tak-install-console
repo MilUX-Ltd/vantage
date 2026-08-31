@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# tak-install-console - the ONE operation the console's install-console key may run: install
+# a Vantage console (deployed edition) on THIS box, so every box in the estate can run its
+# own console. The managing console pipes a self-contained installer on stdin (it embeds the
+# console program and its unit as base64) and passes its sha256 plus a base64 bind spec.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-install-console",restrict ssh-ed25519 AAAA... vantage-console-install-console
+#
+# Nothing arriving here is trusted: the read is size-capped, the hash is compared against the
+# argument, the payload must parse as bash and be the console installer, and the privileged
+# wrapper re-verifies all of it before running as root. Output streams so the console shows a
+# live install rather than a spinner.
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb digest bindb64 extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "install-console" ]]    || deny "only install-console is permitted on this key"
+[[ -z "${extra:-}" ]]                 || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]] || deny "expected a sha256 digest"
+[[ "${bindb64:-}" =~ ^[A-Za-z0-9+/=_-]{2,256}$ ]] || deny "expected a base64 bind spec"
+
+tmp=$(mktemp /tmp/tak-install-console-push.XXXXXX) || deny "mktemp failed"
+trap 'rm -f "$tmp"' EXIT
+head -c 8000000 > "$tmp"
+[[ -s "$tmp" ]] || deny "no payload arrived on stdin"
+
+got=$(sha256sum "$tmp" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "payload hash mismatch: got $got"
+bash -n "$tmp"            || deny "payload does not parse as bash"
+grep -q 'VANTAGE-CONSOLE-INSTALLER' "$tmp" || deny "payload is not the console installer"
+
+exec sudo -n /usr/local/bin/tak-install-console-priv "$tmp" "$digest" "$bindb64"

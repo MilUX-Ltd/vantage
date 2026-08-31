@@ -1,0 +1,87 @@
+<svg viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="What Vantage does: build, operate, connect and extend a fleet of TAK servers">
+  <defs>
+    <pattern id="hatch" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#F7F6EB" stroke-width="1" opacity="0.05"/>
+    </pattern>
+    <style>
+      .h    { font-family: Arial, Helvetica, sans-serif; font-weight: 700; }
+      .b    { font-family: Arial, Helvetica, sans-serif; font-weight: 400; }
+      .col  { font-family: Arial, Helvetica, sans-serif; font-weight: 700; letter-spacing: 2px; }
+      .tile { font-family: Arial, Helvetica, sans-serif; font-weight: 700; }
+      .sub  { font-family: Arial, Helvetica, sans-serif; font-weight: 400; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="760" fill="#113308"/>
+  <rect width="1200" height="760" fill="url(#hatch)"/>
+
+  <text x="60" y="86" class="h" font-size="46" fill="#F7F6EB">One console. Your whole TAK estate.</text>
+  <text x="62" y="126" class="b" font-size="22" fill="#B5B171">Build, secure, connect and grow a fleet of TAK servers from a single pane — on your own hardware, online or off.</text>
+
+  <!-- four equal columns: x = 60, 337, 614, 891; width 249; gap 28 -->
+  <g>
+    <!-- BUILD -->
+    <text x="72" y="196" class="col" font-size="19" fill="#D2C78D">BUILD</text>
+    <rect x="60"  y="212" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="80" y="246" class="tile" font-size="19" fill="#113308">Build from bare metal</text>
+    <text x="80" y="274" class="sub" font-size="15" fill="#586F7C">TAK Server, CA and TLS built</text>
+    <rect x="60"  y="312" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="80" y="346" class="tile" font-size="19" fill="#113308">Harden the box</text>
+    <text x="80" y="374" class="sub" font-size="15" fill="#586F7C">One-press OS + service hardening</text>
+    <rect x="60"  y="412" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="80" y="446" class="tile" font-size="19" fill="#113308">Enrol what you run</text>
+    <text x="80" y="474" class="sub" font-size="15" fill="#586F7C">Adopt servers you already run</text>
+
+    <!-- OPERATE -->
+    <text x="349" y="196" class="col" font-size="19" fill="#D2C78D">OPERATE</text>
+    <rect x="337" y="212" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="357" y="246" class="tile" font-size="19" fill="#113308">Watch the estate</text>
+    <text x="357" y="274" class="sub" font-size="15" fill="#586F7C">Health and drift in one view</text>
+    <rect x="337" y="312" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="357" y="346" class="tile" font-size="19" fill="#113308">Issue credentials</text>
+    <text x="357" y="374" class="sub" font-size="15" fill="#586F7C">QR enrolment, groups, in-browser</text>
+    <rect x="337" y="412" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="357" y="446" class="tile" font-size="19" fill="#113308">No open shell, ever</text>
+    <text x="357" y="474" class="sub" font-size="15" fill="#586F7C">Gated, audited, single-purpose</text>
+
+    <!-- CONNECT -->
+    <text x="626" y="196" class="col" font-size="19" fill="#D2C78D">CONNECT</text>
+    <rect x="614" y="212" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="634" y="246" class="tile" font-size="19" fill="#113308">Federate servers</text>
+    <text x="634" y="274" class="sub" font-size="15" fill="#586F7C">Link boxes on a map, share groups</text>
+    <rect x="614" y="312" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="634" y="346" class="tile" font-size="19" fill="#113308">Sync the estate</text>
+    <text x="634" y="374" class="sub" font-size="15" fill="#586F7C">Consoles mirror for redundancy</text>
+    <rect x="614" y="412" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="634" y="446" class="tile" font-size="19" fill="#113308">Private networking</text>
+    <text x="634" y="474" class="sub" font-size="15" fill="#586F7C">WireGuard, Tailscale or OpenVPN</text>
+
+    <!-- EXTEND -->
+    <text x="903" y="196" class="col" font-size="19" fill="#D2C78D">EXTEND</text>
+    <rect x="891" y="212" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="911" y="246" class="tile" font-size="19" fill="#113308">Knowledge Vault</text>
+    <text x="911" y="274" class="sub" font-size="15" fill="#586F7C">The estate's shared knowledge</text>
+    <rect x="891" y="312" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="911" y="346" class="tile" font-size="19" fill="#113308">AI, on your terms</text>
+    <text x="911" y="374" class="sub" font-size="15" fill="#586F7C">Bring the model; set its limits</text>
+    <rect x="891" y="412" width="249" height="86" rx="8" fill="#F7F6EB"/>
+    <text x="911" y="446" class="tile" font-size="19" fill="#113308">Kiosk &amp; packs</text>
+    <text x="911" y="474" class="sub" font-size="15" fill="#586F7C">Boot-to-console; mission packs</text>
+  </g>
+
+  <!-- footer band -->
+  <rect x="60" y="546" width="1080" height="150" rx="10" fill="#586F7C" opacity="0.18"/>
+  <rect x="60" y="546" width="1080" height="150" rx="10" fill="none" stroke="#B5B171" stroke-width="1.5" opacity="0.5"/>
+  <text x="88" y="592" class="h" font-size="22" fill="#F7F6EB">Runs where your mission runs</text>
+  <text x="88" y="628" class="b" font-size="17" fill="#F7F6EB" opacity="0.92">Connected estate on the public internet, or a fully disconnected network with a local model — Vantage</text>
+  <text x="88" y="652" class="b" font-size="17" fill="#F7F6EB" opacity="0.92">never asks you to expose a private server. Source-available; free for non-commercial use.</text>
+
+  <g transform="translate(1044,566) scale(0.85)">
+    <polygon points="8,88 38,40 54,62 68,44 92,88" fill="#F7F6EB"/>
+    <g fill="#A35C17">
+      <polygon points="38,40 34,12 42,13"/>
+      <polygon points="38,40 16,20 22,15"/>
+      <polygon points="38,40 58,14 52,11"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# tak-federation-connect - add an OUTBOUND federation connection from this server to a partner's
+# v2 federation port. Trust (federation-trust) must already be in place both ways.
+#   command="/usr/local/bin/tak-federation-connect",restrict ssh-ed25519 ... vantage-console-fed-conn
+# usage: "federation-connect <displayName> <address> <port>"
+set -euo pipefail
+deny(){ echo "ERR $*" >&2; exit 2; }
+read -r verb name addr port extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "federation-connect" ]]    || deny "only federation-connect is permitted on this key"
+[[ -z "${extra:-}" ]]                    || deny "too many arguments"
+[[ "$name" =~ ^[A-Za-z0-9._-]{1,48}$ ]]  || deny "displayName must be [A-Za-z0-9._-], 1-48 chars"
+[[ "$addr" =~ ^[a-z0-9.-]{1,253}$ ]]     || deny "address must be a hostname/IP"
+[[ "$port" =~ ^[0-9]{2,5}$ ]]            || deny "port must be numeric"
+exec sudo -n /usr/local/bin/tak-federation-connect-priv "$name" "$addr" "$port"

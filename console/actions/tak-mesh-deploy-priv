@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# tak-mesh-deploy-priv - the single privileged step behind deploy-mesh-gateway: run ONE
+# verified vantage-mesh-gateway-install.sh on this box with validated parameters.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-mesh-deploy-priv
+#
+# Defence in depth, the tak-provision-priv shape: the entry already hashed and syntax-checked
+# the payload; this wrapper checks both again (the file sat in /tmp between the gates), then
+# decodes the base64 JSON parameters and validates EVERY field against its own strict pattern
+# before any of them reaches a command line. Unknown keys are refused. The channel URL is
+# handled as a secret: it is passed to the installer via the environment, never a command
+# line, so it cannot be read out of the process table.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+src="${1:-}"; digest="${2:-}"; argsb64="${3:-}"
+[[ "$src" =~ ^/tmp/tak-mesh-deploy-push\.[A-Za-z0-9]+$ ]] || deny "unexpected payload path"
+[[ -f "$src" ]]                    || deny "payload file is missing"
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]]  || deny "bad digest"
+
+got=$(sha256sum "$src" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "hash mismatch at the privileged gate"
+bash -n "$src"            || deny "payload does not parse as bash"
+grep -q 'vantage-mesh-gateway-install' "$src" || deny "payload is not the mesh installer"
+
+mapfile -t kv < <(printf '%s' "$argsb64" | base64 -d 2>/dev/null \
+    | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+allowed = ["serial", "region", "channel", "filter_group", "bundle_file",
+           "channel_url_b64", "bundle_sha256"]
+for k in d:
+    if k not in allowed:
+        raise SystemExit(f"unknown parameter {k}")
+for k in allowed:
+    print(f"{k}={d.get(k, str())}")' ) || deny "parameters do not decode"
+
+declare -A P
+for line in "${kv[@]}"; do P["${line%%=*}"]="${line#*=}"; done
+
+[[ "${P[serial]}" =~ ^/dev/serial/by-id/[A-Za-z0-9._:+=-]{4,180}$ ]] || deny "bad serial"
+[[ "${P[region]}" =~ ^(EU_868|US)$ ]]                 || deny "bad region"
+[[ "${P[channel]}" =~ ^[A-Za-z0-9_-]{1,11}$ ]]        || deny "bad channel"
+[[ "${P[filter_group]}" =~ ^[A-Za-z0-9_-]{1,40}$ ]]   || deny "bad filter_group"
+[[ "${P[bundle_file]}" =~ ^[A-Za-z0-9._+-]{1,80}\.tgz$ ]] || deny "bad bundle_file"
+[[ "${P[bundle_sha256]}" =~ ^[0-9a-f]{64}$ ]]         || deny "bad bundle_sha256"
+[[ "${P[channel_url_b64]}" =~ ^[A-Za-z0-9=_-]{16,2048}$ ]] || deny "bad channel_url_b64"
+
+args=(--serial "${P[serial]}" --region "${P[region]}" --channel "${P[channel]}"
+      --filter-group "${P[filter_group]}" --bundle-sha256 "${P[bundle_sha256]}")
+
+# Twenty minutes covers a venv build from wheels on modest hardware; a hang past that is a
+# fault and the console's job view carries the timeout as the final line.
+export VANTAGE_MESH_CHANNEL_URL_B64="${P[channel_url_b64]}"
+exec timeout 1200 bash "$src" "${args[@]}"

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Add a <federation-outgoing> to CoreConfig (protocolVersion 2, TLS) and restart. Idempotent on
+# displayName AND on address:port. Validates XML before restarting; backs up first.
+#
+# The address:port check is not optional politeness: TAK Server refuses to START with two
+# outgoing federates sharing a host and port (DuplicateFederateException), so appending the same
+# partner under a second name does not fail the connect - it takes the whole server down on the
+# restart below. That happened to the NUC on 26 Aug 2026 ("Deployable-kit" + "deployed", both
+# milux-deployed:9001); the checker read FAIL until the duplicate was cut out by hand.
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-federation-connect-priv
+set -euo pipefail
+deny(){ echo "ERR $*" >&2; exit 2; }
+name="${1:?}"; addr="${2:?}"; port="${3:?}"
+CFG=/opt/tak/CoreConfig.xml
+[[ -f "$CFG" ]] || deny "no CoreConfig.xml"
+grep -q "<federation " "$CFG" || deny "no <federation> element"
+if grep -qE "<federation-outgoing[^>]*displayName=\"$name\"" "$CFG"; then echo "OK connection $name already present"; exit 0; fi
+if grep -qE "<federation-outgoing[^>]*address=\"$addr\"[^>]*port=\"$port\"" "$CFG"; then
+    echo "OK $addr:$port is already an outgoing federate (under another name). TAK allows one outgoing per host:port; nothing to add."; exit 0
+fi
+cp "$CFG" "${CFG}.pre-fed-connect"
+con="<federation-outgoing displayName=\"$name\" address=\"$addr\" port=\"$port\" protocolVersion=\"2\" tls=\"true\" enabled=\"true\"/>"
+# insert as a child of <federation>, right after the </federation-server> close
+sed -i "s#</federation-server>#</federation-server>${con}#" "$CFG"
+grep -q "federation-outgoing" "$CFG" || sed -i "s#</federation>#${con}</federation>#" "$CFG"  # fallback
+python3 -c "import xml.etree.ElementTree as ET; ET.parse('$CFG')" 2>/dev/null || { cp "${CFG}.pre-fed-connect" "$CFG"; deny "invalid XML - reverted"; }
+chown tak:tak "$CFG"
+systemctl restart takserver
+echo "OK connecting to $name ($addr:$port)"

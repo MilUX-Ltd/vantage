@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# tak-backup-coreconfig - the ONE operation the console's backup-coreconfig key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-backup-coreconfig",restrict ssh-ed25519 AAAA... vantage-console-cfgbak
+#
+# Takes a timestamped copy of CoreConfig.xml and UserAuthenticationFile.xml into a
+# root-only backup directory on the box. Confirm-only (no passphrase): it reads two files
+# and writes copies, changes nothing live. The natural thing to run before any config change,
+# and useful on its own.
+#
+# result: text.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "backup-coreconfig" ]] || deny "only backup-coreconfig is permitted on this key"
+[[ -z "${extra:-}" ]]                || deny "this action takes no arguments"
+
+exec sudo -n /usr/local/bin/tak-backup-coreconfig-priv

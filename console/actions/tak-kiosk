@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# tak-kiosk - the ONE operation the console's kiosk key is allowed to run: manage the
+# boot-to-console kiosk on THIS box.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-kiosk",restrict ssh-ed25519 AAAA... vantage-console-kiosk
+# so whatever the admin console sends, the only thing that runs is this script. It runs
+# UNPRIVILEGED (as takadmin); the privileged step (installing packages, editing the kiosk
+# unit, toggling the service) is handed to tak-kiosk-priv through a scoped sudoers rule, which
+# re-validates. Two gates, not one.
+#
+# The op arrives in $SSH_ORIGINAL_COMMAND as "kiosk <install|on|off|status>" - an exact
+# allowlist of four values, nothing else. There are no other arguments; the kiosk always
+# points at the box's own console, derived on the box, never sent by the caller.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb op extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "kiosk" ]] || deny "only kiosk is permitted on this key"
+[[ -z "${extra:-}" ]]    || deny "too many arguments"
+[[ "$op" =~ ^(install|on|off|status)$ ]] || deny "op must be install, on, off or status"
+
+exec sudo -n /usr/local/bin/tak-kiosk-priv "$op"

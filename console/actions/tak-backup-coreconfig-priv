@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# tak-backup-coreconfig-priv - the single privileged step behind backup-coreconfig: copy the
+# TAK server's config files into a timestamped, root-only backup directory.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-backup-coreconfig-priv
+#
+# The backups contain keystore passwords (that is what makes them a real backup), so the
+# directory is root-only 0700 and the files 0600. A retention sweep keeps the most recent 20,
+# so this can be run freely without filling the disk.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+DIR=/opt/tak/backup/console
+CFG=/opt/tak/CoreConfig.xml
+UAF=/opt/tak/UserAuthenticationFile.xml
+[[ -f "$CFG" ]] || deny "no CoreConfig.xml on this box"
+
+ts=$(date -u '+%Y%m%dT%H%M%SZ')
+dest="$DIR/$ts"
+install -d -m 0700 "$dest"
+install -m 0600 "$CFG" "$dest/CoreConfig.xml"
+[[ -f "$UAF" ]] && install -m 0600 "$UAF" "$dest/UserAuthenticationFile.xml"
+
+# retention: keep the newest 20 backup dirs, prune the rest.
+mapfile -t old < <(ls -1dt "$DIR"/*/ 2>/dev/null | tail -n +21)
+pruned=0
+for d in "${old[@]:-}"; do [[ -n "$d" ]] && { rm -rf "$d"; pruned=$((pruned+1)); }; done
+
+n=$(ls -1d "$DIR"/*/ 2>/dev/null | wc -l | tr -d ' ')
+echo "OK backed up to $dest"
+echo "FILES $(ls -1 "$dest" | tr '\n' ' ')"
+echo "KEPT $n backup(s); pruned $pruned"

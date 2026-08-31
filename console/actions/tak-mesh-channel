@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# tak-mesh-channel - the ONE operation the console's mesh-channel key is allowed to run:
+# rewrite the gateway radio on THIS box to a channel from the console's Networks page.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-mesh-channel",restrict ssh-ed25519 AAAA... vantage-console-meshchan
+#
+# The console pipes vantage-mesh-gateway-install.sh on stdin (the installer carries the
+# channel stage) and passes its sha256 plus ONE base64 blob of JSON parameters. Same two-gate
+# shape as tak-mesh-deploy; the stage is pinned to "channel" here so this key can never
+# perform an install.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb digest argsb64 extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "apply-mesh-channel" ]]  || deny "only apply-mesh-channel is permitted on this key"
+[[ -z "${extra:-}" ]]                  || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]]  || deny "expected a sha256 digest"
+[[ "${argsb64:-}" =~ ^[A-Za-z0-9+/=_-]{2,8192}$ ]] || deny "expected base64 parameters"
+
+tmp=$(mktemp /tmp/tak-mesh-channel-push.XXXXXX) || deny "mktemp failed"
+trap 'rm -f "$tmp"' EXIT
+head -c 2000000 > "$tmp"
+[[ -s "$tmp" ]] || deny "no payload arrived on stdin"
+
+got=$(sha256sum "$tmp" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "payload hash mismatch: got $got"
+bash -n "$tmp"            || deny "payload does not parse as bash"
+grep -q 'vantage-mesh-gateway-install' "$tmp" || deny "payload is not the mesh installer"
+
+exec sudo -n /usr/local/bin/tak-mesh-channel-priv "$tmp" "$digest" "$argsb64"

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# tak-federation-trust - import a partner's CA certificate (PEM on stdin) into this server's
+# federation truststore, so we trust their federation cert. Mutual: they must import ours too.
+#   command="/usr/local/bin/tak-federation-trust",restrict ssh-ed25519 ... vantage-console-fed-trust
+# usage over the channel: "federation-trust <alias>", the PEM piped on stdin.
+set -euo pipefail
+deny(){ echo "ERR $*" >&2; exit 2; }
+read -r verb alias extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "federation-trust" ]]     || deny "only federation-trust is permitted on this key"
+[[ -z "${extra:-}" ]]                   || deny "too many arguments"
+[[ "$alias" =~ ^[A-Za-z0-9._-]{1,48}$ ]] || deny "alias must be [A-Za-z0-9._-], 1-48 chars"
+tmp=$(mktemp /tmp/fed-ca.XXXXXX); trap 'rm -f "$tmp"' EXIT
+head -c 20000 > "$tmp"
+grep -q "BEGIN CERTIFICATE" "$tmp" || deny "stdin is not a PEM certificate"
+openssl x509 -in "$tmp" -noout 2>/dev/null || deny "not a valid X.509 certificate"
+sudo -n /usr/local/bin/tak-federation-trust-priv "$alias" "$tmp"

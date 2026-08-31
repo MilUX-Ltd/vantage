@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# tak-set-group - add a TAK user to a group. SSH_ORIGINAL_COMMAND = "set-group <user> <group>".
+#
+# Forced-command entry, UNPRIVILEGED (takadmin); the auth-file edit goes to tak-set-group-priv. A
+# group change touches who can see what on the server, so the console requires the operator
+# passphrase before this runs.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb user group extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "set-group" ]] || deny "only set-group is permitted on this key"
+[[ -z "${extra:-}" ]]        || deny "too many arguments"
+[[ -n "${user:-}" && -n "${group:-}" ]] || deny "usage: set-group <user> <group>"
+[[ "$user"  =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "user must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$group" =~ ^[A-Za-z0-9_-]{1,40}$ ]]  || deny "group must match [A-Za-z0-9_-], 1-40 chars"
+
+exec sudo -n /usr/local/bin/tak-set-group-priv "$user" "$group"

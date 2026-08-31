@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# tak-destroy - the ONE operation the console's destroy key may run: ERASE the estate
+# footprint from THIS box (TAK Server, its certificates and database, the CloudTAK/MediaMTX
+# stack and its volumes, the knowledge vault). The single most destructive action in the
+# product, and irreversible. Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-destroy",restrict ssh-ed25519 AAAA... vantage-console-destroy
+#
+# It takes NO arguments and NO payload. The console gates it hard before it ever fires - the
+# operator password AND a typed DESTROY - and the box's own -priv half removes only known,
+# named paths, never a blanket rm. Output streams so the console shows exactly what was erased
+# (the confirmation the operator gets back).
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "destroy" ]] || deny "only destroy is permitted on this key"
+[[ -z "${extra:-}" ]]      || deny "this action takes no arguments"
+
+exec sudo -n /usr/local/bin/tak-destroy-priv

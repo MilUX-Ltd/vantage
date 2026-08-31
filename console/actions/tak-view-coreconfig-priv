@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# tak-view-coreconfig-priv - the single privileged step behind view-coreconfig: read
+# CoreConfig.xml (root; it is tak:tak) and print a redacted structural summary.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-view-coreconfig-priv
+#
+# The parser is the security boundary. It NEVER prints an attribute whose name looks like a
+# secret (pass, password, credential, secret, token), and it only walks an allowlist of
+# elements. Everything else in the file is ignored. If the file cannot be parsed it says so
+# and prints nothing from it.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+CFG=/opt/tak/CoreConfig.xml
+[[ -f "$CFG" ]] || deny "no CoreConfig.xml on this box"
+command -v python3 >/dev/null 2>&1 || deny "python3 not available to parse safely"
+
+python3 - "$CFG" <<'PY'
+import sys, xml.etree.ElementTree as ET
+
+path = sys.argv[1]
+SECRET = ("pass", "password", "credential", "secret", "token")
+# Allowlist of elements worth surfacing, by local (namespace-stripped) tag name.
+SHOW = {"input", "connector", "tls", "auth", "network", "security",
+        "federation", "federation-server", "federation-token-authentication",
+        "ldap", "repository", "plugins", "vbm", "certificateSigning"}
+
+def local(tag):
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+def safe_attrs(el):
+    out = []
+    for k, v in el.attrib.items():
+        kn = local(k)
+        if any(s in kn.lower() for s in SECRET):
+            out.append(f"{kn}=REDACTED")
+        else:
+            # cap any single value so a stray long string can't dump anything
+            out.append(f'{kn}="{v[:120]}"')
+    return " ".join(out)
+
+try:
+    root = ET.parse(path).getroot()
+except Exception as e:
+    print(f"ERR could not parse CoreConfig.xml: {e}", file=sys.stderr)
+    sys.exit(2)
+
+print("CoreConfig summary (redacted; passwords and credentials are never shown)")
+print("=" * 66)
+seen = 0
+for el in root.iter():
+    name = local(el.tag)
+    if name not in SHOW:
+        continue
+    seen += 1
+    a = safe_attrs(el)
+    print(f"  <{name}> {a}".rstrip())
+if not seen:
+    print("  (no recognised elements; file structure may have changed)")
+print("=" * 66)
+print("view + backup only; CoreConfig is not editable from the console by design.")
+PY

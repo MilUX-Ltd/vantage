@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# tak-capass - the ONE operation the console's capass key may run: reveal this box's
+# certificate password. It returns a secret, so the console gates it behind the operator
+# password before the wire is ever touched; here we only enforce the single-verb contract.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-capass",restrict ssh-ed25519 AAAA... vantage-console-capass
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "capass" ]] || deny "only capass is permitted on this key"
+[[ -z "${extra:-}" ]]     || deny "this action takes no arguments"
+exec sudo -n /usr/local/bin/tak-capass-priv

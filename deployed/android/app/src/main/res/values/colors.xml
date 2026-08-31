@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- MilUX deep green: the icon ground. -->
+    <color name="ic_launcher_background">#113308</color>
+</resources>

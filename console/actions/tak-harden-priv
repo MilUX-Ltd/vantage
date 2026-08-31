@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# tak-harden-priv - the single privileged step behind the harden action: read or set this
+# box's security posture. Runs as root, reachable ONLY through a scoped sudoers rule from
+# the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-harden-priv
+#
+# THE POSTURE. "Hardened" removes the on-sight disqualifiers a security reviewer fails a
+# box for, and no more. Each control is a small, named, reversible change:
+#   - SSH: disable password auth and challenge-response, keep root login KEY-ONLY
+#     (prohibit-password, NOT "no": the estate reaches boxes over keys and one is root),
+#     disable X11 and agent forwarding, set a login grace and max-auth, modern Ciphers/
+#     MACs/KexAlgorithms. VALIDATED with `sshd -t` before reload; a bad config is discarded.
+#   - Kernel sysctl: rp_filter, no source routing, no ICMP redirects, SYN cookies, ASLR,
+#     restricted dmesg and kptr, ptrace scope, hardlink/symlink protection.
+#   - auditd installed and enabled; unattended-upgrades enabled; core dumps disabled.
+#   - fail2ban installed with an sshd jail.
+#
+# WHAT IT WILL NOT DO, by construction:
+#   - never PermitRootLogin no (would sever root@ access mid-estate)
+#   - never touch the firewall (that is tak-firewall's job) or tailscale
+#   - never change the takadmin/takwatch/argos keys or sudoers
+#   - never disable a service the health profile expects
+#
+# REVERSIBLE: every file written is backed up first to /root/harden-backup-<ts>/, and the
+# marker records the backup dir so revert restores exactly what was there. Idempotent: a
+# second apply is a no-op. BREAK-GLASS: if anything goes wrong, the backups plus the fact
+# that SSH is only reloaded after `sshd -t` passes mean the operator is never locked out.
+set -uo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+MODE="${1:-}"
+[[ "$MODE" =~ ^(plan|apply|revert)$ ]] || deny "mode must be plan, apply or revert"
+
+MARKER=/etc/milux-hardened
+SSHD_DROPIN=/etc/ssh/sshd_config.d/60-milux-hardening.conf
+SYSCTL_DROPIN=/etc/sysctl.d/60-milux-hardening.conf
+LIMITS_DROPIN=/etc/security/limits.d/60-milux-nocore.conf
+
+SSHD_CONTENT='# MilUX hardening (tak-harden). Root login stays key-only on purpose.
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+LoginGraceTime 30
+MaxAuthTries 4
+ClientAliveInterval 300
+ClientAliveCountMax 2
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org'
+
+SYSCTL_CONTENT='# MilUX hardening (tak-harden)
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.log_martians = 1
+kernel.randomize_va_space = 2
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+kernel.yama.ptrace_scope = 1
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1'
+
+LIMITS_CONTENT='* hard core 0'
+
+# ---- the control catalogue: name | present-check command | file it owns --------------------
+control_state() {
+    # echoes "on" or "off" for each control, on the current box
+    grep -qs "PasswordAuthentication no" "$SSHD_DROPIN" && echo "ssh on" || echo "ssh off"
+    grep -qs "kernel.kptr_restrict" "$SYSCTL_DROPIN" && echo "sysctl on" || echo "sysctl off"
+    grep -qs "hard core 0" "$LIMITS_DROPIN" && echo "coredumps on" || echo "coredumps off"
+    dpkg-query -W -f '${Status}' auditd 2>/dev/null | grep -q "install ok installed" \
+        && systemctl is-active --quiet auditd && echo "auditd on" || echo "auditd off"
+    dpkg-query -W -f '${Status}' fail2ban 2>/dev/null | grep -q "install ok installed" \
+        && systemctl is-active --quiet fail2ban && echo "fail2ban on" || echo "fail2ban off"
+    systemctl is-enabled --quiet unattended-upgrades 2>/dev/null \
+        && echo "auto-updates on" || echo "auto-updates off"
+}
+
+if [[ "$MODE" == "plan" ]]; then
+    # read-only: report posture and the per-control state
+    if [[ -f "$MARKER" ]]; then echo "POSTURE hardened"; else echo "POSTURE standard"; fi
+    control_state
+    exit 0
+fi
+
+if [[ "$MODE" == "revert" ]]; then
+    [[ -f "$MARKER" ]] || { echo "OK already standard (nothing to revert)"; exit 0; }
+    bak=$(sed -n 's/^backup=//p' "$MARKER")
+    rm -f "$SSHD_DROPIN" "$SYSCTL_DROPIN" "$LIMITS_DROPIN"
+    if [[ -n "$bak" && -d "$bak" ]]; then
+        [[ -f "$bak/sshd_config" ]] && cp -a "$bak/sshd_config" /etc/ssh/sshd_config 2>/dev/null || true
+    fi
+    if sshd -t 2>/dev/null; then systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true; fi
+    sysctl --system >/dev/null 2>&1 || true
+    rm -f "$MARKER"
+    echo "OK reverted to standard posture (backups kept at ${bak:-none})"
+    control_state
+    exit 0
+fi
+
+# ---- apply ----------------------------------------------------------------------------------
+ts=$(date -u +%Y%m%dT%H%M%SZ)
+bak="/root/harden-backup-$ts"
+mkdir -p "$bak"
+cp -a /etc/ssh/sshd_config "$bak/sshd_config" 2>/dev/null || true
+
+# SSH: write the drop-in, then VALIDATE before anything reloads. A bad config is discarded
+# and the whole apply aborts, so a mistake never costs the operator their session.
+install -d -m 755 /etc/ssh/sshd_config.d
+printf '%s\n' "$SSHD_CONTENT" > "$SSHD_DROPIN"
+if ! sshd -t 2>/dev/null; then
+    rm -f "$SSHD_DROPIN"
+    deny "the hardened sshd config did not validate; nothing changed"
+fi
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || deny "sshd reload failed"
+
+printf '%s\n' "$SYSCTL_CONTENT" > "$SYSCTL_DROPIN"
+sysctl --system >/dev/null 2>&1 || true
+
+printf '%s\n' "$LIMITS_CONTENT" > "$LIMITS_DROPIN"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -qq auditd unattended-upgrades fail2ban >/dev/null 2>&1 || true
+systemctl enable --now auditd >/dev/null 2>&1 || true
+systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
+# a minimal fail2ban sshd jail, only if the operator has none
+if [[ ! -f /etc/fail2ban/jail.d/milux-sshd.conf ]]; then
+    cat > /etc/fail2ban/jail.d/milux-sshd.conf <<'JAIL'
+[sshd]
+enabled = true
+maxretry = 5
+bantime = 1h
+JAIL
+fi
+systemctl enable --now fail2ban >/dev/null 2>&1 || true
+
+printf 'backup=%s\napplied=%s\n' "$bak" "$ts" > "$MARKER"
+chmod 0644 "$MARKER"
+
+echo "OK hardened (backup at $bak; reversible with revert)"
+control_state

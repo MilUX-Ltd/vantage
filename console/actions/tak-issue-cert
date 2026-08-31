@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# tak-issue-cert - the ONE operation the console's cert-action key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-issue-cert",restrict ssh-ed25519 AAAA... vantage-console-action
+# so whatever the console sends, the only thing that runs is this script. It runs UNPRIVILEGED
+# (as the takadmin user); the single privileged step is handed to tak-issue-cert-priv through a
+# scoped sudoers rule, and re-validated there. Two gates, not one.
+#
+# The certificate name arrives in $SSH_ORIGINAL_COMMAND as "issue-cert <name>". It is validated
+# HARD before it touches anything: a strict character class, a length cap, and no path parts. A
+# name that does not match is refused, not sanitised. Nothing here ever sees a free-text command.
+#
+# Output on success (stdout, one field per line) for the console to parse:
+#     OK <name>
+#     FP <sha256 fingerprint of the cert>
+#     P12 <base64 of the .p12, no line breaks>
+# Any failure prints "ERR <reason>" to stderr and exits non-zero. No secrets are logged.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+# Parse the forced-command channel: exactly "issue-cert <name>", nothing else.
+read -r verb name extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "issue-cert" ]] || deny "only issue-cert is permitted on this key"
+[[ -z "${extra:-}" ]]        || deny "too many arguments"
+[[ -n "${name:-}" ]]         || deny "no certificate name given"
+
+# Hard allowlist: letters, digits, dot, underscore, hyphen; 1-40 chars; no slashes, no dots-only.
+[[ "$name" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "name must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$name" != "." && "$name" != ".." && "$name" != *".."* ]] || deny "illegal name"
+
+# Hand the single privileged step to the root wrapper, which re-validates and issues the cert.
+# stdout of the wrapper (OK/FP/P12 lines) is passed straight back to the console.
+exec sudo -n /usr/local/bin/tak-issue-cert-priv "$name"

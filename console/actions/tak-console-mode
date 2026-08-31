@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# tak-console-mode - the ONE operation the console's console-mode key is allowed to run:
+# set the role of the Vantage console running ON THIS box to admin or client.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-console-mode",restrict ssh-ed25519 AAAA... vantage-console-conmode
+# so whatever the admin console sends, the only thing that runs is this script. It runs
+# UNPRIVILEGED (as the takadmin user); the single privileged step (editing the deployed
+# console's instance.json and restarting it) is handed to tak-console-mode-priv through a
+# scoped sudoers rule, and re-validated there. Two gates, not one.
+#
+# The role arrives in $SSH_ORIGINAL_COMMAND as "console-mode <admin|client>". It is validated
+# HARD before anything happens: an exact allowlist of two values, nothing else. A value that
+# does not match is refused, not coerced.
+#
+# Output on success (stdout, one field per line) for the admin console to show:
+#     OK role <admin|client>
+#     STATE <active|failed|...>
+# Any failure prints "ERR <reason>" to stderr and exits non-zero.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+# Parse the forced-command channel: exactly "console-mode <role>", nothing else.
+read -r verb role extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "console-mode" ]] || deny "only console-mode is permitted on this key"
+[[ -z "${extra:-}" ]]           || deny "too many arguments"
+[[ "$role" == "admin" || "$role" == "client" ]] || deny "role must be admin or client"
+
+# Hand the single privileged step to the root wrapper, which re-validates, edits the
+# deployed console's instance.json and restarts it. Its stdout is passed straight back.
+exec sudo -n /usr/local/bin/tak-console-mode-priv "$role"

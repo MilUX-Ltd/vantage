@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# tak-install-console-priv - run the console installer that tak-install-console verified.
+# Re-checks the hash (the file sat in /tmp between the gates), confirms it is the console
+# installer, validates the bind spec, then runs it as root. The installer is self-contained:
+# it writes the console program and its systemd unit from embedded base64 and stands up the
+# deployed-edition console bound where the operator asked.
+#
+# Root-only via the sudoers-scoped rule:
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-install-console-priv
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+
+src="${1:-}"; digest="${2:-}"; bindb64="${3:-}"
+[[ "$src" =~ ^/tmp/tak-install-console-push\.[A-Za-z0-9]+$ ]] || deny "unexpected payload path"
+[[ -f "$src" ]]                    || deny "payload file is missing"
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]]  || deny "bad digest"
+got=$(sha256sum "$src" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "hash mismatch at the privileged gate"
+bash -n "$src"            || deny "payload does not parse as bash"
+grep -q 'VANTAGE-CONSOLE-INSTALLER' "$src" || deny "not the console installer"
+
+# bind spec: an address the deployed console listens on, e.g. 127.0.0.1 or a tailnet IP.
+bind=$(printf '%s' "$bindb64" | base64 -d 2>/dev/null) || deny "bind did not decode"
+[[ "$bind" =~ ^[A-Za-z0-9.:_-]{1,64}$ ]] || deny "bad bind address"
+
+export VANTAGE_CONSOLE_BIND="$bind"
+exec bash "$src"

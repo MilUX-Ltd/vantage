@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# tak-list-certs - read-only: list the client certificates on a box with their expiry.
+#
+# Forced-command entry, runs UNPRIVILEGED (takadmin). The cert directory read (root) is handed to
+# tak-list-certs-priv. A READ: it lists names and expiry only, never touches a key or a cert.
+# $SSH_ORIGINAL_COMMAND must be exactly "list-certs".
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "list-certs" ]] || deny "only list-certs is permitted on this key"
+[[ -z "${extra:-}" ]]         || deny "too many arguments"
+
+exec sudo -n /usr/local/bin/tak-list-certs-priv

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# tak-mesh-channel-priv - the single privileged step behind apply-mesh-channel: run the
+# verified installer's channel stage. Stop the gateway (it holds the radio), write the
+# channel, restart. A brief mesh outage, named in the console's confirm.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-mesh-channel-priv
+#
+# The stage is pinned here, not taken from the caller, so this path can only ever apply a
+# channel. The channel URL is passed via the environment, never a command line.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+src="${1:-}"; digest="${2:-}"; argsb64="${3:-}"
+[[ "$src" =~ ^/tmp/tak-mesh-channel-push\.[A-Za-z0-9]+$ ]] || deny "unexpected payload path"
+[[ -f "$src" ]]                    || deny "payload file is missing"
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]]  || deny "bad digest"
+
+got=$(sha256sum "$src" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "hash mismatch at the privileged gate"
+bash -n "$src"            || deny "payload does not parse as bash"
+grep -q 'vantage-mesh-gateway-install' "$src" || deny "payload is not the mesh installer"
+
+mapfile -t kv < <(printf '%s' "$argsb64" | base64 -d 2>/dev/null \
+    | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+allowed = ["channel", "stage", "channel_url_b64"]
+for k in d:
+    if k not in allowed:
+        raise SystemExit(f"unknown parameter {k}")
+for k in allowed:
+    print(f"{k}={d.get(k, str())}")' ) || deny "parameters do not decode"
+
+declare -A P
+for line in "${kv[@]}"; do P["${line%%=*}"]="${line#*=}"; done
+
+[[ "${P[channel]}" =~ ^[A-Za-z0-9_-]{1,11}$ ]]             || deny "bad channel"
+[[ "${P[stage]}" == "channel" ]]                            || deny "stage must be channel"
+[[ "${P[channel_url_b64]}" =~ ^[A-Za-z0-9=_-]{16,2048}$ ]]  || deny "bad channel_url_b64"
+
+export VANTAGE_MESH_CHANNEL_URL_B64="${P[channel_url_b64]}"
+exec timeout 300 bash "$src" --stage channel --channel "${P[channel]}"

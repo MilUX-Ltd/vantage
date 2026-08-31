@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# tak-enrol-device - the ONE operation the console's enrol-device key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-enrol-device",restrict ssh-ed25519 AAAA... vantage-console-enrol
+#
+# Creates (or resets) an enrolment credential on this TAK server and returns a QR code a
+# phone can scan to join. The privileged half (UserManager against UserAuthenticationFile)
+# is behind the sudoers-scoped wrapper; this half validates hard, then renders the QR
+# unprivileged with qrencode.
+#
+# The enrolment host is a per-box fact, NOT hostname -f (the cloud box's hostname is
+# 'milux' but phones enrol against tak.milux.co.uk). It is read from /etc/tak-enrol-host,
+# a root-written one-line file; absent falls back to hostname -f with its eyes open.
+#
+# Output on success (stdout, one field per line, for the console to render):
+#     OK <username>
+#     PASS <password>
+#     URL tak://com.atakmap.app/enroll?host=...&username=...&token=...
+#     ITAK <host>,<username>,<password>
+#     PNG <base64 of a PNG QR of the URL line>
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb user group pwb64 extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "enrol-device" ]] || deny "only enrol-device is permitted on this key"
+[[ -z "${extra:-}" ]]           || deny "too many arguments"
+# optional operator-chosen password, base64 over the wire; policy is enforced in the
+# privileged half, so nothing weak can arrive however it is encoded
+[[ -z "${pwb64:-}" || "$pwb64" =~ ^[A-Za-z0-9+/=]{4,88}$ ]] || deny "bad password encoding"
+[[ -n "${user:-}" && -n "${group:-}" ]] || deny "usage: enrol-device <user> <group>"
+[[ "$user"  =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "user must match [A-Za-z0-9._-], 1-40 chars"
+[[ "$user" != -* ]]                      || deny "user may not begin with a dash"
+[[ "$group" =~ ^[A-Za-z0-9_-]{1,40}$ ]]  || deny "group must match [A-Za-z0-9_-], 1-40 chars"
+[[ "$group" != -* ]]                     || deny "group may not begin with a dash"
+
+command -v qrencode >/dev/null 2>&1 || deny "qrencode is not installed on this box"
+
+host=""
+[[ -r /etc/tak-enrol-host ]] && host=$(head -1 /etc/tak-enrol-host | tr -d '[:space:]')
+[[ -n "$host" ]] || host=$(hostname -f 2>/dev/null || hostname)
+
+# The privileged half creates the credential and prints USER/PASS lines.
+out=$(sudo -n /usr/local/bin/tak-enrol-device-priv "$user" "$group" "${pwb64:-}") || exit 2
+pass=$(awk '$1=="PASS"{print $2}' <<<"$out")
+[[ -n "$pass" ]] || deny "credential step returned no password"
+
+url="tak://com.atakmap.app/enroll?host=${host}&username=${user}&token=${pass}"
+png=$(qrencode -t PNG -o - -m 3 -s 6 "$url" | base64 | tr -d '\n') || deny "QR render failed"
+
+echo "OK $user"
+echo "PASS $pass"
+echo "URL $url"
+echo "ITAK ${host},${user},${pass}"
+echo "PNG $png"

@@ -1,0 +1,38 @@
+[Unit]
+Description=Vantage Deployed - the local console for this box
+Documentation=https://milux.kanbanize.com/ctrl_board/47/cards/6171/details
+After=network-online.target
+
+[Service]
+Type=simple
+User=vantage-console
+Group=vantage-console
+ExecStart=/usr/bin/python3 /usr/local/lib/vantage-console/vantage-console-serve.py
+# The deployed edition: this box's own console. Overview, Operations, Store, Vault only;
+# no fleet federation, no deploy-a-new-box, no estate agent, no white-labelling from here.
+Environment=VANTAGE_CONSOLE_EDITION=deployed
+# Bind is set at install time. Default loopback; a field kit that serves an operator on
+# kit wifi overrides this to the kit's own address in a drop-in, never 0.0.0.0 by default.
+Environment=VANTAGE_CONSOLE_BIND=127.0.0.1
+Environment=VANTAGE_CONSOLE_PORT=8092
+Environment=VANTAGE_CONSOLE_STATE=/var/lib/vantage-console/agent/state.json
+Restart=always
+RestartSec=5
+
+# Same sandbox as the estate console, plus the vault carve the box's own vault needs.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/vantage-console
+ReadWritePaths=/var/lib/vantage-console/agent
+ReadWritePaths=/srv/vault/Deployed
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,247 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Knowledge graph</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#F7F6EB;font-family:system-ui}
+  #c{display:block;touch-action:none}
+  #hdr{position:fixed;top:0;left:0;right:0;background:#113308;color:#F7F6EB;padding:9px 13px;font-size:15px;z-index:2}
+  #hdr #count{opacity:.8;font-size:12px}
+  #gnav a{color:#D2C78D;font-size:13px;margin-left:10px;text-decoration:none}
+  #gnav .cur{color:#F7F6EB;font-size:13px;margin-left:10px;font-weight:600}
+  #legend{position:fixed;left:8px;bottom:8px;background:rgba(247,246,235,.92);border:1px solid #D2C78D;border-radius:7px;padding:6px 8px;font-size:11px;line-height:1.35;z-index:2;max-width:44%}
+  #legend div{display:flex;align-items:center;margin:1px 0;padding:5px 2px;min-height:24px;cursor:pointer;user-select:none}
+  #legend .off{opacity:.45;text-decoration:line-through}
+  #legend .cap{cursor:default;color:#586F7C;font-size:10px;margin-top:4px}
+  #legend i{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:5px;flex:0 0 auto}
+  #panel{position:fixed;right:8px;bottom:8px;background:rgba(255,255,255,.96);border:1px solid #D2C78D;border-radius:7px;padding:9px 11px;font-size:12px;z-index:2;max-width:62%;display:none}
+  #panel b{color:#113308}#panel .t{color:#586F7C}
+  #empty{position:fixed;top:50%;left:0;right:0;text-align:center;color:#586F7C}
+  #ov{display:none;position:fixed;right:0;top:0;bottom:0;width:46%;min-width:320px;z-index:10;background:#F7F6EB;box-shadow:-3px 0 12px rgba(0,0,0,.25);flex-direction:column}
+  #ovbar{display:flex;justify-content:space-between;align-items:center;background:#113308;color:#F7F6EB;padding:8px 12px;font-size:15px}
+  #ovbar a{color:#D2C78D;margin-right:12px;font-size:14px}
+  #ovbar button{background:none;border:0;color:#F7F6EB;font-size:22px;cursor:pointer;line-height:1}
+  #ovf{flex:1;border:0;width:100%}
+  @media(max-width:700px){#ov{width:100%;min-width:0}}
+  @media (min-width:820px){#hdr{font-size:17px;padding:11px 16px}#legend{font-size:12px;max-width:none}#panel{font-size:13px;max-width:340px}}
+</style></head>
+<body>
+<div id="hdr">Knowledge graph <span id="count"></span>
+  <span id="gnav" style="margin-left:12px"><a href="/">ask</a> <a href="/vault">vault</a> <span class="cur">graph</span> <a href="/staff">staff</a> <a href="/ccir">CCIR</a> <a href="/tasks">tasks</a> <span style="margin-left:10px;font-size:12px;opacity:.85">OFFICIAL (EXERCISE)</span></span>
+  <select id="dep" style="float:right;font-size:13px;max-width:40%;background:#F7F6EB;color:#113308;border:0;border-radius:5px;padding:3px 6px"></select>
+  <button id="refresh" title="Refresh from the box" style="float:right;margin-right:8px;background:#F7F6EB;color:#113308;border:0;border-radius:5px;padding:3px 9px;font-size:15px;cursor:pointer">&#8635;</button>
+  <button id="grp" title="Group by type" style="float:right;margin-right:8px;background:#F7F6EB;color:#113308;border:1px solid #D2C78D;border-radius:5px;padding:3px 9px;font-size:12px;cursor:pointer">group</button></div>
+<canvas id="c"></canvas>
+<div id="legend"></div>
+<div id="panel"></div>
+<div id="ov"><div id="ovbar"><span id="ovt"></span><span><a id="ovopen" target="_blank">open</a><button id="ovx" onclick="closeov()">&times;</button></span></div><iframe id="ovf"></iframe></div>
+<div id="empty" style="display:none">No notes to graph yet.</div>
+<script>
+const GRAPH = /*__GRAPH__*/{"nodes":[],"links":[],"legend":[]}/*__END__*/;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W,H,DPR=Math.min(devicePixelRatio||1,2),MOBILE=false;
+function size(){W=innerWidth;H=innerHeight;MOBILE=Math.min(W,H)<820;
+  cv.width=W*DPR;cv.height=H*DPR;cv.style.width=W+'px';cv.style.height=H+'px';ctx.setTransform(DPR,0,0,DPR,0,0);}
+size();addEventListener('resize',()=>{size();fitted=false;});
+
+// data binding, reloadable so Refresh can re-fetch without a page reload. Node positions are
+// kept across a refresh so the layout does not jump; new nodes seed near the centre.
+let N=[],L=[],byId={},edges=[],maxDeg=1,hubDeg=6,ops=[],opFilter='',famColour={};
+const lg=document.getElementById('legend'), depSel=document.getElementById('dep'), famOff=new Set();
+const HTTP=location.protocol.indexOf('http')===0;
+const APP=(typeof Android!=='undefined'&&Android&&typeof Android.openNote==='function');
+function updateEmpty(){const e=document.getElementById('empty');
+  if(!N.length){e.textContent='No notes to graph yet.';e.style.display='block';}
+  else if(!N.some(vis)){e.textContent='No notes match this filter.';e.style.display='block';}
+  else e.style.display='none';}
+function load(g){
+  const prev={}; N.forEach(n=>prev[n.id]=n);
+  N=g.nodes||[]; L=g.links||[];
+  byId={}; N.forEach(n=>{byId[n.id]=n; const p=prev[n.id];
+    n.x=p?p.x:W/2+(Math.random()-.5)*260; n.y=p?p.y:H/2+(Math.random()-.5)*260; n.vx=0; n.vy=0;});
+  edges=L.map(l=>({s:byId[l.source],t:byId[l.target]})).filter(e=>e.s&&e.t);
+  maxDeg=1; N.forEach(n=>{maxDeg=Math.max(maxDeg,n.degree||0);});
+  hubDeg=Math.max(6,Math.ceil(maxDeg*0.6));
+  document.getElementById('count').textContent=N.length?'('+N.length+' notes, '+L.length+' links)':'';
+  // legend rows are filter toggles: tap a family to hide or show it (composes with the deployment filter)
+  lg.innerHTML='';
+  famColour={};const famEl={};
+  (g.legend||[]).forEach(e=>{famColour[e.family]=e.colour;const d=document.createElement('div');
+    const lbl=e.family.replace(/-/g,' ').replace(/^./,c=>c.toUpperCase());
+    d.innerHTML='<i style="background:'+e.colour+'"></i>'+lbl;
+    if(famOff.has(e.family))d.classList.add('off');
+    d.onclick=()=>{famOff.has(e.family)?famOff.delete(e.family):famOff.add(e.family);
+      d.classList.toggle('off');allSync();updateEmpty();fitted=false;alpha=Math.max(alpha,.2);};
+    famEl[e.family]=d;lg.appendChild(d);});
+  // one tap to hide or show every family at once
+  const allBtn=document.createElement('div');allBtn.style.fontWeight='600';
+  function allSync(){allBtn.textContent=famOff.size?'show all':'hide all';}
+  allBtn.onclick=()=>{const fams=Object.keys(famColour);
+    if(famOff.size){famOff.clear();}else{fams.forEach(f=>famOff.add(f));}
+    fams.forEach(f=>{const el=famEl[f];if(el)el.classList.toggle('off',famOff.has(f));});
+    allSync();updateEmpty();fitted=false;alpha=Math.max(alpha,.2);};
+  allSync();lg.appendChild(allBtn);
+  const cap=document.createElement('div');cap.className='cap';cap.textContent='Tap a type to show or hide it';lg.appendChild(cap);
+  ops=[...new Set(N.map(n=>n.operation).filter(Boolean))].sort();
+  depSel.innerHTML='<option value="">All deployments ('+ops.length+')</option>'
+    +ops.map(o=>'<option value="'+o.replace(/"/g,'&quot;')+'">'+o+' ('+N.filter(n=>n.operation===o).length+')</option>').join('');
+  depSel.style.display=ops.length?'':'none';
+  if(opFilter&&!ops.includes(opFilter))opFilter='';
+  depSel.value=opFilter;
+  updateEmpty();
+}
+load(GRAPH);
+// initial deployment: explicit ?op= wins, then the app's active deployment (INIT_OP), then the
+// browser's remembered choice; the web remembers the selection so reopening goes straight in.
+try{const q=new URLSearchParams(location.search).get('op');
+  if(q&&ops.includes(q)){opFilter=q;depSel.value=q;}}catch(e){}
+try{if(!opFilter&&typeof INIT_OP!=='undefined'&&INIT_OP){
+  // the app's active deployment applies even when no note carries the label yet: an empty
+  // filter that says so beats silently showing the whole vault (one deployment identity)
+  if(!ops.includes(INIT_OP)){const o=document.createElement('option');o.value=INIT_OP;
+    o.textContent=INIT_OP+' (no notes yet)';depSel.appendChild(o);}
+  opFilter=INIT_OP;depSel.value=INIT_OP;}}catch(e){}
+try{if(!opFilter&&HTTP){const r=localStorage.getItem('vault_op');
+  if(r&&ops.includes(r)){opFilter=r;depSel.value=r;}}}catch(e){}
+updateEmpty();
+depSel.addEventListener('change',()=>{opFilter=depSel.value;sel=null;show(null);fitted=false;alpha=Math.max(alpha,.25);updateEmpty();
+  try{if(HTTP)localStorage.setItem('vault_op',opFilter);}catch(e){}});
+function vis(n){return (!opFilter||n.operation===opFilter)&&!famOff.has(n.family);}
+// Refresh re-fetches the graph from the box (http only; the offline app has no server).
+const refreshBtn=document.getElementById('refresh');
+if(!HTTP){refreshBtn.style.display='none';document.getElementById('gnav').style.display='none';}
+else refreshBtn.onclick=()=>{refreshBtn.disabled=true;
+  fetch('graph.json').then(r=>r.json()).then(g=>{load(g);fitted=false;alpha=1;}).catch(()=>{})
+    .then(()=>{refreshBtn.disabled=false;});};
+// note popup overlay (http only)
+const ov=document.getElementById('ov'),ovt=document.getElementById('ovt'),
+      ovf=document.getElementById('ovf'),ovopen=document.getElementById('ovopen');
+function closeov(){ov.style.display='none';sel=null;}
+addEventListener('keydown',e=>{if(e.key==='Escape'&&ov.style.display!=='none')closeov();});
+
+// view transform. Node radius and label size are in SCREEN pixels (constant with zoom), so
+// zoom spreads the layout without inflating nodes or text.
+let ox=0,oy=0,scale=1,fitted=false,sel=null;
+function nodeR(n){const base=MOBILE?3:4,cap=MOBILE?4:7,grow=MOBILE?1.3:1.9;
+  return base+Math.min(cap,Math.sqrt(n.degree||0)*grow);}
+const LABEL_FONT=MOBILE?10:12, SHOW_LABELS_AT=1.15;
+
+// grouping: cluster each family into its own region, with a faint family label behind it
+let grouping=false, famTargets={};
+function computeFamTargets(){
+  const fams=[...new Set(N.filter(vis).map(n=>n.family))];
+  const R=Math.max(W,H)*0.30, cx=W/2, cy=H/2, ft={};
+  fams.forEach((f,i)=>{const a=(i/Math.max(1,fams.length))*Math.PI*2 - Math.PI/2;
+    ft[f]={x:cx+Math.cos(a)*R, y:cy+Math.sin(a)*R, family:f};});
+  famTargets=ft;
+}
+const grpBtn=document.getElementById('grp');
+grpBtn.onclick=()=>{grouping=!grouping; grpBtn.style.background=grouping?'#D2C78D':'#F7F6EB';
+  if(grouping)computeFamTargets(); fitted=false; alpha=Math.max(alpha,0.6);};
+
+// force simulation (simple, cools down; spread so nodes do not pile up)
+let alpha=1;
+function step(){
+  if(alpha<0.005) return;
+  const k=0.9, rep=MOBILE?1700:2200, rest=MOBILE?70:90;
+  for(let i=0;i<N.length;i++){const a=N[i];
+    for(let j=i+1;j<N.length;j++){const b=N[j];
+      let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy+0.01,d=Math.sqrt(d2);
+      let f=rep/d2, fx=dx/d*f, fy=dy/d*f; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;
+    }
+  }
+  edges.forEach(e=>{let dx=e.t.x-e.s.x,dy=e.t.y-e.s.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+    let f=(d-rest)*0.02, fx=dx/d*f, fy=dy/d*f; e.s.vx+=fx;e.s.vy+=fy;e.t.vx-=fx;e.t.vy-=fy;});
+  const cx=W/2,cy=H/2;
+  if(grouping){computeFamTargets();
+    N.forEach(n=>{const t=famTargets[n.family];
+      if(t){n.vx+=(t.x-n.x)*0.03;n.vy+=(t.y-n.y)*0.03;}else{n.vx+=(cx-n.x)*0.0015;n.vy+=(cy-n.y)*0.0015;}
+      n.x+=n.vx*alpha;n.y+=n.vy*alpha;n.vx*=k;n.vy*=k;});
+  }else{
+    N.forEach(n=>{n.vx+=(cx-n.x)*0.0015;n.vy+=(cy-n.y)*0.0015;
+      n.x+=n.vx*alpha;n.y+=n.vy*alpha;n.vx*=k;n.vy*=k;});
+  }
+  if(grouping)alpha=Math.max(alpha,0.03);   // keep a small floor so the clusters stay cohesive
+  alpha*=0.985;
+  if(!fitted&&alpha<0.06){fitView();fitted=true;}
+}
+function fitView(){
+  const vs=N.filter(vis); if(!vs.length)return;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  vs.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x);y1=Math.max(y1,n.y);});
+  const pad=MOBILE?46:70, bw=Math.max(1,x1-x0), bh=Math.max(1,y1-y0);
+  scale=Math.max(.35,Math.min(2.2,Math.min((W-2*pad)/bw,(H-2*pad-40)/bh)));
+  ox=W/2-((x0+x1)/2)*scale; oy=(H/2+16)-((y0+y1)/2)*scale;
+}
+function sx(n){return n.x*scale+ox;} function sy(n){return n.y*scale+oy;}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.strokeStyle='rgba(88,111,124,.28)';ctx.lineWidth=1;
+  edges.forEach(e=>{if(!(vis(e.s)&&vis(e.t)))return;ctx.beginPath();ctx.moveTo(sx(e.s),sy(e.s));ctx.lineTo(sx(e.t),sy(e.t));ctx.stroke();});
+  if(grouping){ctx.save();ctx.textAlign='center';ctx.font='bold '+(MOBILE?12:17)+'px system-ui';
+    Object.values(famTargets).forEach(t=>{ctx.globalAlpha=0.2;ctx.fillStyle=famColour[t.family]||'#113308';
+      ctx.fillText(t.family.toUpperCase(),sx(t),sy(t));});ctx.restore();}
+  const showAll=scale>=SHOW_LABELS_AT;
+  N.forEach(n=>{if(!vis(n))return;const x=sx(n),y=sy(n),r=nodeR(n);
+    ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fillStyle=n.colour;ctx.fill();
+    if((n.classification||'OFFICIAL')!=='OFFICIAL'){ctx.lineWidth=2.5;ctx.strokeStyle='#B23A48';ctx.stroke();}
+    if(n===sel){ctx.lineWidth=2;ctx.strokeStyle='#113308';ctx.stroke();}
+  });
+  // labels last, in screen space, with a light halo; only when zoomed in, plus hubs and selection
+  ctx.font=LABEL_FONT+'px system-ui';ctx.textBaseline='middle';
+  N.forEach(n=>{if(!vis(n)||!(showAll||n===sel||(n.degree||0)>=hubDeg))return;
+    const x=sx(n),y=sy(n),r=nodeR(n),t=n.label.length>26?n.label.slice(0,25)+'…':n.label;
+    ctx.lineWidth=3;ctx.strokeStyle='rgba(247,246,235,.9)';ctx.strokeText(t,x+r+3,y);
+    ctx.fillStyle='#113308';ctx.fillText(t,x+r+3,y);});
+}
+function loop(){step();draw();requestAnimationFrame(loop);}
+loop();
+
+// interaction: pan, pinch/wheel zoom, tap to inspect, double-tap to refit
+function toWorld(px,py){return [(px-ox)/scale,(py-oy)/scale];}
+function hit(px,py){let best=null,bd=1e9;
+  N.forEach(n=>{if(!vis(n))return;const dx=sx(n)-px,dy=sy(n)-py,d=dx*dx+dy*dy;const r=nodeR(n)+8;if(d<r*r&&d<bd){bd=d;best=n;}});return best;}
+const panel=document.getElementById('panel');
+function show(n){sel=n;
+  if(!n){panel.style.display='none';ov.style.display='none';return;}
+  // over the box (http), clicking a node pops the note's page up in place, with open and edit;
+  // the offline app (file://) has no server, so it shows a small metadata panel instead.
+  if(HTTP && n.path){
+    const p=encodeURIComponent(n.path);
+    ovt.textContent=n.label; ovf.src='note?path='+p+'&embed=1'; ovopen.href='note?path='+p;
+    ov.style.display='flex'; panel.style.display='none'; return;
+  }
+  panel.style.display='block';
+  let meta=esc(n.type); if(n.affiliation)meta+=' &middot; '+esc(n.affiliation);
+  if((n.classification||'OFFICIAL')!=='OFFICIAL')meta+=' &middot; <b style="color:#B23A48">'+esc(n.classification)+'</b>';
+  if(n.roles&&n.roles.length)meta+=' &middot; '+esc(n.roles.join(', '));
+  let html='<b>'+esc(n.label)+'</b><br><span class=t>'+meta+'</span>'
+    +'<br><span class=t style="font-size:11px">'+esc(n.path||'')+'</span>';
+  // In the offline app a node tap can open the note itself, to view or edit (local vault).
+  if(APP && n.path)html+='<br><a id="rdnote" style="color:#7A7433;font-weight:bold">Open note to view or edit &rsaquo;</a>';
+  panel.innerHTML=html;
+  if(APP && n.path){const open=()=>{try{Android.openNote(n.path);}catch(e){}};
+    panel.onclick=open; const a=document.getElementById('rdnote'); if(a)a.onclick=open;}
+  else panel.onclick=null;}
+function esc(s){return (Array.isArray(s)?s.join(', '):(s||'')).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+let drag=null,last=null,pinch=null,lastTap=0;
+cv.addEventListener('pointerdown',e=>{last=[e.clientX,e.clientY];drag=hit(e.clientX,e.clientY);});
+cv.addEventListener('pointermove',e=>{if(!last)return;const dx=e.clientX-last[0],dy=e.clientY-last[1];
+  if(drag){alpha=Math.max(alpha,.3);drag.x+=dx/scale;drag.y+=dy/scale;drag.vx=0;drag.vy=0;}
+  else{ox+=dx;oy+=dy;}last=[e.clientX,e.clientY];});
+cv.addEventListener('pointerup',e=>{
+  if(last&&Math.abs(e.clientX-last[0])<4&&Math.abs(e.clientY-last[1])<4){
+    const now=Date.now(); if(now-lastTap<300){fitView();show(null);} else show(hit(e.clientX,e.clientY));
+    lastTap=now;
+  }
+  last=null;drag=null;});
+cv.addEventListener('wheel',e=>{e.preventDefault();zoomAt(e.clientX,e.clientY,e.deltaY<0?1.1:0.9);},{passive:false});
+function zoomAt(px,py,f){const [wx,wy]=toWorld(px,py);scale=Math.max(.3,Math.min(6,scale*f));ox=px-wx*scale;oy=py-wy*scale;}
+let pts=new Map();
+cv.addEventListener('pointerdown',e=>pts.set(e.pointerId,[e.clientX,e.clientY]));
+cv.addEventListener('pointermove',e=>{if(pts.has(e.pointerId))pts.set(e.pointerId,[e.clientX,e.clientY]);
+  if(pts.size===2){const a=[...pts.values()];const d=Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1]);
+    if(pinch){zoomAt((a[0][0]+a[1][0])/2,(a[0][1]+a[1][1])/2,d/pinch);}pinch=d;drag=null;}});
+cv.addEventListener('pointerup',e=>{pts.delete(e.pointerId);if(pts.size<2)pinch=null;});
+</script></body></html>

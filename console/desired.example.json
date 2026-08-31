@@ -1,0 +1,9 @@
+{
+  "_comment": "Estate software baseline. Install (root-owned) as /etc/vantage-console/desired.json on the NUC. The console compares each box's reported inventory against components{} and renders drift with the matching update control. Version match is exact, with a -suffix tolerated so git describe's v13.70.0-1-gabc still counts as v13.70.0. A component absent from a box's inventory is never drift; an empty reported version is a visibility gap, not an update to push. Bumping a version here is the deliberate act that makes the estate show amber until someone converges it.",
+  "components": {
+    "tak-health": "1.1.0",
+    "takserver": "5.8-RELEASE69",
+    "cloudtak": "v13.70.0",
+    "mediamtx": "v1.20.0"
+  }
+}

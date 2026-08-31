@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# tak-load-images - the ONE operation the console's load-images key may run: load a Docker
+# image tarball onto THIS box and apply the module's pinned compose, so CloudTAK/MediaMTX
+# deploy with NO internet. The managing console streams a `docker save` tarball on stdin and
+# passes its sha256 plus the module name (which pinned compose to apply afterwards).
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-load-images",restrict ssh-ed25519 AAAA... vantage-console-load-images
+#
+# Nothing arriving here is trusted: the read is size-capped (image tarballs are large), the
+# hash is compared against the argument, the archive is checked to be a tar/gzip, and the
+# privileged wrapper re-verifies before running docker as root. Output streams so the console
+# shows a live load rather than a spinner.
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb digest module extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "load-images" ]]               || deny "only load-images is permitted on this key"
+[[ -z "${extra:-}" ]]                        || deny "too many arguments"
+[[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]]        || deny "expected a sha256 digest"
+[[ "${module:-}" =~ ^(cloudtak|mediamtx)$ ]] || deny "module must be cloudtak or mediamtx"
+
+command -v docker >/dev/null 2>&1 || deny "docker is not installed on this box"
+
+tmp=$(mktemp /tmp/tak-load-images-push.XXXXXX) || deny "mktemp failed"
+trap 'rm -f "$tmp"' EXIT
+head -c 4000000000 > "$tmp"           # up to ~4GB: image tarballs are large
+[[ -s "$tmp" ]] || deny "no payload arrived on stdin"
+
+got=$(sha256sum "$tmp" | awk '{print $1}')
+[[ "$got" == "$digest" ]] || deny "payload hash mismatch: got $got"
+
+# archive sanity (defence in depth; the hash is the real gate). Skip if `file` is absent.
+if command -v file >/dev/null 2>&1; then
+    ft=$(file -b "$tmp" 2>/dev/null || echo "")
+    case "$ft" in
+        *"tar archive"*|*"gzip compressed"*|*"POSIX tar"*) : ;;
+        *) deny "payload is not a tar/gzip archive: $ft" ;;
+    esac
+fi
+
+exec sudo -n /usr/local/bin/tak-load-images-priv "$tmp" "$digest" "$module"

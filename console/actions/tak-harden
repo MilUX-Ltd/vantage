@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# tak-harden - the ONE operation the console's harden key is allowed to run: read the box's
+# security posture, or move it between Standard and Hardened.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-harden",restrict ssh-ed25519 AAAA... vantage-console-harden
+#
+# The verb arrives in $SSH_ORIGINAL_COMMAND: exactly "harden plan", "harden apply" or
+# "harden revert". Nothing else. plan is read-only and changes nothing; apply and revert
+# hand the single privileged step to the root wrapper, which does the work idempotently,
+# backs up every file it touches, and REFUSES to break the estate's own access.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb mode extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "harden" ]]           || deny "only harden is permitted on this key"
+[[ -z "${extra:-}" ]]               || deny "too many arguments"
+[[ "$mode" =~ ^(plan|apply|revert)$ ]] || deny "mode must be plan, apply or revert"
+
+exec sudo -n /usr/local/bin/tak-harden-priv "$mode"

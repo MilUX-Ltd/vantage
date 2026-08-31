@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# tak-le-renew - renew the box's Let's Encrypt certificate (cloud/public box only).
+#
+# The public TAK box's LE cert lasts 90 days and renews over port 80; if port 80 ever closes the
+# renewal fails quietly (see the cloud build-log). This turns "remember to check certbot" into a
+# button. Forced-command entry, UNPRIVILEGED (takadmin); the renew (root) goes to tak-le-renew-priv.
+# Low-risk maintenance, so it needs only the console's explicit confirm, no passphrase.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "le-renew" ]] || deny "only le-renew is permitted on this key"
+[[ -z "${extra:-}" ]]       || deny "too many arguments"
+
+exec sudo -n /usr/local/bin/tak-le-renew-priv

@@ -1,0 +1,25 @@
+<svg viewBox="0 0 1200 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vantage - fleet management for TAK">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#F7F6EB" stroke-width="1" opacity="0.05"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="400" fill="#113308"/>
+  <rect width="1200" height="400" fill="url(#grid)"/>
+
+  <!-- the viewpoint mark: high ground, sight-rays from the summit -->
+  <g transform="translate(285,105) scale(1.9)">
+    <polygon points="8,88 38,40 54,62 68,44 92,88" fill="#F7F6EB"/>
+    <g fill="#A35C17">
+      <polygon points="38,40 34,12 42,13"/>
+      <polygon points="38,40 16,20 22,15"/>
+      <polygon points="38,40 58,14 52,11"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="500" y="228" font-family="Arial, Helvetica, sans-serif" font-size="92" font-weight="700" fill="#F7F6EB" letter-spacing="2">VANTAGE</text>
+
+  <!-- tagline -->
+  <text x="503" y="266" font-family="Arial, Helvetica, sans-serif" font-size="24" fill="#B5B171" letter-spacing="1">Fleet management for TAK</text>
+</svg>

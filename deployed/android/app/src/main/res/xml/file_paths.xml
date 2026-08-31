@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Packs only: the vault is never exposed through the provider. -->
+    <files-path name="packs" path="packs/" />
+</paths>

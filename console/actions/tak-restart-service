@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# tak-restart-service - the ONE operation the console's restart-service key is allowed to run.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-restart-service",restrict ssh-ed25519 AAAA... vantage-console-svc
+# so whatever the console sends, the only thing that runs is this script. It runs UNPRIVILEGED
+# (as the takadmin user); the single privileged step is handed to tak-restart-service-priv through
+# a scoped sudoers rule, and re-validated AND allowlisted there. Two gates, not one.
+#
+# The unit name arrives in $SSH_ORIGINAL_COMMAND as "restart-service <unit>". It is validated HARD
+# before it touches anything: a strict character class and a length cap. A name that does not match
+# is refused, not sanitised. The allowlist of which units may actually be restarted lives in the
+# privileged wrapper, on the box, so a cracked console still cannot restart anything off-list.
+#
+# Output on success (stdout, one field per line) for the console to show:
+#     OK restarted <unit>
+#     STATE <active|failed|...>
+# Any failure prints "ERR <reason>" to stderr and exits non-zero.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+# Parse the forced-command channel: exactly "restart-service <unit>", nothing else.
+read -r verb unit extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "restart-service" ]] || deny "only restart-service is permitted on this key"
+[[ -z "${extra:-}" ]]              || deny "too many arguments"
+[[ -n "${unit:-}" ]]               || deny "no unit given"
+
+# Hard allowlist of the NAME shape (the WHICH-units allowlist is enforced in the wrapper).
+[[ "$unit" =~ ^[a-z0-9@._-]{1,60}$ ]] || deny "unit must match [a-z0-9@._-], 1-60 chars"
+[[ "$unit" != *".."* ]]               || deny "illegal unit name"
+
+# Hand the single privileged step to the root wrapper, which re-validates, enforces the box
+# allowlist, and restarts. Its stdout (OK/STATE lines) is passed straight back to the console.
+exec sudo -n /usr/local/bin/tak-restart-service-priv "$unit"

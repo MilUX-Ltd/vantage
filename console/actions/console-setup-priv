@@ -1,0 +1,502 @@
+#!/usr/bin/env bash
+# console-setup-priv - the console's ONE root path on the console box, for the server setup
+# wizard. Approved by Matt, 26 Aug 2026: browser-driven deploy of a new TAK server, judged
+# safer than an admin doing the same work by hand.
+#
+# Reached ONLY through a scoped sudoers rule:
+#     vantage-console ALL=(root) NOPASSWD: /usr/local/bin/console-setup-priv
+#
+# The same catalogue discipline as every box action: five named operations, every argument
+# hard-validated, nothing resembling a shell. Bootstrap keys live in a root-only store,
+# referenced by NAME (never a caller-supplied path), and are shredded when setup ends - the
+# end state is identical to a hand enrolment: the console holds only its scoped action keys.
+#
+#   keygen  <name>                     mint a bootstrap keypair; prints the PUBLIC key for the
+#                                      operator to place on the new box (root authorized_keys)
+#   userkey <name>                     adopt a private key the operator uploaded via the console
+#                                      (read from the agent setup dir, moved into the root store,
+#                                      origin shredded)
+#   test    <name> <user@host>         prove the bootstrap route: connect, print the far hostname
+#   enrol   <name> <user@host> <estate-name> <profile> <label-b64>
+#                                      run console-enrol-server over the bootstrap key
+#   push-deb <name> <user@host> <file> <sha256>
+#                                      copy a package from the console's library to
+#                                      /root/<file> on the box, hash-verified both ends
+#   shred   <name>                     destroy the bootstrap key (always the last step)
+#
+# Every run is appended to /var/log/console-setup.log.
+set -uo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+STORE=/var/lib/console-setup/keys
+AGENT_SETUP=/var/lib/vantage-console/agent/setup
+# packages live in the tak-server folder of the console's filestore
+LIBRARY=/var/lib/vantage-console/agent/store/tak-server
+# lives under /var/lib/console-setup (not /var/log): the helper runs inside the console
+# service's mount namespace, where only carved paths are writable
+LOG=/var/lib/console-setup/setup.log
+
+log() {
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG" 2>/dev/null || true
+}
+
+op="${1:-}"; shift || true
+name="${1:-}"; shift || true
+[[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import)$ ]] || deny "unknown operation"
+[[ "$name" =~ ^[a-z0-9-]{1,24}$ ]] || deny "key name must match [a-z0-9-], max 24"
+key="$STORE/$name"
+install -d -m 700 -o root -g root /var/lib/console-setup "$STORE"
+
+valid_dest() { [[ "$1" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$ ]]; }
+
+# ---- embedded python, defined FLAT at top level: heredocs inside case arms have
+# ---- bitten twice (stdin theft, and a runtime parse ghost); never again
+PY_SNIPPET_1='import json, re, sys
+d = json.load(open(sys.argv[1]))
+ok = (isinstance(d, dict) and re.fullmatch(r"[0-9a-f]{16}", str(d.get("salt", "")))
+      and re.fullmatch(r"[0-9a-f]{64}", str(d.get("sha256", ""))))
+if not ok:
+    raise SystemExit(1)
+p = "/etc/vantage-console/actions.json"
+a = json.load(open(p))
+a["passphrase"] = {"salt": d["salt"], "sha256": d["sha256"]}
+json.dump(a, open(p, "w"), indent=2)'
+PY_SNIPPET_2='import json, sys, os
+name = sys.argv[1]
+found = False
+tp = "/etc/vantage-console/targets.json"
+d = json.load(open(tp))
+before = len(d.get("targets", []))
+d["targets"] = [t for t in d.get("targets", []) if t.get("name") != name]
+if len(d["targets"]) != before: found = True
+json.dump(d, open(tp, "w"), indent=2)
+ap = "/etc/vantage-console/actions.json"
+if os.path.exists(ap):
+    a = json.load(open(ap))
+    if name in (a.get("targets") or {}):
+        del a["targets"][name]; found = True
+    json.dump(a, open(ap, "w"), indent=2)
+print("REMOVED" if found else "NONE")'
+PY_SNIPPET_3='import json, re, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("BAD"); sys.exit(0)
+if not isinstance(d, dict): print("BAD"); sys.exit(0)
+text = ("product_name","maker","tagline","agent_name","org","org_unit","state","city")
+color = ("accent","accent_2","ink","band","accent_warm")
+clean = {}
+for k in text:
+    v = str(d.get(k, ""))
+    if len(v) > 40 or (v and not re.fullmatch(r"[A-Za-z0-9 ()&.,_'\''-]{0,40}", v)):
+        print("BAD"); sys.exit(0)
+    clean[k] = v
+if not clean["product_name"]: print("BAD"); sys.exit(0)
+for k in color:
+    v = str(d.get(k, ""))
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", v): print("BAD"); sys.exit(0)
+    clean[k] = v
+c = str(d.get("country","")).upper()
+clean["country"] = c if re.fullmatch(r"[A-Z]{2}", c) else ""
+clean["agent_enabled"] = bool(d.get("agent_enabled"))
+clean["console_mode"] = d.get("console_mode") if d.get("console_mode") in ("admin", "client") else "admin"
+f = str(d.get("font","standard"))
+clean["font"] = f if f in ("standard","system","serif") else "standard"
+print(json.dumps(clean))'
+PY_SNIPPET_4='import json, sys
+name, label = sys.argv[1], sys.argv[2]
+p = "/etc/vantage-console/targets.json"
+d = json.load(open(p))
+hit = False
+for t in d.get("targets", []):
+    if t.get("name") == name:
+        t["label"] = label
+        hit = True
+if not hit:
+    print("NOSUCH"); sys.exit(0)
+json.dump(d, open(p, "w"), indent=2)
+print("OK")'
+
+PY_SNIPPET_5='import json, re, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("BAD"); sys.exit(0)
+if not isinstance(d, dict): print("BAD"); sys.exit(0)
+allowed = ("tak-health", "takserver", "cloudtak", "mediamtx")
+comps = d.get("components", d)
+if not isinstance(comps, dict): print("BAD"); sys.exit(0)
+clean = {}
+for k in allowed:
+    v = str(comps.get(k, "")).strip()
+    if not v:
+        continue
+    if not re.fullmatch(r"[A-Za-z0-9._+-]{1,40}", v):
+        print("BAD"); sys.exit(0)
+    clean[k] = v
+print(json.dumps({"components": clean}, indent=2))'
+
+
+case "$op" in
+tlscert)
+    # copy the box's Let's Encrypt certificate where the console user can read it,
+    # and install a renewal deploy-hook so it stays fresh. data = the fqdn.
+    fqdn="${1:-}"
+    fqdn_re='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+    [[ "$fqdn" =~ $fqdn_re ]] || deny "not a valid DNS name"
+    live="/etc/letsencrypt/live/$fqdn"
+    [[ -f "$live/fullchain.pem" && -f "$live/privkey.pem" ]] \
+        || deny "no Let's Encrypt certificate for $fqdn on this box"
+    install -d -m 750 -o vantage-console -g vantage-console /etc/vantage-console/tls
+    install -m 640 -o vantage-console -g vantage-console "$live/fullchain.pem" /etc/vantage-console/tls/fullchain.pem
+    install -m 600 -o vantage-console -g vantage-console "$live/privkey.pem" /etc/vantage-console/tls/privkey.pem
+    hook=/etc/letsencrypt/renewal-hooks/deploy/vantage-console-tls
+    install -d -m 755 /etc/letsencrypt/renewal-hooks/deploy
+    {
+        echo '#!/bin/sh'
+        echo '# keep the console copy of the certificate fresh after every renewal'
+        echo "install -m 640 -o vantage-console -g vantage-console '$live/fullchain.pem' /etc/vantage-console/tls/fullchain.pem"
+        echo "install -m 600 -o vantage-console -g vantage-console '$live/privkey.pem' /etc/vantage-console/tls/privkey.pem"
+        # restart whichever console unit this box runs (deployed edition = vantage-console-deployed,
+        # admin edition = vantage-console) so the renewed cert is actually picked up
+        echo 'systemctl restart vantage-console-deployed.service 2>/dev/null || systemctl restart vantage-console.service 2>/dev/null || true'
+    } > "$hook"
+    chmod 755 "$hook"
+    log "tlscert $fqdn"
+    echo "OK https material staged for $fqdn"
+    ;;
+vaultdir)
+    # create the Knowledge Vault root, owned by the console user - the recovery for
+    # installs that predate the installer doing this
+    install -d -m 0775 -o vantage-console -g vantage-console /srv/vault /srv/vault/Deployed \
+        || deny "could not create the vault root"
+    log "vaultdir"
+    echo "OK vault root ready"
+    ;;
+keygen)
+    [[ -f "$key" ]] && { log "keygen $name (existing)"; cat "$key.pub"; exit 0; }
+    ssh-keygen -t ed25519 -N "" -C "vantage-console-setup-$name" -f "$key" -q || deny "keygen failed"
+    chmod 600 "$key"
+    log "keygen $name"
+    cat "$key.pub"
+    ;;
+self-authorize)
+    # "Deploy on this box": the console's own box becomes the target. Mint the bootstrap
+    # key if absent and authorise it for root ON THIS BOX - the operator pastes nothing,
+    # because the box already trusts itself; the same shred-on-success lifecycle applies,
+    # so the self-trust is temporary. Everything downstream (enrol, provision) then runs
+    # through the identical path as any remote box, aimed at root@127.0.0.1.
+    if [[ ! -f "$key" ]]; then
+        ssh-keygen -t ed25519 -N "" -C "vantage-console-setup-$name" -f "$key" -q || deny "keygen failed"
+        chmod 600 "$key"
+    fi
+    # This helper usually runs inside the console service's sandbox, where ProtectHome
+    # makes /root untouchable even for root - a direct append "succeeds" into nowhere
+    # (bitten live, 27 Aug). The one /root mutation therefore runs as a fresh systemd
+    # unit OUTSIDE the sandbox, and is then VERIFIED the same way; no verification, no
+    # claim of success.
+    pub=$(cat "$key.pub")
+    aline="install -d -m 700 /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys; grep -qF '$pub' /root/.ssh/authorized_keys || printf '%s\n' '$pub' >> /root/.ssh/authorized_keys"
+    if command -v systemd-run >/dev/null 2>&1; then
+        systemd-run --quiet --wait --collect -p User=root /bin/bash -c "$aline" 2>/dev/null \
+            || /bin/bash -c "$aline" || true
+    else
+        /bin/bash -c "$aline" || true
+    fi
+    if command -v systemd-run >/dev/null 2>&1; then
+        systemd-run --quiet --wait --collect -p User=root \
+            /bin/grep -qF "$pub" /root/.ssh/authorized_keys 2>/dev/null \
+            || grep -qF "$pub" /root/.ssh/authorized_keys \
+            || deny "could not authorise the key for root on this box"
+    else
+        grep -qF "$pub" /root/.ssh/authorized_keys \
+            || deny "could not authorise the key for root on this box"
+    fi
+    # the box must accept its own host key without a prompt for the flow that follows
+    hk=$(ssh-keyscan -t ed25519 127.0.0.1 2>/dev/null || true)
+    if [[ -n "$hk" ]]; then
+        for f in /var/lib/vantage-console/.ssh/known_hosts /var/lib/console-setup/known_hosts; do
+            install -d -m 700 "$(dirname "$f")" 2>/dev/null || true
+            touch "$f"
+            grep -qF "$hk" "$f" || printf '%s\n' "$hk" >> "$f"
+        done
+        chown vantage-console:vantage-console /var/lib/vantage-console/.ssh/known_hosts 2>/dev/null || true
+    fi
+    log "self-authorize $name"
+    echo "OK self target ready"
+    hostname -s
+    ;;
+userkey)
+    src="$AGENT_SETUP/$name.userkey"
+    [[ -f "$src" ]] || deny "no uploaded key at the expected place"
+    head -1 "$src" | grep -q "PRIVATE KEY" || { shred -u "$src" 2>/dev/null || rm -f "$src"; deny "uploaded file is not a private key - discarded"; }
+    install -m 600 -o root -g root "$src" "$key"
+    shred -u "$src" 2>/dev/null || rm -f "$src"
+    ssh-keygen -y -f "$key" > "$key.pub" 2>/dev/null || { rm -f "$key" "$key.pub"; deny "key does not parse (passphrase-protected keys are not supported here)"; }
+    log "userkey $name (adopted from upload, origin shredded)"
+    echo "OK key adopted"
+    ;;
+test)
+    dest="${1:-}"; valid_dest "$dest" || deny "destination must look like user@host"
+    [[ -f "$key" ]] || deny "no bootstrap key '$name' - generate or upload one first"
+    host="${dest#*@}"
+    ip=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1; exit}')
+    out=$(timeout 20 ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+          -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/console-setup/known_hosts "$dest" 'echo HOST $(hostname -s); echo USER $(id -un); echo OS $(. /etc/os-release 2>/dev/null && echo $PRETTY_NAME)' 2>&1) \
+        || { log "test $name $dest FAILED"
+             printf '%s\n' "$out" | tail -2 >&2
+             # say what actually failed: a dead network path and a refused key are
+             # different problems, and the operator lost time tonight telling them apart
+             case "$out" in
+               *"timed out"*|*"No route"*|*"Connection refused"*|*"Could not resolve"*|*"not known"*)
+                 deny "nothing answered on port 22 at $host${ip:+ ($ip)} - is the box up, and does the address point at it?" ;;
+               *"Host key verification failed"*|*"host key"*)
+                 deny "$host presents a different SSH host key than last time. If the box was rebuilt this is expected - forget the old host key and test again. If it was not rebuilt, treat this as an alarm." ;;
+               *"Permission denied"*)
+                 deny "$host answered but refused this key - the public key is not in place for user '${dest%%@*}' yet. Run the placement command shown above the Test button on the box, then test again." ;;
+               *) deny "cannot reach $dest with this key" ;;
+             esac; }
+    [[ -n "$ip" ]] && out="$out
+ADDR $ip"
+    log "test $name $dest OK"
+    printf '%s\n' "$out"
+    ;;
+enrol)
+    dest="${1:-}"; ename="${2:-}"; profile="${3:-}"; labelb64="${4:-}"; fqdn="${5:-}"; components="${6:-}"
+    valid_dest "$dest" || deny "destination must look like user@host"
+    [[ "$ename" =~ ^[a-z0-9-]{1,24}$ ]] || deny "estate name must match [a-z0-9-], max 24"
+    [[ "$profile" =~ ^(cloud|nuc|firmbase|deployed)$ ]] || deny "profile must be cloud|firmbase|deployed (nuc = old name for firmbase)"
+    # Spec 002: the initial loadout declaration. Validated here AND in
+    # console-enrol-server (two gates, ADR 002); tokens are map keys only.
+    [[ -z "$components" || "$components" =~ ^[a-z]+(,[a-z]+)*$ ]] || deny "components must be a comma list of [a-z]+ tokens"
+    label=$(printf '%s' "$labelb64" | base64 -d 2>/dev/null | tr -cd 'A-Za-z0-9 ()._-' | head -c 40)
+    [[ -n "$label" ]] || label="$ename"
+    [[ -z "$fqdn" || "$fqdn" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || deny "fqdn must be a hostname"
+    [[ -f "$key" ]] || deny "no bootstrap key '$name'"
+    [[ -x /usr/local/bin/console-enrol-server ]] || deny "console-enrol-server is not installed"
+    log "enrol $name $dest as '$ename' ($profile)${components:+ components=$components}"
+    fopt=(); [[ -n "$fqdn" ]] && fopt=(--fqdn "$fqdn")
+    [[ -n "$components" ]] && fopt+=(--components "$components")
+    /usr/local/bin/console-enrol-server "$ename" "$dest" --profile "$profile" \
+        --label "$label" --identity "$key" "${fopt[@]}"
+    ;;
+push-deb)
+    dest="${1:-}"; file="${2:-}"; digest="${3:-}"
+    valid_dest "$dest" || deny "destination must look like user@host"
+    [[ "$file" =~ ^[A-Za-z0-9._-]{1,80}\.deb$ ]] || deny "deb filename must match [A-Za-z0-9._-], .deb"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || deny "expected a sha256 digest"
+    src="$LIBRARY/$file"
+    [[ -f "$src" ]] || deny "no such package in the library"
+    got=$(sha256sum "$src" | awk '{print $1}')
+    [[ "$got" == "$digest" ]] || deny "uploaded deb hash mismatch"
+    head -c 8 "$src" | grep -q '!<arch>' || deny "file is not a Debian package"
+    [[ -f "$key" ]] || deny "no bootstrap key '$name'"
+    # land in the connecting user's own home: /root only exists for root, and a
+    # passwordless-sudo admin user cannot write there (failed live, 30 Aug 2026)
+    duser="${dest%%@*}"
+    dhome=$([[ "$duser" == root ]] && echo /root || echo "/home/$duser")
+    log "push-deb $name $dest $file -> $dhome"
+    timeout 900 scp -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+        -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/console-setup/known_hosts "$src" "$dest:$dhome/$file" \
+        || deny "scp failed"
+    far=$(timeout 30 ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes \
+          -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/console-setup/known_hosts "$dest" "sha256sum $dhome/$file" 2>/dev/null | awk '{print $1}')
+    [[ "$far" == "$digest" ]] || deny "deb landed but the far hash does not match"
+    echo "OK deb on the box at $dhome/$file ($digest)"
+    ;;
+set-password)
+    # operator sign-in password: a base64 JSON scrypt record from the console. Validated
+    # for shape, written root-owned world-readable (it is a hash; the serve user must
+    # read it to verify logins).
+    blob="${1:-}"
+    out=$(printf '%s' "$blob" | base64 -d 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("BAD"); raise SystemExit
+ok = (isinstance(d, dict)
+      and re.fullmatch(r"[0-9a-f]{64}", str(d.get("scrypt", "")))
+      and re.fullmatch(r"[0-9a-f]{32}", str(d.get("salt", "")))
+      and str(d.get("n", "")).isdigit() and str(d.get("r", "")).isdigit()
+      and str(d.get("p", "")).isdigit())
+print(json.dumps({k: d[k] for k in ("scrypt","salt","n","r","p")}) if ok else "BAD")
+')
+    [[ -n "$out" && "$out" != "BAD" ]] || deny "password record failed validation"
+    install -d -m 755 /etc/vantage-console
+    printf '%s
+' "$out" > /etc/vantage-console/auth.json
+    chmod 0644 /etc/vantage-console/auth.json
+    # the same password confirms privileged actions: merge the salted digest into
+    # actions.json so a fresh install can mint users and run gated writes at once
+    pp="${2:-}"
+    if [[ -n "$pp" && -f /etc/vantage-console/actions.json ]]; then
+        pptmp=$(mktemp) || deny "mktemp failed"
+        printf '%s' "$pp" | base64 -d > "$pptmp" 2>/dev/null || true
+        python3 -c "$PY_SNIPPET_1" "$pptmp"  || { rm -f "$pptmp"; deny "passphrase record failed validation"; }
+        rm -f "$pptmp"
+        log "action passphrase aligned to operator password"
+    fi
+    log "operator password set"
+    echo "OK password set"
+    ;;
+unenrol)
+    # remove a server from the console entirely: a box that was deleted, destroyed or
+    # reset. Console-side only - the box may be gone, so nothing is done TO it; it is
+    # simply removed from targets.json and actions.json so the collector stops polling
+    # and no actions remain bound to it. Under the enrol lock, like enrol.
+    ename="$name"
+    [[ "$ename" =~ ^[a-z0-9-]{1,24}$ ]] || deny "bad estate name"
+    exec 9>/etc/vantage-console/.enrol.lock
+    flock 9
+    out=$(python3 -c "$PY_SNIPPET_2" "$ename"
+)
+    [[ "$out" == "REMOVED" ]] || deny "no server called '$name' is enrolled"
+    systemctl start vantage-console-collect.service 2>/dev/null || true
+    log "unenrol $name"
+    echo "OK removed"
+    ;;
+instance)
+    # white-label identity: a base64 JSON blob, decoded, re-validated field by field,
+    # written to /etc/vantage-console/instance.json. Rejects anything that is not the
+    # shape the console sends - a corrupt file would only fall back to defaults anyway,
+    # but the gate stays strict.
+    blob="${1:-}"
+    ibtmp=$(mktemp) || deny "mktemp failed"
+    printf '%s' "$blob" | base64 -d > "$ibtmp" 2>/dev/null || true
+    # data travels by FILE: python3 - <<heredoc owns stdin for the script, so piped
+    # data would vanish into it (bitten live, 27 Aug - every save said BAD)
+    out=$(python3 -c "$PY_SNIPPET_3" "$ibtmp"
+)
+    rm -f "$ibtmp"
+    [[ -n "$out" && "$out" != "BAD" ]] || deny "instance config failed validation"
+    install -d -m 755 /etc/vantage-console
+    printf '%s\n' "$out" > /etc/vantage-console/instance.json
+    chmod 0644 /etc/vantage-console/instance.json
+    log "instance updated"
+    echo "OK instance saved"
+    ;;
+baseline)
+    # estate software baseline: a base64 JSON blob {components:{name:version}},
+    # decoded, re-validated (known components only, safe version strings) and written
+    # root-owned to /etc/vantage-console/desired.json - the file drift is judged against.
+    # Same FILE-not-stdin convention as instance (heredoc-less python3 -c, but keep it).
+    blob="${1:-}"
+    bltmp=$(mktemp) || deny "mktemp failed"
+    printf '%s' "$blob" | base64 -d > "$bltmp" 2>/dev/null || true
+    out=$(python3 -c "$PY_SNIPPET_5" "$bltmp"
+)
+    rm -f "$bltmp"
+    [[ -n "$out" && "$out" != "BAD" ]] || deny "baseline failed validation"
+    install -d -m 755 /etc/vantage-console
+    printf '%s\n' "$out" > /etc/vantage-console/desired.json
+    chmod 0644 /etc/vantage-console/desired.json
+    log "baseline updated"
+    echo "OK baseline saved"
+    ;;
+usb-copy)
+    # copy a prepared enrolment bundle (a staging dir the console wrote) onto a mounted USB
+    # stick. The staging path MUST be under the console's own agent dir; we find the first
+    # writable, mounted, removable partition and copy into a dated folder on it. This is the
+    # kiosk path - the operator has no shell, so the console does the fiddly Linux part.
+    stage="${1:-}"
+    case "$stage" in
+        /var/lib/vantage-console/agent/usb-staging/*) : ;;
+        *) deny "staging path not permitted" ;;
+    esac
+    [[ -d "$stage" ]] || deny "no staging directory"
+    dest=""
+    while read -r _nm mnt rm typ; do
+        [[ "$typ" == "part" && "$rm" == "1" && -n "$mnt" && "$mnt" != "/" ]] || continue
+        [[ -d "$mnt" && -w "$mnt" ]] || continue
+        dest="$mnt"; break
+    done < <(lsblk -o NAME,MOUNTPOINT,RM,TYPE -nrp 2>/dev/null)
+    [[ -n "$dest" ]] || deny "no writable USB stick is mounted"
+    stamp=$(date -u +%Y%m%d-%H%M%S)
+    target="$dest/Vantage-Enrolment-$stamp"
+    mkdir -p "$target" || deny "could not write to the USB stick"
+    cp -f "$stage"/* "$target"/ || deny "copy to USB failed"
+    sync
+    log "usb-copy -> $target"
+    echo "OK $target"
+    ;;
+usb-import)
+    # disconnected ingest: LIST importable files on a mounted USB stick, or STAGE one into
+    # the console's agent dir for the console to file into the library/shelf. Read-only on
+    # the USB; the console (not root) records the manifest. Same removable detection as
+    # usb-copy.  Called: usb-import list  |  usb-import stage <filename>.
+    mode="$name"
+    [[ "$mode" =~ ^(list|stage)$ ]] || deny "usb-import mode must be list or stage"
+    src=""
+    while read -r _nm mnt rm typ; do
+        [[ "$typ" == "part" && "$rm" == "1" && -n "$mnt" && "$mnt" != "/" ]] || continue
+        [[ -d "$mnt" && -r "$mnt" ]] || continue
+        src="$mnt"; break
+    done < <(lsblk -o NAME,MOUNTPOINT,RM,TYPE -nrp 2>/dev/null)
+    [[ -n "$src" ]] || deny "no readable USB stick is mounted"
+    if [[ "$mode" == "list" ]]; then
+        find "$src" -maxdepth 1 -type f \( -iname '*.deb' -o -iname '*.apk' \
+             -o -iname '*.tar' -o -iname '*.tar.gz' -o -iname '*.zip' \) \
+             -printf '%f\t%s\n' 2>/dev/null | head -200
+        exit 0
+    fi
+    fname="${1:-}"
+    [[ "$fname" =~ ^[A-Za-z0-9._-]{1,120}$ ]] || deny "bad filename"
+    [[ -f "$src/$fname" ]] || deny "no such file on the USB"
+    stagedir=/var/lib/vantage-console/agent/usb-import
+    install -d -m 0750 -o vantage-console -g vantage-console "$stagedir"
+    cp -f "$src/$fname" "$stagedir/$fname" || deny "copy from USB failed"
+    chown vantage-console:vantage-console "$stagedir/$fname"
+    chmod 0640 "$stagedir/$fname"
+    log "usb-import stage $fname"
+    echo "OK $stagedir/$fname"
+    ;;
+rename)
+    # operator-assigned display label for an enrolled server: rewrite targets.json
+    # under the enrol lock, then poll so the new name shows at once. The label is
+    # decoded from base64 and character-classed hard; the name must already exist.
+    labelb64="${1:-}"
+    label=$(printf '%s' "$labelb64" | base64 -d 2>/dev/null | head -c 40 | tr -cd 'A-Za-z0-9()., _-')
+    [[ -n "$label" ]] || deny "empty or invalid label"
+    exec 9>/etc/vantage-console/.enrol.lock
+    flock 9
+    out=$(python3 -c "$PY_SNIPPET_4" "$name" "$label"
+)
+    [[ "$out" == "OK" ]] || deny "no enrolled server called '$name'"
+    systemctl start vantage-console-collect.service 2>/dev/null || true
+    log "rename $name -> '$label'"
+    echo "OK renamed"
+    ;;
+forget-host)
+    # a rebuilt box has a new host key; forgetting the old one is deliberate, operator-driven
+    host="${1:-}"
+    [[ "$host" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || deny "bad host"
+    ssh-keygen -R "$host" -f /var/lib/console-setup/known_hosts >/dev/null 2>&1 || true
+    ip=$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1; exit}')
+    [[ -n "$ip" ]] && ssh-keygen -R "$ip" -f /var/lib/console-setup/known_hosts >/dev/null 2>&1
+    if [[ -f /var/lib/vantage-console/.ssh/known_hosts ]]; then
+        ssh-keygen -R "$host" -f /var/lib/vantage-console/.ssh/known_hosts >/dev/null 2>&1 || true
+        [[ -n "$ip" ]] && ssh-keygen -R "$ip" -f /var/lib/vantage-console/.ssh/known_hosts >/dev/null 2>&1
+        chown vantage-console:vantage-console /var/lib/vantage-console/.ssh/known_hosts 2>/dev/null || true
+    fi
+    log "forget-host $host${ip:+ ($ip)}"
+    echo "OK forgotten"
+    ;;
+have)
+    # does a bootstrap key already exist under this name? Lets a reloaded wizard
+    # page rediscover a key it adopted before the reload, instead of demanding a
+    # fresh paste. Read-only; prints HELD or ABSENT and succeeds either way.
+    if [[ -f "$key" ]]; then echo "HELD"; else echo "ABSENT"; fi
+    ;;
+shred)
+    if [[ -f "$key" ]]; then
+        shred -u "$key" 2>/dev/null || rm -f "$key"
+        rm -f "$key.pub"
+        log "shred $name"
+        echo "OK bootstrap key destroyed"
+    else
+        echo "OK no key to destroy"
+    fi
+    ;;
+esac

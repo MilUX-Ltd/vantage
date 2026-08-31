@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# tak-federation-ca - export THIS server's CA certificate (PEM) so a federation partner can
+# import it into their trust store. Read-only; the CA public cert is not a secret.
+#   command="/usr/local/bin/tak-federation-ca",restrict ssh-ed25519 ... vantage-console-fed-ca
+set -euo pipefail
+deny(){ echo "ERR $*" >&2; exit 2; }
+read -r verb extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "federation-ca" ]] || deny "only federation-ca is permitted on this key"
+[[ -z "${extra:-}" ]]           || deny "this action takes no arguments"
+exec sudo -n /usr/local/bin/tak-federation-ca-priv

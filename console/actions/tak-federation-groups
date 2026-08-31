@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# tak-federation-groups - the ONE operation the console's federation-groups key may run: name
+# the group this box shares with its trusted federation partners.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-federation-groups",restrict ssh-ed25519 AAAA... vantage-console-fed-groups
+#
+# Exists because of the fourth gate found on 26 Aug 2026: a live, CA-trusted federation link
+# with automatic mapping still carries NOTHING, because TAK creates each federate's config
+# entry EMPTY on first connection, and an empty entry shares no groups. This action writes the
+# group into every federate entry AND a federateCA default for every trusted partner CA, so
+# traffic crosses without anyone hand-editing CoreConfig.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+read -r verb group extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "$verb" == "federation-groups" ]] || deny "only federation-groups is permitted on this key"
+[[ -z "${extra:-}" ]]                || deny "too many arguments"
+[[ "${group:-}" =~ ^[A-Za-z0-9_-]{1,40}$ ]] || deny "group must be [A-Za-z0-9_-], max 40"
+
+exec sudo -n /usr/local/bin/tak-federation-groups-priv "$group"

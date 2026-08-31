@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# tak-vpn - the ONE operation the console's vpn key may run: manage this box's
+# membership of a private network, for a known provider. Vantage does not choose the
+# VPN; the operator does - this script only enforces the contract and hands one
+# validated request to the privileged wrapper.
+#
+# Reached only through an SSH forced command:
+#     command="/usr/local/bin/tak-vpn",restrict ssh-ed25519 AAAA... vantage-console-vpn
+#
+# SSH_ORIGINAL_COMMAND forms (mode is always last; conf only for join):
+#     vpn <provider> status
+#     vpn <provider> <conf-b64> join
+#     vpn <provider> leave
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+read -r -a A <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ "${A[0]:-}" == "vpn" ]] || deny "only vpn is permitted on this key"
+provider="${A[1]:-}"
+[[ "$provider" =~ ^(wireguard|tailscale|openvpn)$ ]] || deny "unknown provider"
+case "${#A[@]}" in
+    3)  mode="${A[2]}"; conf="" ;;
+    4)  mode="${A[3]}"; conf="${A[2]}" ;;
+    *)  deny "malformed request" ;;
+esac
+[[ "$mode" =~ ^(status|join|leave)$ ]] || deny "unknown mode"
+if [[ "$mode" == "join" ]]; then
+    [[ -n "$conf" && "$conf" =~ ^[A-Za-z0-9+/=_-]+$ ]] || deny "join needs its material"
+    exec sudo -n /usr/local/bin/tak-vpn-priv "$provider" join "$conf"
+fi
+[[ -z "$conf" ]] || deny "$mode takes no material"
+exec sudo -n /usr/local/bin/tak-vpn-priv "$provider" "$mode"

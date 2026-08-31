@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# tak-federation-groups-priv - the single privileged step behind federation-groups: write the
+# shared group into this box's federation config.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-federation-groups-priv
+#
+# What it writes, idempotently:
+#   - every existing <federate> entry gains <inboundGroup>G</inboundGroup> and
+#     <outboundGroup>G</outboundGroup> (the empty auto-created entries are the trap: a
+#     per-federate entry overrides CA defaults, and TAK creates them with no groups);
+#   - every CA in fed-truststore.jks gains a <federateCA fingerprint=...> default with the
+#     same groups, so a federate that connects LATER under a trusted CA crosses immediately.
+# Restarts takserver only when something actually changed. Group membership stays the real
+# perimeter: only clients IN the group see the crossed traffic, and only mutually-trusted
+# servers connect at all.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+group="${1:-}"
+[[ "$group" =~ ^[A-Za-z0-9_-]{1,40}$ ]] || deny "bad group"
+CFG=/opt/tak/CoreConfig.xml
+[[ -f "$CFG" ]] || deny "no CoreConfig.xml on this box"
+grep -q "<federation " "$CFG" || deny "no <federation> element in CoreConfig"
+
+# Fingerprints of every CA this box trusts for federation (SHA-256, colon form - the form
+# TAK uses for federate ids). Missing truststore or password is not fatal: the per-federate
+# half still applies.
+pass=$(head -1 /opt/tak/certs/.milux-capass 2>/dev/null \
+       || grep -oE 'CAPASS=\$\{CAPASS:-[^}]+' /opt/tak/certs/cert-metadata.sh 2>/dev/null | sed 's/.*-//' \
+       || true)
+fps=""
+ts=/opt/tak/certs/files/fed-truststore.jks
+if [[ -f "$ts" && -n "$pass" ]]; then
+    fps=$(keytool -list -v -keystore "$ts" -storepass "$pass" 2>/dev/null \
+          | grep -E '^\s*SHA256:' | awk '{print $2}' | sort -u | paste -sd' ' - || true)
+fi
+# the box's own CA sits in its truststore but can never be a partner - leave it out
+own=$(openssl x509 -in /opt/tak/certs/files/ca.pem -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 || true)
+if [[ -n "$own" && -n "$fps" ]]; then
+    fps=$(printf '%s\n' $fps | grep -vF "$own" | paste -sd' ' - || true)
+fi
+
+cp "$CFG" "${CFG}.pre-fed-groups"
+out=$(python3 - "$CFG" "$group" $fps <<'PYEOF'
+import re, sys
+p, group = sys.argv[1], sys.argv[2]
+fps = sys.argv[3:]
+src = open(p).read()
+changed = 0
+kids = f"<inboundGroup>{group}</inboundGroup><outboundGroup>{group}</outboundGroup>"
+
+# self-closed entries FIRST, opened up to carry the groups; only then the open entries,
+# whose pattern must exclude "/>" or it would swallow a self-closed tag and cross-match
+# bodies between entries.
+def open_up(m):
+    global changed
+    changed += 1
+    return m.group(0)[:-2] + ">" + kids + "</federate>"
+
+def fill(m):
+    global changed
+    tag, body = m.group(1), m.group(2)
+    if f">{group}<" in body:
+        return m.group(0)
+    changed += 1
+    return tag + kids + body + "</federate>"
+
+src = re.sub(r"<federate [^>]*/>", open_up, src)
+src = re.sub(r"(<federate [^>]*[^/]>)((?:(?!</?federate).)*)</federate>", fill, src, flags=re.S)
+for fp in fps:
+    if fp in src:
+        continue
+    changed += 1
+    el = f'<federateCA fingerprint="{fp}">{kids}</federateCA>'
+    src = src.replace("</federation>", el + "</federation>")
+open(p, "w").write(src)
+import xml.etree.ElementTree as ET
+ET.parse(p)
+print(changed)
+PYEOF
+) || { cp "${CFG}.pre-fed-groups" "$CFG"; deny "edit failed - reverted"; }
+
+chown tak:tak "$CFG"
+if [[ "$out" == "0" ]]; then
+    echo "OK group '$group' already shared everywhere it can be - nothing changed, no restart"
+    exit 0
+fi
+systemctl restart takserver
+echo "OK group '$group' shared with this box's trusted federation partners ($out change(s)); takserver restarting"
+echo "NOTE a partner crosses traffic only when IT shares the group too - run this on both sides"

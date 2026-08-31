@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# tak-restart-service-priv - the single privileged step behind the restart-service action: restart
+# ONE allowlisted systemd unit on this box.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-restart-service-priv
+# It re-validates its one argument (defence in depth) and enforces a hard ALLOWLIST of the units
+# this box is willing to have restarted from the console. Anything off the list is refused.
+#
+# The allowlist deliberately holds only the estate's own peripheral services. It does NOT include
+# core system units (sshd, docker, the network) or the TAK Server itself, because a remote button
+# that can bounce those is a foot-gun. To let the console restart another unit on this box, add its
+# base name to ALLOW below - a deliberate, per-box edit, not a config the console can influence.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+unit="${1:-}"
+[[ "$unit" =~ ^[a-z0-9@._-]{1,60}$ ]] || deny "unit must match [a-z0-9@._-], 1-60 chars"
+[[ "$unit" != *".."* ]]               || deny "illegal unit name"
+
+# --- the allowlist: the estate's own services this box may restart from the console -------------
+ALLOW=(
+  tak-meshtastic-gateway
+  cloudtak
+  edge-selfmarker
+  vantage-console-collect
+)
+# -----------------------------------------------------------------------------------------------
+
+base="${unit%.service}"
+ok=0
+for u in "${ALLOW[@]}"; do [[ "$base" == "$u" ]] && ok=1; done
+[[ "$ok" == 1 ]] || deny "unit '$unit' is not in this box's restart allowlist"
+
+systemctl restart "$unit" || deny "systemctl restart $unit failed (rc=$?)"
+
+state=$(systemctl is-active "$unit" 2>/dev/null || true)
+echo "OK restarted $unit"
+echo "STATE ${state:-unknown}"

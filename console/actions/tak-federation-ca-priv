@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Print the CA trust chain a partner imports to trust our federation cert. Root-read because
+# certs/files is tak-owned; only public certificate material is emitted, never a key.
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-federation-ca-priv
+set -euo pipefail
+deny(){ echo "ERR $*" >&2; exit 2; }
+cd /opt/tak/certs/files 2>/dev/null || deny "no certs dir"
+# prefer the full trusted chain; fall back to the root CA cert
+pem=$(ls ca-trusted.pem 2>/dev/null || ls *-ISSUING-CA-trusted.pem 2>/dev/null | head -1 || ls ca.pem 2>/dev/null | head -1)
+[[ -n "$pem" && -f "$pem" ]] || deny "no CA certificate found"
+echo "CA $pem"
+cat "$pem"

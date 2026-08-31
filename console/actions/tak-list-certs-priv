@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# tak-list-certs-priv - the one privileged step behind list-certs: read /opt/tak/certs/files and
+# report each client certificate with days-until-expiry. Read-only. Skips the CA, the *-trusted
+# bundles and the server's own cert; shows soonest-to-expire first.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+CERTS=/opt/tak/certs/files
+[[ -d "$CERTS" ]] || deny "no cert directory at $CERTS"
+
+echo "OK list-certs"
+echo "----"
+printf '%-30s %-9s %s\n' "NAME" "DAYS" "EXPIRES"
+now=$(date +%s)
+{
+  for pem in "$CERTS"/*.pem; do
+    [[ -e "$pem" ]] || continue
+    b=$(basename "$pem" .pem)
+    case "$b" in ca|*-trusted|*-signing|takserver|intermediate*) continue;; esac
+    end=$(openssl x509 -in "$pem" -noout -enddate 2>/dev/null | sed 's/notAfter=//') || continue
+    ends=$(date -d "$end" +%s 2>/dev/null || echo 0)
+    days=$(( (ends - now) / 86400 ))
+    printf '%-30s %-9s %s\n' "$b" "$days" "$end"
+  done
+} | sort -k2 -n

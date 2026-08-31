@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <queries>
+        <package android:name="com.geeksville.mesh" />
+    </queries>
+    <!-- Cleartext is interim: the TLS pin-set replaces it in the transport slice (Spec 002;
+         tracked on docs/compliance-watch.md item 3). Tailnet legs run inside WireGuard. -->
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="Vantage Deployed"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.AppCompat.DayNight">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".JoinActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".PacksActivity" android:exported="false" />
+        <activity android:name=".ConflictsActivity" android:exported="false" />
+        <activity android:name=".DeploymentActivity" android:exported="false" />
+        <activity android:name=".AskActivity" android:exported="false" />
+        <service
+            android:name=".MeshBearerService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+        <!-- Meshtastic delivers packets by explicit broadcast to this named component. -->
+        <receiver android:name=".MeshPacketReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.geeksville.mesh.RECEIVED.PRIVATE_APP" />
+                <action android:name="com.geeksville.mesh.RECEIVED.256" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <activity android:name=".NoteActivity" android:exported="false" />
+        <activity android:name=".GraphActivity" android:exported="false" />
+        <activity android:name=".SearchActivity" android:exported="false" />
+        <activity android:name=".NewEntityActivity" android:exported="false" />
+        <!-- Hands a pulled pack to ATAK via the share sheet; read-only, packs dir only. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="uk.co.milux.vantagedeployed.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

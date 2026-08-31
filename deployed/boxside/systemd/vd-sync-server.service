@@ -1,0 +1,48 @@
+# Vantage Deployed sync server: serves one vault to enrolled EUDs over the signed transport,
+# and the operator admin surface the console's Sync page drives. One box, one unit.
+#
+# Install (per box):
+#   sudo install -m 0644 vd-sync-server.service /etc/systemd/system/
+#   sudo install -m 0640 vd-sync.env.example /etc/vantage-deployed/vd-sync.env   # then edit
+#   sudo systemctl daemon-reload && sudo systemctl enable --now vd-sync-server
+#
+# The service user must be in the vault's group (vaultsync on the MilUX estate) so write-back
+# lands in the vault; the state dir is its own, read-write.
+[Unit]
+Description=Vantage Deployed sync server (EUD vault + pack sync, operator admin surface)
+Documentation=https://github.com/MilUX-Ltd/vantage
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# User, Group and SupplementaryGroups are set by the installer (a drop-in), because the
+# service user must belong to the vault's group so write-back lands. See the estate example:
+#   [Service]
+#   User=<svc>
+#   SupplementaryGroups=<vault group, e.g. vaultsync>
+EnvironmentFile=/etc/vantage-deployed/vd-sync.env
+ExecStart=/usr/bin/python3 ${VD_INSTALL}/boxside/bin/vd-sync-server.py \
+    --state-dir ${VD_STATE_DIR} --bind ${VD_BIND} --port ${VD_PORT} \
+    --box ${VD_BOX} --base-url ${VD_BASE_URL} --vault ${VD_VAULT}
+Restart=always
+RestartSec=5
+UMask=0002
+
+# Hardened, but able to write its state dir and the vault it serves. ProtectSystem=full keeps
+# /usr, /boot and /etc read-only while leaving the data paths (/srv, /var, /home) writable, so
+# the site's state dir and vault paths need no ReadWritePaths listing. Do NOT use
+# ProtectSystem=strict with ReadWritePaths=${...}: systemd does not expand environment
+# variables in ReadWritePaths, so it silently ignores them and the vault becomes read-only,
+# which fails write-back. If strict is wanted, the installer's drop-in must list the state dir
+# and vault as LITERAL absolute paths.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

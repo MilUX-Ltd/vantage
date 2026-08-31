@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# tak-set-loadout-priv - write this box's declared loadout (Spec 002, ADR 004): the
+# second validation gate, then an atomic rewrite of /etc/tak-health.d/loadout.conf by
+# python3 (temp file + rename, 0644 root:root). The vocabulary here mirrors the checker's
+# component map in common/tak-health.sh; a token unknown to either side is refused whole,
+# because silently dropping one would be silent narrowing.
+#
+# "clear" removes the declaration entirely: the profile's full historical expectations
+# return. An EMPTY components list is refused - it would silence every check, and that
+# is what clear says explicitly.
+#
+# Root-only via the sudoers-scoped wrapper:
+#   takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-set-loadout-priv
+set -euo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+
+comps="${1:-}"; tiles="${2:--}"
+[[ -n "$comps" ]] || deny "usage: tak-set-loadout-priv <components-csv|clear> [tilesets|-]"
+[[ "$tiles" == "-" || "$tiles" =~ ^[0-9]{1,3}$ ]] || deny "tilesets must be a small number or -"
+
+LOADOUT_FILE=/etc/tak-health.d/loadout.conf
+old="none"
+[[ -r "$LOADOUT_FILE" ]] && old=$(grep -m1 '^COMPONENTS=' "$LOADOUT_FILE" 2>/dev/null | cut -d= -f2- || true)
+[[ -n "$old" ]] || old="none"
+
+if [[ "$comps" == "clear" ]]; then
+    rm -f "$LOADOUT_FILE"
+    echo "LOADOUT was=$old now=none (declaration cleared; the profile's full expectations return)"
+    exit 0
+fi
+
+[[ ${#comps} -le 200 ]] || deny "components list too long"
+[[ "$comps" =~ ^[a-z]+(,[a-z]+)*$ ]] || deny "components must be a comma list of [a-z]+ tokens"
+
+# Whole-line vocabulary check, duplicates refused, takserver required: a TAK box
+# whose declaration omits its TAK server is a mistake, not a choice.
+VOCAB=" takserver cloudtak mediamtx maps takbot mosquitto nodered ollama lanntp mesh tailscale docker "
+seen=" "
+IFS=, read -ra _toks <<<"$comps"
+for t in "${_toks[@]}"; do
+    [[ "$VOCAB" == *" $t "* ]] || deny "unknown component '$t' - the whole declaration is refused"
+    [[ "$seen" == *" $t "* ]] && deny "duplicate component '$t' - the whole declaration is refused"
+    seen="$seen$t "
+done
+[[ "$seen" == *" takserver "* ]] || deny "the declaration must include takserver"
+
+# Atomic write by python3: temp file in the same directory, fsync, rename. The
+# operator's text reaches the file only as this validated, reassembled value.
+COMPS="$comps" TILES="$tiles" python3 - <<'PY'
+import os
+comps = os.environ["COMPS"]
+tiles = os.environ["TILES"]
+d = "/etc/tak-health.d"
+os.makedirs(d, mode=0o755, exist_ok=True)
+tmp = os.path.join(d, ".loadout.conf.tmp")
+lines = ["# written by tak-set-loadout-priv; the checker reads COMPONENTS= and TILESETS=\n",
+         f"COMPONENTS={comps}\n"]
+if tiles != "-":
+    lines.append(f"TILESETS={tiles}\n")
+with open(tmp, "w") as fh:
+    fh.writelines(lines)
+    fh.flush()
+    os.fsync(fh.fileno())
+os.chmod(tmp, 0o644)
+os.replace(tmp, os.path.join(d, "loadout.conf"))
+PY
+echo "LOADOUT was=$old now=$comps$([[ "$tiles" != "-" ]] && echo " tilesets=$tiles")"

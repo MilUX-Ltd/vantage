@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# tak-console-mode-priv - the single privileged step behind the console-mode action: set the
+# role (admin|client) of the Vantage console running on THIS box, then restart it so the change
+# takes effect.
+#
+# Runs as root, reachable ONLY through a scoped sudoers rule from the takadmin user:
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-console-mode-priv
+# It re-validates its one argument (defence in depth), edits ONLY the console_mode field of the
+# console's instance identity (never the whole file), and restarts whichever console unit this
+# box actually runs. It touches nothing else.
+#
+# The role is a property of the console on THIS box - its own authority level. The admin console
+# asks for the change over its single-purpose key; this wrapper is what actually applies it. A box
+# that runs no Vantage console has nothing to set, and this refuses cleanly.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+role="${1:-}"
+[[ "$role" == "admin" || "$role" == "client" ]] || deny "role must be admin or client"
+
+# the real path; overridable only for testing (sudo strips the environment in production,
+# so the live wrapper always uses the default)
+INST="${VANTAGE_CONSOLE_INSTANCE:-/etc/vantage-console/instance.json}"
+[[ -f "$INST" ]] || deny "no Vantage console on this box (no $INST) - install a console here first"
+
+# Edit ONLY console_mode, preserving every other field. Python is present wherever the console
+# runs (the console itself is a stdlib Python program). Write atomically via a temp file + rename.
+python3 - "$INST" "$role" <<'PY' || deny "could not update the console identity"
+import json, os, sys, tempfile
+path, role = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as fh:
+        d = json.load(fh)
+    if not isinstance(d, dict):
+        d = {}
+except Exception:
+    d = {}
+d["console_mode"] = role
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".instance.", suffix=".json")
+try:
+    with os.fdopen(fd, "w") as fh:
+        json.dump(d, fh)
+    os.replace(tmp, path)
+finally:
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+PY
+
+# Ownership: instance.json belongs to the console user so the running console can read it.
+chown vantage-console:vantage-console "$INST" 2>/dev/null || true
+chmod 0644 "$INST" 2>/dev/null || true
+
+# Restart whichever console unit this box actually runs (admin edition = vantage-console,
+# deployed edition = vantage-console-deployed) so the new role takes effect.
+unit=""
+for u in vantage-console-deployed.service vantage-console.service; do
+    if systemctl list-unit-files "$u" >/dev/null 2>&1 && systemctl cat "$u" >/dev/null 2>&1; then
+        unit="$u"; break
+    fi
+done
+[[ -n "$unit" ]] || deny "no vantage-console unit on this box to restart"
+
+systemctl restart "$unit" || deny "systemctl restart $unit failed (rc=$?)"
+state=$(systemctl is-active "$unit" 2>/dev/null || true)
+
+echo "OK role $role"
+echo "STATE ${state:-unknown}"
