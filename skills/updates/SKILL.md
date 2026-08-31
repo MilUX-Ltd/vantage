@@ -1,10 +1,10 @@
 ---
-name: update-estate
+name: updates
 description: Work out where a Vantage estate stands against the current release and the third-party baseline, and prepare an update up to the point a person applies it. Use when asked whether the estate is current, what a new release contains, whether anything is behind upstream, or to get a release ready to go. Stages and reports; never applies.
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 2addb0369f6adba9
+audit_sha: 7e9a7d8796460e86
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -85,6 +85,34 @@ because the honest answer is "verified as intact, not as authentic".
 > waiting on this. Shall I put it in front of you to apply?
 
 Then stop.
+
+## Bringing the boxes up, not just the console
+
+A release lands on the console. The boxes are still reporting through whatever they were last
+given, which is exactly the drift an operator sees on the board after an update.
+
+**`push-checker`** &rarr; `console/actions/tak-push-checker` updates one box to the current
+health checker so it stops reporting stale results. `estate_update` does this for every enrolled
+box at once; it is idempotent and decision-free, and it deliberately never redeploys a box's
+console, because installing a console rewrites the address it listens on and guessing that for a
+box somebody configured on purpose is how a working box goes quiet.
+
+**`update-cloudtak`** &rarr; `console/actions/tak-update-cloudtak` applies the pinned CloudTAK
+compose, pulling the pinned images.
+
+**`load-images`** &rarr; `console/actions/tak-load-images` loads a saved image tarball from the
+admin box. This is the offline path: an estate with no route out gets its container images
+carried in rather than pulled.
+
+**`upgrade-server`** &rarr; `console/actions/tak-upgrade-server` upgrades TAK Server in place from
+a package on the operator's shelf. It is `destructive`, it backs up the configuration first, and
+it is the one on this page to hand over every time whatever your autonomy: it is the estate's
+reason for existing, the package is licensed and operator-supplied, and an upgrade during the
+wrong week is not recoverable by rolling a file back.
+
+Report the two kinds of drift separately, because they lead to different decisions: the console
+being behind the published release, and boxes running components that differ from what the
+release pins.
 
 ## On a schedule
 

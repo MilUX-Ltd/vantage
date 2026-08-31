@@ -179,9 +179,18 @@ actions only, works against Cyber Essentials rather than a sweep that produces p
 on, and says plainly what it did not cover. Its highest-value check is certificates against
 people, because deleting an account does not revoke a certificate and the failure is silent.
 
-**`update-estate`** works out where you stand against a release and gets it ready. It is careful
+**`updates`** works out where you stand against a release and gets it ready. It is careful
 about one claim that is easy to overstate: a matching checksum proves the archive arrived intact,
 not that it is authentic.
+
+**`operations`** is the daily work: issuing and revoking certificates, enrolling devices,
+managing users and groups, reading and backing up the configuration. It carries the rule that
+catches people out, that deleting an account does not revoke a certificate.
+
+**`deploy-server`** takes a bare machine to a managed server, stage by stage, with how each stage
+fails. **`federation`** and **`networks`** cover what reaches past your own estate: a partner's
+server, a private network, the radio mesh. **`vantage-internals`** is where everything lives, for
+working over SSH or reading what a script will really do.
 
 **`estate-brief`** builds and maintains the standing brief the agent reads at the start of every
 session. Most of it is derivable from your estate, so it drafts what it can and asks only about

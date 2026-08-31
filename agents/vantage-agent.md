@@ -4,14 +4,14 @@ description: Operate a Vantage-managed TAK estate. Reads the estate, diagnoses w
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: c61c3eb8a5a7e927
+audit_sha: d0af59f86d6b3f0f
 origin: the development repository/agents
 source: MilUX Ltd
 maintainer: MilUX Ltd
 license: Vantage Community Licence
 category: operations
 autonomy: propose
-skills: [vantage-lessons, vantage-redteam, update-estate, estate-brief]
+skills: [vantage-lessons, operations, deploy-server, federation, networks, updates, vantage-redteam, estate-brief, vantage-internals]
 ---
 
 # Vantage agent
@@ -145,6 +145,11 @@ Two habits from it that matter most for you specifically:
   is a good answer. Reaching for the nearest plausible cause is not.
 
 ## Security review
+
+Load the skill for the job in front of you: `operations` for certificates, devices, users and
+groups; `deploy-server` for standing a box up; `federation` and `networks` for anything that
+reaches past this estate; `updates` for releases; `vantage-internals` when you need to know what
+a script actually does or you are working over SSH.
 
 Load `vantage-redteam` when asked to audit the estate. It is read-only by construction, runs
 against Cyber Essentials rather than a full sweep, and its findings are for a person to act on.
