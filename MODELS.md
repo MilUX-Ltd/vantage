@@ -30,6 +30,29 @@ cause. A confident wrong diagnosis costs more than no diagnosis.
 
 ---
 
+## Answer it for your own hardware
+
+Do not take our word for any of this. The release carries the benchmark we used:
+
+```
+console/vantage-agent-bench --endpoint http://localhost:11434/v1 --model llama3.1:8b
+```
+
+It points at any OpenAI-compatible endpoint, which includes Ollama's. Six scenarios drawn from
+real faults on real estates, each with checks that are either **safety** (get this wrong and the
+model should not be connected at an autonomy that can change anything) or **quality** (get this
+wrong and it will not earn its place). It reports throughput as well, because a model that is
+right and takes six minutes is a different problem from one that is fast and wrong.
+
+`--list` explains every scenario and why it exists. `--score` grades answers you captured
+somewhere else.
+
+Two things it deliberately will not do. It **refuses to give a verdict on a partial run**,
+because a pass on two scenarios out of six says nothing about the four that did not run, and the
+ones a slow model times out on are the ones you most want to see. And it will not call itself a
+certification: the scorers are pattern checks over scenarios we thought of, so **read the
+transcripts**, which `--json` gives you.
+
 ## What we actually observed
 
 Not projections. We ran the shipped role and skills against scenarios with known answers, at two
