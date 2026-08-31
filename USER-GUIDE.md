@@ -354,10 +354,70 @@ and which boxes are running something else. **Adopt this release as the baseline
 baseline to what the release ships, so the drift shown on Overview is measured against what
 is published rather than values typed in by hand. It changes no box.
 
-Applying an update is not automatic and is not in this release: today the panel tells you
-what is current, where you deviate, and links you to it. Pulling, verifying and applying a
-release, and doing the same from a USB bundle on a box with no internet, are the next steps
-(Spec 004).
+**Download this release to the shelf** fetches the published archive, checks it against the
+checksum published beside it, and stops there. Staging is not applying: nothing is installed
+and no box is touched. What that check proves is that the archive arrived whole; it is a
+checksum, not a signature, so it guards against a broken download rather than a compromised
+publisher.
+
+**Install it on this box** then applies a staged release here. The console restarts as part
+of it, so the page drops for a moment; reload and the result is shown. If the new version
+does not come up within its window, **the previous one is put back automatically** and the
+panel says so. The version it replaced is kept, so there is always a way back.
+
+**Update the checker on every box** pushes this console's health checker across the estate,
+so boxes stop reporting against a stale one and the versions on Overview mean something. It
+pushes only the checker: installing a console rewrites the address a box listens on, and that
+is not something to guess for a box you configured deliberately, so the consoles on the boxes
+are left for you to redeploy one at a time from their own pages.
+
+**Copy it to a USB stick** writes the staged release onto a stick, and **File store > Import
+software from a USB stick** takes it off again on the other side. A release carried in lands
+on the same shelf a downloaded one does, so installing it is the same act either way. That is
+what makes a box with no internet updatable rather than only rebuildable.
+
+## Building a server with no internet at all
+
+A TAK server needs more than the console: PostgreSQL, PostGIS, a Java runtime, and apt to
+resolve the TAK package's own dependencies. On a disconnected box none of that can be
+fetched, so it travels with you.
+
+**While you still have internet**, on an Ubuntu box of the same release as the target:
+
+    sudo vantage-build-offline-bundle --deb /path/to/takserver_<version>.deb
+
+That collects the packages the build needs *and everything they depend on* (apt works out the
+dependencies; a hand-written list goes stale silently), builds a real package index, and
+carries the TAK Server package you point it at. TAK Server is licensed, so it is never
+downloaded, only carried. Copy the whole folder to a stick, along with the Vantage release.
+
+**On the offline box**, with no network at any point:
+
+1. Install the console from the release archive, as above.
+2. Put the TAK Server package on the shelf: *File store > Import software from a USB stick*.
+3. Build, pointing the provisioner at the bundle:
+
+        sudo vantage-tak-provision.sh --deb <takserver.deb> --offline-repo /media/usb/vantage-offline-<...>/apt ...
+
+The bundle becomes a local apt repository, so apt resolves dependencies exactly as it would
+online and a missing one is a clear error before the build rather than a broken server after
+it. A bundle only installs on the Ubuntu release and architecture it was built for, and it
+records both so the far end can refuse a mismatch.
+
+**The certificate on an offline build.** Let's Encrypt proves control of a public name over
+the public internet, which a disconnected box cannot do, so that step is not attempted. The
+box uses the certificate its own CA issued during the build instead, on all three connectors:
+8089 for CoT, 8443 for web and admin, and 8446 for device enrolment. Everything works,
+including enrolling handsets; what you do not get is a *browser-trusted* certificate, so
+browsers and devices will warn the first time. On a closed network that is unavoidable and
+expected, not a sign the build went wrong. Use `--no-letsencrypt` to make the same choice on
+a connected box.
+
+The optional modules (CloudTAK, MediaMTX, offline maps, Node-RED, Ollama) still fetch what
+they need when they install, so leave them out of a disconnected build: declare the box's
+loadout as TAK Server only and its health checks will read "not fitted" rather than failing.
+They can be added later, from the Store, once the box has a connection or their artefacts
+have been staged.
 
 ## Modes: admin and client
 

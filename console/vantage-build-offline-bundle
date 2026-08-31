@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# vantage-build-offline-bundle - collect everything a disconnected box needs to build a TAK
+# server, so the whole install can be carried in on a stick.
+#
+# Run this ON AN UBUNTU BOX WITH INTERNET, of the SAME release as the target. Debian packages
+# are built against a distribution; a bundle made on noble installs on noble. It refuses to
+# guess, and stamps what it made so the far end can refuse a mismatch rather than half-install.
+#
+#     vantage-build-offline-bundle [--out DIR] [--deb /path/takserver_x.deb]
+#
+# What it gathers:
+#   - every .deb needed for PostgreSQL + PostGIS, a 17 JRE, and the hardening packages,
+#     WITH their dependencies resolved by apt itself rather than guessed by a list
+#   - a package index, so the far end can use it as a real apt repository and let apt do the
+#     dependency work offline exactly as it would online
+#   - the TAK Server .deb, if you point at one (it is licensed, so it is never downloaded)
+#
+# What it deliberately does NOT gather: anything the product can already carry (the Vantage
+# release itself goes on the stick through the console's own USB export), and anything that
+# needs a licence we do not hold.
+set -euo pipefail
+
+die() { echo "ERROR: $*" >&2; exit 2; }
+say() { echo "==> $*"; }
+
+OUT=""; TAKDEB=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --out) OUT="${2:-}"; shift 2 ;;
+        --deb) TAKDEB="${2:-}"; shift 2 ;;
+        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+        *) die "unknown option: $1" ;;
+    esac
+done
+
+command -v apt-get >/dev/null 2>&1 || die "this must run on a Debian/Ubuntu box (no apt-get here)"
+[[ "$(id -u)" == 0 ]] || die "run as root (apt needs it to add the PostgreSQL repository)"
+command -v dpkg-scanpackages >/dev/null 2>&1 || {
+    say "dpkg-dev is needed to build the package index; installing it"
+    apt-get install -y -qq dpkg-dev || die "could not install dpkg-dev"
+}
+
+CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
+ARCH=$(dpkg --print-architecture)
+[[ -n "$CODENAME" ]] || die "could not read this box's Ubuntu codename"
+STAMP=$(date -u +%Y%m%d)
+OUT="${OUT:-$PWD/vantage-offline-$CODENAME-$ARCH-$STAMP}"
+REPO="$OUT/apt"
+mkdir -p "$REPO" || die "could not create $REPO"
+say "building for $CODENAME/$ARCH into $OUT"
+
+# The PostgreSQL repository, because TAK 5.8 wants PostgreSQL 18 and Ubuntu does not carry it.
+if [[ ! -f /etc/apt/sources.list.d/pgdg.list ]]; then
+    say "adding the PostgreSQL repository (needed to fetch 18 + PostGIS)"
+    install -d /usr/share/postgresql-common/pgdg
+    curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc || die "could not fetch the PostgreSQL key"
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list
+fi
+apt-get update -qq || die "apt-get update failed"
+
+# The set the provisioner installs. apt resolves the dependency closure, which is the whole
+# point: a hand-written list of dependencies is a list that goes stale silently.
+# qrencode is here because device enrolment renders its QR codes on the box: without it an
+# offline estate could stand up a server and then have no way to enrol a handset onto it.
+PKGS=(postgresql-18 postgresql-18-postgis-3 openjdk-17-jre-headless
+      ufw unattended-upgrades ca-certificates curl gnupg qrencode)
+say "downloading ${#PKGS[@]} packages and everything they depend on"
+CACHE=$(mktemp -d); trap 'rm -rf "$CACHE"' EXIT
+# --download-only with a private cache: we want the .debs, not an install on THIS box
+apt-get install -y -q --download-only --reinstall \
+    -o "Dir::Cache::archives=$CACHE" "${PKGS[@]}" \
+    || die "could not download the package set"
+found=$(find "$CACHE" -name '*.deb' | wc -l)
+[[ "$found" -gt 0 ]] || die "apt downloaded nothing"
+cp "$CACHE"/*.deb "$REPO/" 2>/dev/null || die "could not collect the packages"
+say "collected $found packages"
+
+# The TAK Server .deb is licensed: it is never downloaded, only carried if you point at one.
+if [[ -n "$TAKDEB" ]]; then
+    [[ -f "$TAKDEB" ]] || die "--deb not found: $TAKDEB"
+    head -c 8 "$TAKDEB" | grep -q '!<arch>' || die "--deb is not a Debian package"
+    mkdir -p "$OUT/takserver"
+    cp -f "$TAKDEB" "$OUT/takserver/" || die "could not copy the TAK Server package"
+    say "carried $(basename "$TAKDEB")"
+else
+    say "no TAK Server package given (--deb); add one to $OUT/takserver/ before you travel"
+    mkdir -p "$OUT/takserver"
+fi
+
+# The index that makes this a real apt repository rather than a pile of files.
+say "building the package index"
+( cd "$REPO" && dpkg-scanpackages . /dev/null > Packages 2>/dev/null && gzip -9kf Packages ) \
+    || die "could not build the package index"
+
+cat > "$OUT/BUNDLE" <<EOF
+{
+  "kind": "vantage-offline-bundle",
+  "codename": "$CODENAME",
+  "arch": "$ARCH",
+  "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "packages": $found
+}
+EOF
+
+cat > "$OUT/README.txt" <<EOF
+Vantage offline bundle - $CODENAME/$ARCH, built $(date -u +%Y-%m-%d)
+
+Carry this whole folder to the offline box (a USB stick is fine), then:
+
+  1. Install the console:
+       tar -xzf vantage-<version>.tgz && cd vantage/console
+       sudo ./install-vantage.sh --bind <address>
+
+  2. Put the TAK Server package on the console's shelf:
+       File store > Import software from a USB stick
+
+  3. Build the server, pointing the provisioner at this bundle:
+       sudo vantage-tak-provision.sh --deb <takserver.deb> \\
+            --offline-repo $(basename "$OUT")/apt ...
+
+The bundle carries the packages the build needs (PostgreSQL, PostGIS, a Java runtime and the
+hardening set) with their dependencies, so the box never reaches for the internet. It was
+built for $CODENAME on $ARCH: a bundle only installs on the release it was built for.
+EOF
+
+SIZE=$(du -sh "$OUT" | cut -f1)
+say "done: $OUT ($SIZE)"
+say "copy the whole folder to a stick; the far end needs --offline-repo pointed at its apt/ dir"

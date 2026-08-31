@@ -74,6 +74,10 @@ install -m 0755 "$SRC/vantage-console-serve.py"   "$LIB/"
 install -m 0755 "$SRC/vantage-console-collect.py" "$LIB/"
 install -m 0755 "$SRC/console-enrol-server.sh"  /usr/local/bin/console-enrol-server
 install -m 0755 "$SRC/actions/console-setup-priv" /usr/local/bin/console-setup-priv
+# the update helper runs DETACHED from the console (it restarts it), so it lives in
+# /usr/local/bin rather than the console library
+install -m 0755 "$SRC/vantage-apply-release" /usr/local/bin/vantage-apply-release
+install -m 0755 "$SRC/vantage-build-offline-bundle" /usr/local/bin/vantage-build-offline-bundle
 # the full action catalogue lives on the console as the SOURCE enrolment pushes to
 # every box it manages - the whole gated-management surface travels from here
 for a in "$SRC"/actions/tak-*; do

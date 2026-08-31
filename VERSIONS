@@ -1,6 +1,6 @@
 {
-  "vantage": "0.9.0-beta",
-  "console": "2.23.0",
+  "vantage": "0.9.1-beta",
+  "console": "2.27.0",
   "components": {
     "tak-health": "1.9.1",
     "cloudtak": "v13.70.0",

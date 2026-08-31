@@ -40,6 +40,8 @@ set -uo pipefail
 # ---------------------------------------------------------------------------- parameters
 FQDN="" LE_EMAIL="" ORG="MilUX" ORG_UNIT="TAK" COUNTRY="GB" STATE="England" CITY="London"
 DEB="" COMPONENTS="" ONLY_STAGE="" DRY=0 CA_PASS_CHOICE=""
+OFFLINE_REPO=""      # --offline-repo: build from a carried-in package bundle
+NO_LE=0              # --no-letsencrypt: skip the public-certificate stage
 # needrestart list-mode: apt inside a provision must never auto-restart services. On a
 # single-box install the console IS on this box, and needrestart restarting it kills the
 # job that is driving the provision (bitten live, 27 Aug). Deferred restarts land at the
@@ -60,6 +62,10 @@ while [[ $# -gt 0 ]]; do
         --state) STATE="${2:-}"; shift 2 ;;
         --city) CITY="${2:-}"; shift 2 ;;
         --deb) DEB="${2:-}"; shift 2 ;;
+        # point at a bundle's apt/ directory to build with no internet at all
+        --offline-repo) OFFLINE_REPO="${2:-}"; shift 2 ;;
+        # skip the browser-trusted 8446 connector: no public DNS, or you do not want it
+        --no-letsencrypt) NO_LE=1; shift ;;
         --components) COMPONENTS="${2:-}"; shift 2 ;;
         --stage) ONLY_STAGE="${2:-}"; shift 2 ;;
         --ca-pass) CA_PASS_CHOICE="${2:-}"; shift 2 ;;
@@ -120,12 +126,40 @@ capass() {
 # apt fully up to date, ufw scoped to exactly the TAK ports, unattended-upgrades on.
 # Re-runnable. Ports mirror the cloud box: 22 ssh, 80 for the LE HTTP-01 challenge,
 # 8089 CoT, 8443/8446 the web/admin/enrolment connectors.
+# ---------------------------------------------------------------------------- offline apt
+# With --offline-repo pointing at a bundle's apt/ directory, every package the build needs is
+# taken from there and the box never reaches for the internet. apt still resolves the
+# dependencies: the bundle is a real repository with an index, not a pile of .debs, so a
+# missing dependency is a clear apt error here rather than a half-installed server later.
+#
+# The restricted sourcelist matters. Updating with the box's normal sources on a
+# disconnected box fails on every unreachable one; pointing apt at ONLY the local list makes
+# the update succeed and the install deterministic.
+APT_LOCAL_LIST=/etc/apt/sources.list.d/vantage-offline.list
+APT_ONLY_LOCAL=""
+apt_prepare() {
+    export DEBIAN_FRONTEND=noninteractive
+    if [[ -n "$OFFLINE_REPO" ]]; then
+        [[ -d "$OFFLINE_REPO" ]] || die "--offline-repo $OFFLINE_REPO is not a directory"
+        [[ -f "$OFFLINE_REPO/Packages" || -f "$OFFLINE_REPO/Packages.gz" ]] \
+            || die "--offline-repo has no package index; point at the bundle's apt/ directory"
+        log "using the offline package bundle at $OFFLINE_REPO"
+        run "sh -c 'echo \"deb [trusted=yes] file:$OFFLINE_REPO ./\" > $APT_LOCAL_LIST'"
+        APT_ONLY_LOCAL="-o Dir::Etc::sourcelist=$APT_LOCAL_LIST -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0"
+        run "apt-get update -qq $APT_ONLY_LOCAL"
+    else
+        run "apt-get update -qq"
+    fi
+}
+apt_install() { run "apt-get install -y -qq $APT_ONLY_LOCAL $*"; }
+
 stage_harden() {
     log "STAGE 1/9 harden"
     export DEBIAN_FRONTEND=noninteractive
-    run "apt-get update -qq"
-    run "apt-get -y -qq upgrade"
-    run "apt-get install -y -qq ufw unattended-upgrades ca-certificates curl gnupg"
+    apt_prepare
+    # a disconnected box has nothing to upgrade FROM, and asking wastes minutes failing
+    [[ -n "$OFFLINE_REPO" ]] || run "apt-get -y -qq upgrade"
+    apt_install ufw unattended-upgrades ca-certificates curl gnupg
     for p in 22 80 8089 8443 8446; do run "ufw allow $p/tcp"; done
     # A box that carries a Vantage console keeps its console reachable: enabling the
     # firewall without this walled off the very page watching the build (bitten live,
@@ -148,7 +182,11 @@ stage_harden() {
 stage_deps() {
     log "STAGE 2/9 dependencies (PostgreSQL, PostGIS, Java)"
     export DEBIAN_FRONTEND=noninteractive
-    if [[ ! -f /etc/apt/sources.list.d/pgdg.list ]]; then
+    if [[ -n "$OFFLINE_REPO" ]]; then
+        # the bundle carries PostgreSQL and PostGIS already; adding a network repository on a
+        # disconnected box would only fail, slowly
+        log "PostgreSQL comes from the offline bundle"
+    elif [[ ! -f /etc/apt/sources.list.d/pgdg.list ]]; then
         run "install -d /usr/share/postgresql-common/pgdg"
         run "curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc"
         run "sh -c 'echo \"deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main\" > /etc/apt/sources.list.d/pgdg.list'"
@@ -157,9 +195,9 @@ stage_deps() {
     # TAK 5.8's .deb depends on PostgreSQL 18 + PostGIS 3; installing it here keeps stage 3
     # a clean dpkg and avoids an orphan older cluster (5.7 wanted 15 - the dev box build of
     # 26 Aug 2026 ended up with both).
-    run "apt-get install -y -qq postgresql-18 postgresql-18-postgis-3"
+    apt_install postgresql-18 postgresql-18-postgis-3
     # OpenJDK 17 (temurin/openjdk both work; the .deb depends on a 17 JRE).
-    run "apt-get install -y -qq openjdk-17-jre-headless"
+    apt_install openjdk-17-jre-headless
     echo "STAGE-OK deps"
 }
 
@@ -175,7 +213,7 @@ stage_install() {
     fi
     [[ -f "$DEB" ]] || die "--deb not found at $DEB"
     export DEBIAN_FRONTEND=noninteractive
-    run "apt-get install -y -qq '$DEB'"   # apt resolves the .deb's own dependencies
+    apt_install "'$DEB'"   # apt resolves the .deb's own dependencies, offline or not
     (( DRY )) || [[ -d /opt/tak ]] || die "install did not create /opt/tak"
     echo "STAGE-OK install"
 }
@@ -297,8 +335,55 @@ PYCC
 # certbot --standalone on port 80 (needs the FQDN resolving here; the console preflights it),
 # export to a JKS keystore, and add the browser-trusted admin/enrolment connector on 8446.
 # The renew hook re-exports the keystore after each certbot renewal.
+# The 8446 connector, in ONE place. ORDER MATTERS: TAK makes the FIRST connector Spring
+# Boot's primary server.ssl, and clientAuth="false" is valid for TAK's own additional-connector
+# handling (it triggers loading the per-connector keystore) but INVALID for Spring Boot's
+# primary (which wants the NONE|WANT|NEED enum). So this connector must be LAST, after 8443
+# (the primary, which carries no clientAuth): then 8443 is a clean primary and 8446 loads its
+# own keystore. Placed before 8443 it crashed the API; placed last with clientAuth=NONE the
+# API ran but 8446 fell back to the CA cert. Last + "false" is the combination proven on a
+# live box (dev box, 25 Aug 2026). Both the public-certificate and own-certificate paths call
+# this, so that hard-won arrangement is written once.
+add_8446_connector() {   # $1 keystore path (relative to /opt/tak)  $2 password  $3 _name
+    local ks="$1" pass="$2" nm="$3" cc=/opt/tak/CoreConfig.xml
+    if (( DRY )) || ! grep -q "$nm" "$cc" 2>/dev/null; then
+        run "sed -i '/<connector port=\"8446\"/d' $cc"
+        local con="<connector port=\"8446\" clientAuth=\"false\" _name=\"$nm\" keystore=\"JKS\" keystoreFile=\"$ks\" keystorePass=\"$pass\" enableAdminUI=\"true\" enableWebtak=\"false\" enableNonAdminUI=\"false\"/>"
+        run "sed -i 's#</network>#${con}</network>#' $cc"
+    fi
+}
+
 stage_letsencrypt() {
     log "STAGE 7/9 Let's Encrypt (8446 admin/enrolment)"
+    # Let's Encrypt proves control of a public name over the public internet: it needs DNS
+    # that resolves to this box and inbound :80. A disconnected box has neither, so this is
+    # skipped rather than attempted - certbot would sit and fail, and the build would stop
+    # one stage from finished. The server is complete without it: TAK still serves 8089 for
+    # CoT and 8443 for the web and admin interface, on the certificates this box's own CA
+    # issued in stage 5. What is missing is only the browser-TRUSTED certificate on 8446, and
+    # nothing on a closed network can obtain one.
+    if (( NO_LE )) || [[ -n "$OFFLINE_REPO" ]]; then
+        local why="--no-letsencrypt"
+        [[ -n "$OFFLINE_REPO" ]] && why="an offline build"
+        log "no public certificate ($why): using this box's own instead"
+        # 8446 is the connector devices enrol against, so leaving it out would give an offline
+        # estate a working server it could never enrol a handset onto. The box's own CA issued
+        # a server keystore in stage 5 under the same password, so 8446 is built exactly as the
+        # public-certificate path builds it - same position, same clientAuth - and differs only
+        # in which keystore it loads. The certificate is not browser-trusted, which on a closed
+        # network is unavoidable and expected.
+        local own="$CERTS/files/${FQDN}.jks"
+        if (( DRY )) || [[ -f "$own" ]]; then
+            add_8446_connector "certs/files/${FQDN}.jks" "$pass" "cert_https_own"
+            log "  8446 serves this box's own certificate; browsers and devices will warn about it"
+        else
+            log "  no server keystore at $own, so no 8446 connector was added"
+            log "  devices cannot enrol by QR without it; issue client certificates instead"
+        fi
+        log "  the server is usable either way: 8089 for CoT, 8443 for web and admin"
+        echo "STAGE-OK letsencrypt (own certificate)"
+        return 0
+    fi
     local pass; pass=$(capass)
     run "apt-get install -y -qq certbot"
     if [[ ! -d /etc/letsencrypt/live/$FQDN ]]; then
@@ -324,21 +409,7 @@ HOOK
     # Replace the example's default 8446 connector with the browser-trusted LE one. The .deb's
     # CoreConfig.example ships a bare <connector port="8446" _name="cert_https"/>; leaving it in
     # means TWO connectors on 8446, which breaks the API process (dev box, 25 Aug 2026). Delete
-    # any existing 8446 connector first, then add ours.
-    local cc=/opt/tak/CoreConfig.xml
-    if (( DRY )) || ! grep -q 'cert_https_LE' "$cc" 2>/dev/null; then
-        run "sed -i '/<connector port=\"8446\"/d' $cc"
-        # ORDER MATTERS. TAK makes the FIRST connector Spring Boot's primary server.ssl, and
-        # clientAuth="false" is valid for TAK's own additional-connector handling (it triggers
-        # loading the per-connector keystore) but INVALID for Spring Boot's primary (which wants
-        # the NONE|WANT|NEED enum). So the LE connector must be LAST, after 8443 (the primary,
-        # which carries no clientAuth): then 8443 is a clean primary and 8446 loads le.jks and
-        # serves the browser-trusted cert. Placed before 8443, it crashed the API; placed last
-        # with clientAuth=NONE, the API ran but 8446 fell back to the CA cert. Last + "false" is
-        # the combination the working cloud box uses (dev box, 25 Aug 2026).
-        local con="<connector port=\"8446\" clientAuth=\"false\" _name=\"cert_https_LE\" keystore=\"JKS\" keystoreFile=\"certs/files/le.jks\" keystorePass=\"$pass\" enableAdminUI=\"true\" enableWebtak=\"false\" enableNonAdminUI=\"false\"/>"
-        run "sed -i 's#</network>#${con}</network>#' $cc"
-    fi
+    add_8446_connector "certs/files/le.jks" "$pass" "cert_https_LE"
     run "echo '0 */12 * * * root certbot -q renew && /opt/tak/renew-tak-le' > /etc/cron.d/tak-le-renew"
     echo "STAGE-OK letsencrypt"
 }

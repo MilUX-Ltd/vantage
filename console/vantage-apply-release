@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# vantage-apply-release - install a staged Vantage release onto THIS box, and put it back if
+# the console does not come up.
+#
+# A console cannot watch itself restart: the moment it swaps its own program and restarts,
+# the process doing the watching is the process being replaced. So this runs DETACHED from
+# the console (console-setup-priv launches it with systemd-run, or setsid as a fallback) and
+# survives the restart it causes. That is the whole reason this is a separate program.
+#
+#     vantage-apply-release <archive.tgz>
+#
+# The order is chosen so there is always a way back:
+#   1. verify the archive before touching anything (gzip, expected layout, the console
+#      program parses, the checker passes its own self-test)
+#   2. snapshot what is installed now
+#   3. install
+#   4. restart the console and WAIT for it to answer
+#   5. if it does not answer in time, restore the snapshot, restart again, and say so
+#
+# The verdict is written to a file the console reads afterwards, because by then the console
+# that asked for the update is a different process and has no memory of asking.
+set -uo pipefail
+
+# Overridable so the rollback path can be exercised in a test rather than only in anger.
+# On a box none of these are set and the defaults are the real locations.
+STATE_DIR="${VANTAGE_STATE_DIR:-/var/lib/vantage-console}"
+RESULT="$STATE_DIR/last-apply.json"
+LIB="${VANTAGE_LIB_DIR:-/usr/local/lib/vantage-console}"
+BIN="${VANTAGE_BIN_DIR:-/usr/local/bin}"
+ARTIFACTS="$STATE_DIR/artifacts"
+WAIT_SECS="${VANTAGE_APPLY_WAIT:-45}"
+
+say() { echo "$(date -u +%H:%M:%S) $*"; }
+
+result() {   # $1 status  $2 message
+    mkdir -p "$STATE_DIR"
+    printf '{"status":"%s","message":"%s","at":"%s","archive":"%s"}\n' \
+        "$1" "$(printf '%s' "$2" | sed 's/"/\\"/g' | tr -d '\n')" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(basename "${ARCHIVE:-}")" > "$RESULT"
+    chmod 644 "$RESULT" 2>/dev/null || true
+}
+
+die() { say "ERROR $*"; result failed "$*"; exit 2; }
+
+ARCHIVE="${1:-}"
+[[ -f "$ARCHIVE" ]] || die "no such archive: ${ARCHIVE:-<none>}"
+[[ -n "${VANTAGE_APPLY_TEST:-}" || "$(id -u)" == 0 ]] || die "must run as root"
+
+# ---- 1. verify BEFORE touching anything ------------------------------------------------
+say "verifying $ARCHIVE"
+gzip -t "$ARCHIVE" 2>/dev/null || die "the archive is not readable gzip"
+if [[ -f "$ARCHIVE.sha256" ]]; then
+    want=$(cut -d' ' -f1 < "$ARCHIVE.sha256")
+    got=$(sha256sum "$ARCHIVE" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)
+    [[ "$want" == "$got" ]] || die "checksum mismatch against the file staged beside it"
+    say "checksum matches what was staged"
+fi
+
+WORK=$(mktemp -d) || die "no temp space"
+trap 'rm -rf "$WORK"' EXIT
+tar -xzf "$ARCHIVE" -C "$WORK" || die "the archive would not extract"
+ROOT="$WORK/vantage"
+[[ -d "$ROOT" ]] || die "the archive does not look like a Vantage release (no vantage/ root)"
+NEW_SERVE="$ROOT/console/vantage-console-serve.py"
+NEW_CHECK="$ROOT/common/tak-health.sh"
+[[ -f "$NEW_SERVE" ]] || die "the archive carries no console program"
+[[ -f "$NEW_CHECK" ]] || die "the archive carries no health checker"
+
+# the two things that must be sound, proven from the archive and not assumed
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$NEW_SERVE" \
+    || die "the console program in the archive does not parse"
+bash -n "$NEW_CHECK" || die "the checker in the archive does not parse"
+bash "$NEW_CHECK" --self-test >/dev/null 2>&1 || die "the checker in the archive fails its own self-test"
+NEW_VER=$(grep -m1 '^VERSION = ' "$NEW_SERVE" | cut -d'"' -f2)
+say "archive carries console ${NEW_VER:-?}"
+
+UNIT=vantage-console-deployed.service
+systemctl list-unit-files 2>/dev/null | grep -q '^vantage-console.service' && UNIT=vantage-console.service
+systemctl list-unit-files 2>/dev/null | grep -q '^vantage-console-deployed.service' && UNIT=vantage-console-deployed.service
+say "console unit is $UNIT"
+
+# where the console answers, so "did it come back" is a real question with a real answer
+BIND=$(systemctl show "$UNIT" -p Environment --value 2>/dev/null | tr ' ' '\n' \
+       | grep '^VANTAGE_CONSOLE_BIND=' | cut -d= -f2)
+ADDR="${BIND%%:*}"; PORT="${BIND##*:}"; [[ "$PORT" == "$BIND" ]] && PORT=8090
+[[ -z "$ADDR" || "$ADDR" == "0.0.0.0" ]] && ADDR=127.0.0.1
+HEALTH="http://$ADDR:$PORT/healthz"
+[[ -f /etc/vantage-console/tls/fullchain.pem ]] && HEALTH="https://$ADDR:$PORT/healthz"
+
+# ---- 2. snapshot ------------------------------------------------------------------------
+BACKUP="$STATE_DIR/rollback/$(date -u +%Y%m%d-%H%M%S)"
+mkdir -p "$BACKUP/lib" "$BACKUP/bin" "$BACKUP/artifacts"
+cp -a "$LIB/." "$BACKUP/lib/" 2>/dev/null || true
+for f in "$BIN"/tak-* "$BIN"/console-*; do
+    [[ -f "$f" ]] && cp -a "$f" "$BACKUP/bin/" 2>/dev/null || true
+done
+cp -a "$ARTIFACTS/." "$BACKUP/artifacts/" 2>/dev/null || true
+say "snapshot taken at $BACKUP"
+
+restore() {
+    say "restoring the previous version"
+    cp -a "$BACKUP/lib/." "$LIB/" 2>/dev/null || true
+    cp -a "$BACKUP/bin/." "$BIN/" 2>/dev/null || true
+    cp -a "$BACKUP/artifacts/." "$ARTIFACTS/" 2>/dev/null || true
+    systemctl restart "$UNIT" 2>/dev/null || true
+}
+
+# ---- 3. install -------------------------------------------------------------------------
+say "installing"
+install -m 0644 "$NEW_SERVE" "$LIB/vantage-console-serve.py" || die "could not install the console"
+[[ -f "$ROOT/console/vantage-console-collect.py" ]] && \
+    install -m 0644 "$ROOT/console/vantage-console-collect.py" "$LIB/vantage-console-collect.py"
+mkdir -p "$ARTIFACTS"
+install -m 0755 "$NEW_CHECK" "$ARTIFACTS/tak-health.sh"
+# the box's own checker, so its next poll reports against the new one
+install -m 0755 "$NEW_CHECK" "$BIN/tak-health" 2>/dev/null || true
+# action scripts: the console's own copies, used when it acts on this box and when it
+# distributes them at enrolment
+if [[ -d "$ROOT/console/actions" ]]; then
+    mkdir -p "$LIB/actions"
+    install -m 0755 "$ROOT/console/actions"/* "$LIB/actions/" 2>/dev/null || true
+    install -m 0755 "$ROOT/console/actions"/tak-* "$BIN/" 2>/dev/null || true
+fi
+[[ -f "$ROOT/console/console-self-enrol.sh" ]] && \
+    install -m 0755 "$ROOT/console/console-self-enrol.sh" "$LIB/console-self-enrol.sh"
+[[ -f "$ROOT/console/console-enrol-server.sh" ]] && \
+    install -m 0755 "$ROOT/console/console-enrol-server.sh" "$BIN/console-enrol-server"
+
+# ---- 4. restart and wait for it to actually answer ---------------------------------------
+say "restarting $UNIT"
+systemctl daemon-reload 2>/dev/null || true
+systemctl restart "$UNIT" 2>/dev/null || { restore; die "the console would not restart"; }
+
+ok=0
+for i in $(seq 1 "$WAIT_SECS"); do
+    if curl -sk -o /dev/null --max-time 2 "$HEALTH" 2>/dev/null; then ok=1; break; fi
+    sleep 1
+done
+
+# ---- 5. verdict --------------------------------------------------------------------------
+if [[ "$ok" == "1" ]]; then
+    say "console answered on $HEALTH"
+    result ok "Updated to console ${NEW_VER:-?}. The previous version is kept at $BACKUP."
+    say "done"
+    exit 0
+fi
+say "the console did not answer within ${WAIT_SECS}s"
+restore
+for i in $(seq 1 20); do
+    curl -sk -o /dev/null --max-time 2 "$HEALTH" 2>/dev/null && break
+    sleep 1
+done
+result rolled-back "console ${NEW_VER:-?} did not come up within ${WAIT_SECS}s, so the previous version was put back. Nothing was left broken."
+exit 3

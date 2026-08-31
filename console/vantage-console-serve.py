@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.23.0"
+VERSION = "2.27.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.0-beta"
+VANTAGE_RELEASE = "0.9.1-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -8131,7 +8131,7 @@ def usb_import_file(data, client):
     if not ok:
         return 400, {"error": (out or "import failed").strip()[:200]}
     staged = (out.replace("OK", "", 1).strip().splitlines() or [""])[-1].strip()
-    if not staged.startswith("/var/lib/vantage-console/agent/usb-import/") or not os.path.isfile(staged):
+    if not staged.startswith(USB_STAGE_DIR.rstrip("/") + "/") or not os.path.isfile(staged):
         return 400, {"error": "the file did not stage"}
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     low = fname.lower()
@@ -8143,6 +8143,27 @@ def usb_import_file(data, client):
             sha.update(head)
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 sha.update(chunk)
+        # A Vantage release carried in on a stick lands on the updates shelf, exactly where
+        # a downloaded one would, so applying it afterwards is the same act whether it came
+        # over the wire or in a pocket. This is what makes an offline box updatable at all.
+        if low.endswith(".tgz"):
+            if head[:2] != b"\x1f\x8b":
+                os.remove(staged)
+                return 400, {"error": "not a gzip archive"}
+            os.makedirs(UPDATES_DIR, exist_ok=True)
+            dest = os.path.join(UPDATES_DIR, fname)
+            os.replace(staged, dest)
+            digest = hashlib.sha256(open(dest, "rb").read()).hexdigest()
+            side = dest + ".sha256"
+            verified = None
+            if os.path.exists(side):
+                verified = open(side).read().split()[0] == digest
+            audit({"action": "usb-import", "target": fname, "result": "OK",
+                   "detail": "release -> updates shelf", "client": client})
+            return 200, {"filed": "updates", "file": fname, "sha256": digest,
+                         "verified": verified,
+                         "note": ("carried in from a stick; nothing is installed until you "
+                                  "apply it")}
         if low.endswith(".deb"):
             if not head.startswith(b"!<arch>"):
                 os.remove(staged); return 400, {"error": "not a Debian package (.deb)"}
@@ -9620,6 +9641,9 @@ def release_deviation(manifest, state, desired):
 # software shelf (that is the app channel), because a staged release is neither installed nor
 # discarded: it is evidence, and an operator should be able to see exactly what is sitting there.
 UPDATES_DIR = os.environ.get("VANTAGE_CONSOLE_UPDATES", os.path.join(STORE_ROOT, "updates"))
+# where the root helper leaves a file it copied off a stick, before the console files it
+USB_STAGE_DIR = os.environ.get("VANTAGE_CONSOLE_USB_STAGE",
+                               "/var/lib/vantage-console/agent/usb-import")
 RELEASE_MAX = int(os.environ.get("VANTAGE_CONSOLE_RELEASE_MAX", str(512 * 1024 * 1024)))
 
 
@@ -9656,6 +9680,105 @@ def staged_releases():
     except FileNotFoundError:
         pass
     return out
+
+
+def last_apply_result():
+    """The verdict of the last apply. Read from disk, because the console that asked for the
+    update was replaced by the one reading this: it cannot remember asking."""
+    try:
+        with open(os.path.join(os.path.dirname(UPDATES_DIR.rstrip("/")), "..", "last-apply.json")) as fh:
+            return json.load(fh)
+    except Exception:
+        pass
+    try:
+        with open("/var/lib/vantage-console/last-apply.json") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def update_estate(client, passphrase="", passphrase_ok=False):
+    """Bring every box up to the checker this console now carries (Spec 004, the estate leg).
+
+    Updating one console is not updating an estate. After this console takes a release, every
+    box is still reporting through whatever checker it was last given, so the board shows
+    versions that have nothing to do with what is released - which is exactly the drift an
+    operator sees today.
+
+    This pushes the checker, and only the checker. It is idempotent, it needs no decisions,
+    and a box either takes it or says why. Consoles on the boxes are deliberately NOT
+    redeployed here: installing a console rewrites the address it listens on, and guessing
+    that for a box someone configured deliberately is how a working box goes quiet. Those are
+    reported instead, for an operator to redeploy one at a time with the settings they meant."""
+    cfg = load_actions_config()
+    tgts = (cfg or {}).get("targets") or {}
+    if "push-checker" not in enabled_actions(cfg):
+        return 400, {"error": "this console is not enrolled for push-checker, so it cannot "
+                              "update the estate's checkers"}
+    state, _ = load_state()
+    by_name = {t.get("name"): t for t in (state or {}).get("targets", [])}
+    here = checker_version_here()
+    results, failed = [], []
+    for name in sorted(tgts):
+        was = None
+        for sw in software_rows(by_name.get(name) or {}):
+            if sw.get("name") == "tak-health":
+                was = sw.get("version")
+        code, res = run_action("push-checker", name, {}, passphrase, True, client,
+                               passphrase_ok=passphrase_ok)
+        ok = code == 200
+        results.append({"box": name, "ok": ok, "was": was, "now": here if ok else was,
+                        "detail": (res.get("message") or res.get("error") or "")[:140]})
+        if not ok:
+            failed.append(name)
+    behind = [{"box": n, "version": (by_name.get(n) or {}).get("console_version")}
+              for n in sorted(tgts)]
+    audit({"action": "update-estate", "target": "estate", "client": client,
+           "result": "OK" if not failed else "PARTIAL", "detail": ",".join(failed)})
+    msg = (f"Checker {here} pushed to {len(results) - len(failed)} of {len(results)} boxes."
+           if here else f"Checker pushed to {len(results) - len(failed)} of {len(results)} boxes.")
+    if failed:
+        msg += " Not updated: " + ", ".join(failed) + "."
+    msg += (" Consoles on the boxes are not touched here: redeploy one from its own page when "
+            "you want it on this version, so its address and kiosk stay as you set them.")
+    return (200 if not failed else 502), {"results": results, "failed": failed, "message": msg}
+
+
+def checker_version_here():
+    """The checker version this console would hand out, read from the artefact it holds."""
+    art = resolve_artifact("tak-health.sh")
+    if not art:
+        return ""
+    try:
+        with open(art) as fh:
+            for line in fh:
+                if line.startswith("VERSION="):
+                    return line.split("=", 1)[1].strip().strip('"')
+    except Exception:
+        pass
+    return ""
+
+
+def apply_release(data, client):
+    """Install a staged release on THIS box. The console hands the job to a detached root
+    helper and then loses contact, because the next thing that happens is its own restart.
+    The helper verifies the archive, snapshots what is installed, installs, restarts, waits
+    for the console to answer, and puts the old version back if it does not. The verdict is
+    left on disk for whichever console comes back to read."""
+    fname = str(data.get("file", ""))
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}\.tgz", fname):
+        return 400, {"error": "file must be a staged .tgz"}
+    if not os.path.isfile(os.path.join(UPDATES_DIR, fname)):
+        return 404, {"error": f"{fname} is not on the updates shelf"}
+    ok, txt = setup_helper("apply-release", "apply", fname, timeout=30)
+    audit({"action": "apply-release", "target": fname, "client": client,
+           "result": "STARTED" if ok else "FAIL", "detail": txt[:160]})
+    if not ok:
+        return 500, {"error": txt[:300] or "could not start the update"}
+    return 200, {"applying": fname,
+                 "message": "Applying. This console restarts as part of it, so this page will "
+                            "drop for a moment; reload it and the result will be shown. If the "
+                            "new version does not come up, the old one is put back on its own."}
 
 
 def start_release_pull(data, client):
@@ -9857,9 +9980,60 @@ b.addEventListener('click',function(){
       (l.published?(' ('+l.published.slice(0,10)+')'):'')+'.'));
     if(l.url){var a=document.createElement('a');a.href=l.url;a.target='_blank';
       a.rel='noopener noreferrer';a.textContent='Open it on GitHub \u203a';r.appendChild(a);}
+    var eb=el('button','a-go','Update the checker on every box'); eb.type='button';
+    eb.addEventListener('click',function(){
+      var pw=document.querySelector('#upwrap .up-pass');
+      if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+      if(!confirm('Push this console\u2019s health checker to every box in the estate?\n\n'+
+        'It only updates the checker, so boxes stop reporting against a stale one. '+
+        'Consoles on the boxes are not touched.')) return;
+      eb.disabled=true; eb.textContent='Updating the estate\u2026';
+      var lg=el('pre','deplog',''); r.appendChild(lg);
+      fetch('/api/updates/estate',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({passphrase:pw?pw.value:''})})
+       .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+       .then(function(x){ eb.disabled=false; eb.textContent='Update the checker on every box';
+         (x.o.results||[]).forEach(function(q){
+           lg.textContent+=(q.ok?'OK   ':'FAIL ')+q.box+'  '+(q.was||'?')+' \u2192 '+(q.now||'?')+
+             (q.detail?('  '+q.detail):'')+'\n'; });
+         r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
+       .catch(function(){ eb.disabled=false; eb.textContent='could not reach the console'; });
+    });
+    r.appendChild(eb);
+    if(j.last_apply){ r.appendChild(el('div','meta','Last install: '+j.last_apply.status+
+      ' \u2014 '+(j.last_apply.message||''))); }
     (j.staged||[]).forEach(function(sg){
       r.appendChild(el('div','meta','On the shelf: '+sg.file+' ('+Math.round(sg.size/1048576)+' MB)'+
         (sg.verified?', checksum verified':', not checked against a published value')));
+      var ub=el('button','a-go','Copy it to a USB stick'); ub.type='button';
+      ub.addEventListener('click',function(){
+        var pw=document.querySelector('#upwrap .up-pass');
+        if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+        ub.disabled=true; ub.textContent='Copying\u2026';
+        fetch('/api/usb-export',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({folder:'updates', passphrase:pw?pw.value:''})})
+         .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+         .then(function(x){ ub.disabled=false;
+           ub.textContent=(x.code===200)?'Copied to the stick':'Copy failed';
+           r.appendChild(el('div','meta',(x.o.copied||x.o.error||''))); })
+         .catch(function(){ ub.disabled=false; ub.textContent='could not reach the console'; });
+      });
+      r.appendChild(ub);
+      var ib=el('button','a-go','Install '+sg.file+' on this box'); ib.type='button';
+      ib.addEventListener('click',function(){
+        var pw=document.querySelector('#upwrap .up-pass');
+        if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+        if(!confirm('Install '+sg.file+' on this box?\n\nThis console restarts as part of it. '+
+          'If the new version does not come up, the old one is put back on its own.')) return;
+        ib.disabled=true; ib.textContent='Installing\u2026';
+        fetch('/api/updates/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({file:sg.file, passphrase:pw?pw.value:''})})
+         .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+         .then(function(x){ ib.textContent=(x.code===200)?'Installing, this page will drop':'Install failed';
+           r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
+         .catch(function(){ ib.textContent='Installing, this page will drop'; });
+      });
+      r.appendChild(ib);
     });
     var dl=el('button','a-go','Download this release to the shelf'); dl.type='button';
     dl.addEventListener('click',function(){
@@ -14271,7 +14445,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"here": VANTAGE_RELEASE, "state": st, "text": text,
                                         "latest": latest, "repo": VANTAGE_REPO,
                                         "manifest": manifest, "deviation": dev,
-                                        "staged": staged_releases()}),
+                                        "staged": staged_releases(),
+                                        "last_apply": last_apply_result()}),
                        "application/json")
         elif path == "/api/kiosk/status":
             # is a kiosk running on this box? the box's own view asks before it offers the
@@ -14632,7 +14807,7 @@ class Handler(BaseHTTPRequestHandler):
                             "/api/enrol-batch", "/api/usb-copy", "/api/module/load-offline",
                             "/api/usb-list", "/api/usb-import", "/api/software/current",
                             "/api/destroy", "/api/console/set-mode", "/api/console/kiosk",
-                            "/api/console/admin", "/api/updates/pull",
+                            "/api/console/admin", "/api/updates/pull", "/api/updates/apply", "/api/updates/estate", "/api/usb-export",
                             "/api/kiosk/exit",
                             "/api/store/mkdir", "/api/store/move", "/api/store/delete",
                             "/api/vault/save", "/api/networks/channel",
@@ -14742,6 +14917,33 @@ class Handler(BaseHTTPRequestHandler):
             code, res = software_current_api(data, client)
         elif path == "/api/destroy":
             code, res = destroy_api(data, client)
+        elif path == "/api/usb-export":
+            # write a shelf onto a stick, so a release (or software) can be carried to a box
+            # with no internet. Gated: it puts this console's files into someone's hand.
+            sub = str(data.get("folder", "updates"))
+            if sub not in ("updates", "tak-server", "software", "map-packs", "mission-packs"):
+                code, res = 400, {"error": "unknown shelf"}
+            elif auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+                code, res = 403, {"error": "your operator password is required to copy files "
+                                  "onto a stick"}
+            else:
+                ok, txt = setup_helper("usb-export", sub, timeout=600)
+                audit({"action": "usb-export", "target": sub, "client": client,
+                       "result": "OK" if ok else "FAIL", "detail": txt[:160]})
+                code, res = ((200, {"copied": txt.strip()[:200]}) if ok else
+                             (500, {"error": (txt or "copy failed").strip()[:200]}))
+        elif path == "/api/updates/estate":
+            # push the current checker to every box. Gated: it writes to every box at once.
+            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+                code, res = 403, {"error": "your operator password is required to update the estate"}
+            else:
+                code, res = update_estate(client, str(data.get("passphrase", "")),
+                                          passphrase_ok=True)
+        elif path == "/api/updates/apply":
+            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+                code, res = 403, {"error": "your operator password is required to install a release"}
+            else:
+                code, res = apply_release(data, client)
         elif path == "/api/updates/pull":
             # download a published release onto the shelf and verify it. Staging only: an
             # operator still decides what happens to it. Gated like any write.

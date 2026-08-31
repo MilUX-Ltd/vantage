@@ -43,7 +43,7 @@ log() {
 
 op="${1:-}"; shift || true
 name="${1:-}"; shift || true
-[[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import|kiosk-exit|apply-release)$ ]] || deny "unknown operation"
+[[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import|usb-export|kiosk-exit|apply-release)$ ]] || deny "unknown operation"
 [[ "$name" =~ ^[a-z0-9-]{1,24}$ ]] || deny "key name must match [a-z0-9-], max 24"
 key="$STORE/$name"
 install -d -m 700 -o root -g root /var/lib/console-setup "$STORE"
@@ -421,6 +421,35 @@ usb-copy)
     log "usb-copy -> $target"
     echo "OK $target"
     ;;
+usb-export)
+    # The other direction: write part of the console's own store onto a stick, so an operator
+    # can carry a release (or software) to a box with no internet. Only ever from inside the
+    # store, and only ever into a dated folder of our own making, so this can neither read
+    # the rest of the box nor scribble over what is already on the stick.
+    sub="$name"
+    [[ "$sub" =~ ^(updates|tak-server|software|map-packs|mission-packs)$ ]] \
+        || deny "usb-export takes a store folder name"
+    srcdir="/var/lib/vantage-console/agent/store/$sub"
+    [[ -d "$srcdir" ]] || deny "nothing on the $sub shelf yet"
+    dest=""
+    while read -r _nm mnt rm typ; do
+        [[ "$typ" == "part" && "$rm" == "1" && -n "$mnt" && "$mnt" != "/" ]] || continue
+        [[ -d "$mnt" && -w "$mnt" ]] || continue
+        dest="$mnt"; break
+    done < <(lsblk -o NAME,MOUNTPOINT,RM,TYPE -nrp 2>/dev/null)
+    [[ -n "$dest" ]] || deny "no writable USB stick is mounted"
+    target="$dest/Vantage-$sub-$(date -u +%Y%m%d-%H%M%S)"
+    mkdir -p "$target" || deny "could not write to the USB stick"
+    n=0
+    for f in "$srcdir"/*; do
+        [[ -f "$f" ]] || continue
+        cp -f "$f" "$target/" || deny "copy to USB failed"
+        n=$((n + 1))
+    done
+    sync
+    log "usb-export $sub ($n files)"
+    echo "OK $target ($n files)"
+    ;;
 usb-import)
     # disconnected ingest: LIST importable files on a mounted USB stick, or STAGE one into
     # the console's agent dir for the console to file into the library/shelf. Read-only on
@@ -436,8 +465,10 @@ usb-import)
     done < <(lsblk -o NAME,MOUNTPOINT,RM,TYPE -nrp 2>/dev/null)
     [[ -n "$src" ]] || deny "no readable USB stick is mounted"
     if [[ "$mode" == "list" ]]; then
+        # .tgz is here so a Vantage release cut can be carried in on a stick: without it
+        # an offline box could never be updated at all, only rebuilt.
         find "$src" -maxdepth 1 -type f \( -iname '*.deb' -o -iname '*.apk' \
-             -o -iname '*.tar' -o -iname '*.tar.gz' -o -iname '*.zip' \) \
+             -o -iname '*.tar' -o -iname '*.tar.gz' -o -iname '*.tgz' -o -iname '*.zip' \) \
              -printf '%f\t%s\n' 2>/dev/null | head -200
         exit 0
     fi
