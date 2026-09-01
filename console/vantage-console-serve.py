@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.34.0"
+VERSION = "2.35.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.10-beta"
+VANTAGE_RELEASE = "0.9.11-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -4996,8 +4996,35 @@ form.action{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;
 .up-res>a{display:inline-block;margin:4px 0 2px}
 .upbtns{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 2px}
 .upbtns .a-go{align-self:auto;margin:0}
-.up-res .tinv{margin-top:16px}
+.up-res .tinv{margin-top:12px}
 .up-res .deplog{margin-top:12px}
+/* The panel renders a STATE, so it is laid out as one: what this box is, the one thing to
+   do next, then the shelf, the estate and the baseline as named sections. It used to append
+   whatever the handler produced in the order it happened, which put two estate-wide writes
+   in the same row as the download, gave every release ever downloaded its own equally
+   weighted Install, and grew a fresh six-line log every time Download was pressed. */
+.up-res{display:flex;flex-direction:column;gap:14px}
+.up-state{display:flex;flex-direction:column;gap:3px}
+.up-verdict{font-weight:600;font-size:15px}
+.up-primary{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.up-primary .a-go.primary{font-size:13px;padding:11px 18px}
+.up-quiet{color:var(--fg2)}
+.up-sec{display:flex;flex-direction:column;gap:8px;padding-top:12px;
+ border-top:1px solid var(--line)}
+.up-sec>h3{margin:0;font-family:var(--font-display);font-weight:600;font-size:11.5px;
+ letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.shelf-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.shelf-name{flex:1 1 240px;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
+.shelf-ver{font-family:var(--font-mono);font-weight:700}
+.up-res .pill{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+ padding:2px 7px;border-radius:999px;background:var(--line);color:var(--fg2)}
+.up-res .pill.ok{background:var(--ok-b);color:var(--ok)}
+.a-go.small{font-size:11px;padding:7px 12px}
+/* The GitHub link had no rule at all, so it fell back to the browser's default blue: dark
+   blue on the dark theme's near-black card, effectively invisible. --acc is the token that
+   flips with the theme, which is what a link in a themed surface has to use. */
+.up-res a{color:var(--acc);text-decoration:underline;text-underline-offset:2px}
+.up-res a:hover{text-decoration-thickness:2px}
 /* Nothing in the updates card is a labelled field pair, so the depcard grid put a
    paragraph of prose in a 240px column beside an empty half. Every child takes the full
    width; the grid then supplies the row gaps and the card keeps its own frame. */
@@ -9835,15 +9862,27 @@ def release_assets(tag, timeout=10):
             for a in (rel.get("assets") or []) if a.get("name")}
 
 
-def staged_releases():
-    """What is already on the shelf, with the verdict recorded when it was pulled."""
+def staged_releases(latest_tag=""):
+    """What is already on the shelf, newest first, each one told where it stands.
+
+    The RANKING IS DONE HERE, not in the browser. `_release_rank` is the one place that knows
+    0.9.10 beats 0.9.9, and a filename sort gets that backwards. The panel has to pick a single
+    release to offer, so it needs an ordering it can trust; doing the version maths again in
+    JavaScript would be a second implementation of the same rule, free to drift from this one.
+
+    `newest` marks the highest-ranked file on the shelf. `current` marks the one that IS the
+    published release, when the check reached GitHub. An offline box gets `newest` and no
+    `current`, which is exactly what it needs to install something carried in on a stick.
+    """
     out = []
     try:
         for f in sorted(os.listdir(UPDATES_DIR)):
             if not f.endswith(".tgz"):
                 continue
             full = os.path.join(UPDATES_DIR, f)
-            rec = {"file": f, "size": os.path.getsize(full), "verified": False}
+            ver = re.sub(r"^vantage-|\.tgz$", "", f)
+            rec = {"file": f, "size": os.path.getsize(full), "verified": False,
+                   "version": ver, "newest": False, "current": False}
             side = full + ".sha256"
             if os.path.exists(side):
                 rec["verified"] = True
@@ -9851,6 +9890,15 @@ def staged_releases():
             out.append(rec)
     except FileNotFoundError:
         pass
+    out.sort(key=lambda r: _release_rank(r["version"]), reverse=True)
+    if out:
+        out[0]["newest"] = True
+    want = str(latest_tag or "").lstrip("vV")
+    if want:
+        for rec in out:
+            if rec["version"] == want:
+                rec["current"] = True
+                break
     return out
 
 
@@ -10173,160 +10221,233 @@ def render_operations(state):
     doc.append(r"""<script>(function(){
 var b=document.getElementById('upchk'); if(!b)return;
 function el(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;}
+function pw(){var p=document.querySelector('#upwrap .up-pass'); return p?p.value:'';}
+function needpw(){var p=document.querySelector('#upwrap .up-pass'); return !!(p && !p.value);}
+function mb(n){return Math.max(1,Math.round(n/1048576))+' MB';}
+
+// ONE log, reused. Every download used to append a fresh transcript, so pressing the button
+// twice left two near-identical six-line blocks that were the largest thing on the page.
+var LOG=null;
+function logbox(r){
+  if(!LOG){ LOG=el('pre','deplog'); }
+  LOG.textContent=''; if(LOG.parentNode!==r) r.appendChild(LOG); return LOG;
+}
+function section(r,title){
+  var s=el('section','up-sec'); s.appendChild(el('h3',null,title)); r.appendChild(s); return s;
+}
+function btnrow(parent){var d=el('div','upbtns'); parent.appendChild(d); return d;}
+function note(parent,text,cls){parent.appendChild(el('div',cls||'meta',text)); }
+
 b.addEventListener('click',function(){
   var r=document.getElementById('upres');
-  b.disabled=true; r.textContent='Asking github.com\u2026';
+  b.disabled=true; r.textContent='Asking github.com…';
   fetch('/api/updates/check').then(function(x){return x.json();}).then(function(j){
-    b.disabled=false; r.innerHTML=''; r.className='a-res up-res';
-    var l=j.latest||{};
-    if(!l.ok){ r.textContent=j.text||'could not check'; r.className='a-res up-res err'; return; }
-    r.appendChild(el('div',null,j.text));
-    var where=(l.source==='release')?'published release':'latest tag';
-    r.appendChild(el('div','meta','The repository\u2019s '+where+' is '+l.tag+
-      (l.published?(' ('+l.published.slice(0,10)+')'):'')+'.'));
-    if(l.url){var a=document.createElement('a');a.href=l.url;a.target='_blank';
-      a.rel='noopener noreferrer';a.textContent='Open it on GitHub \u203a';r.appendChild(a);}
-    var row=el('div','upbtns'); r.appendChild(row);
+    b.disabled=false; r.innerHTML=''; r.className='a-res up-res'; LOG=null;
+    var l=j.latest||{}, staged=j.staged||[];
+    var newest=null, current=null, i;
+    for(i=0;i<staged.length;i++){ if(staged[i].newest) newest=staged[i];
+                                  if(staged[i].current) current=staged[i]; }
+
+    // ---- 1. what this box is. State first, and never mixed in with the buttons. ----
+    var st=el('div','up-state');
+    st.appendChild(el('div','up-verdict',
+      l.ok ? j.text : ('Could not reach GitHub: '+(j.text||'no answer')+'.')));
+    if(l.ok){
+      var where=(l.source==='release')?'published release':'latest tag';
+      var line=el('div','meta'); line.textContent='The repository’s '+where+' is '+l.tag+
+        (l.published?(' ('+l.published.slice(0,10)+')'):'')+'. ';
+      if(l.url){var a=document.createElement('a');a.href=l.url;a.target='_blank';
+        a.rel='noopener noreferrer';a.textContent='Open it on GitHub ›';line.appendChild(a);}
+      st.appendChild(line);
+    } else {
+      note(st,'That is not a fault on a box with no route out. Anything already on the shelf '+
+              'can still be installed from here.');
+    }
+    if(j.last_apply){ note(st,'Last install: '+j.last_apply.status+
+      (j.last_apply.message?(' — '+j.last_apply.message):'')); }
+    r.appendChild(st);
+
+    // ---- 2. ONE primary action: whatever is actually next for THIS box. ----
+    // The old panel put download, install and two estate-wide writes in a single row, so the
+    // most dangerous buttons on the page sat in the row you scan for "get the update", and
+    // every release ever downloaded offered its own equally-weighted Install. One release is
+    // the right one to install; the rest are history.
+    // A release this box ALREADY RUNS is not something to offer installing. Without this the
+    // panel says "nothing to do" and puts an Install button above it, which is worse than
+    // either message on its own.
+    var cand = current || (l.ok ? null : newest);
+    var target = (cand && cand.version !== j.here) ? cand : null;
+    var act=el('div','up-primary'); r.appendChild(act);
+    if(target){
+      var ib=el('button','a-go primary','Install '+target.version+' on this box'); ib.type='button';
+      ib.addEventListener('click',function(){
+        if(needpw()){ note(act,'Enter your operator password first.'); return; }
+        if(!confirm('Install '+target.file+' on this box?\n\nThis console restarts as part of '+
+          'it. If the new version does not come up, the old one is put back on its own.')) return;
+        ib.disabled=true; ib.textContent='Installing, this page will drop…';
+        fetch('/api/updates/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({file:target.file, passphrase:pw()})})
+         .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+         .then(function(x){ if(x.code!==200){ ib.disabled=false;
+             ib.textContent='Install '+target.version+' on this box'; }
+           note(act,(x.o.message||x.o.error||'')); })
+         .catch(function(){ note(act,'Installing. Reload this page in a moment.'); });
+      });
+      act.appendChild(ib);
+      if(!l.ok) note(act,'From the shelf. This box could not check what is published.');
+    } else if(j.state==='behind'){
+      var dl=el('button','a-go primary','Download '+l.tag+' to the shelf'); dl.type='button';
+      dl.addEventListener('click',function(){
+        if(needpw()){ note(act,'Enter your operator password first.'); return; }
+        dl.disabled=true; dl.textContent='Downloading…';
+        var lg=logbox(act);
+        fetch('/api/updates/pull',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({passphrase:pw()})})
+         .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+         .then(function(x){
+           if(x.code!==200){ dl.disabled=false; dl.textContent='Download failed';
+             lg.textContent=(x.o.error||'failed'); return; }
+           var t=setInterval(function(){
+             fetch('/api/job/'+x.o.job).then(function(y){return y.json();}).then(function(jb){
+               lg.textContent=(jb.log||'');
+               if(jb.status&&jb.status!=='running'){ clearInterval(t); dl.disabled=false;
+                 dl.textContent=(jb.status==='done')
+                   ?'Downloaded. Press Check again to install it.':'Download failed'; }
+             }).catch(function(){});
+           },1200);
+         }).catch(function(){ dl.disabled=false; dl.textContent='could not reach the console'; });
+      });
+      act.appendChild(dl);
+      note(act,'Nothing is installed by downloading. The archive lands on this box’s shelf '+
+               'and its checksum is checked against the published one.');
+    } else if(j.state==='current'){
+      note(act,'Nothing to do: this box is on the current release.','up-quiet');
+    } else if(j.state==='ahead'){
+      note(act,'Nothing to do: this box is ahead of what is published.','up-quiet');
+    } else if(newest){
+      note(act,'Nothing to do from here: the newest release on the shelf is the one this '+
+               'box already runs.','up-quiet');
+    }
+
+    // ---- 3. the shelf, as a list of what is there rather than a pile of buttons ----
+    if(staged.length){
+      var sh=section(r,'On the shelf');
+      staged.forEach(function(sg){
+        var row=el('div','shelf-row');
+        var lab=el('div','shelf-name');
+        lab.appendChild(el('span','shelf-ver',sg.version));
+        lab.appendChild(el('span','meta',' '+mb(sg.size)+', '+
+          (sg.verified?'checksum verified':'not checked against a published value')));
+        if(sg.current) lab.appendChild(el('span','pill ok','current release'));
+        else if(sg.newest && !l.ok) lab.appendChild(el('span','pill ok','newest here'));
+        else lab.appendChild(el('span','pill','superseded'));
+        row.appendChild(lab);
+        var ub=el('button','a-go small','Copy '+sg.version+' to a USB stick'); ub.type='button';
+        ub.addEventListener('click',function(){
+          if(needpw()){ note(row,'Enter your operator password first.'); return; }
+          ub.disabled=true; ub.textContent='Copying…';
+          fetch('/api/usb-export',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({folder:'updates', passphrase:pw()})})
+           .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+           .then(function(x){ ub.disabled=false;
+             ub.textContent='Copy '+sg.version+' to a USB stick';
+             note(row,(x.o.copied||x.o.error||'')); })
+           .catch(function(){ ub.disabled=false; ub.textContent='could not reach the console'; });
+        });
+        row.appendChild(ub);
+        sh.appendChild(row);
+      });
+      if(staged.length>1) note(sh,'Only one release is offered for install: the one above. '+
+        'The rest are kept so they can still be carried to a box that has no route out.');
+    }
+
+    // ---- 4. the estate. Its own section, because these write to boxes you cannot see. ----
+    var es=section(r,'The rest of the estate');
+    note(es,'These write to every enrolled box, not just this one.');
+    var erow=btnrow(es);
     var eb=el('button','a-go','Update the checker on every box'); eb.type='button';
     eb.addEventListener('click',function(){
-      var pw=document.querySelector('#upwrap .up-pass');
-      if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
-      if(!confirm('Push this console\u2019s health checker to every box in the estate?\n\n'+
+      if(needpw()){ note(es,'Enter your operator password first.'); return; }
+      if(!confirm('Push this console’s health checker to every box in the estate?\n\n'+
         'It only updates the checker, so boxes stop reporting against a stale one. '+
         'Consoles on the boxes are not touched.')) return;
-      eb.disabled=true; eb.textContent='Updating the estate\u2026';
-      var lg=el('pre','deplog',''); r.appendChild(lg);
+      eb.disabled=true; eb.textContent='Updating the estate…';
+      var lg=logbox(es);
       fetch('/api/updates/estate',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({passphrase:pw?pw.value:''})})
+        body:JSON.stringify({passphrase:pw()})})
        .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
        .then(function(x){ eb.disabled=false; eb.textContent='Update the checker on every box';
          (x.o.results||[]).forEach(function(q){
-           lg.textContent+=(q.ok?'OK   ':'FAIL ')+q.box+'  '+(q.was||'?')+' \u2192 '+(q.now||'?')+
+           lg.textContent+=(q.ok?'OK   ':'FAIL ')+q.box+'  '+(q.was||'?')+' → '+(q.now||'?')+
              (q.detail?('  '+q.detail):'')+'\n'; });
-         r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
+         note(es,(x.o.message||x.o.error||'')); })
        .catch(function(){ eb.disabled=false; eb.textContent='could not reach the console'; });
     });
-    row.appendChild(eb);
-    var cb=el('button','a-go','Update checkers AND consoles across the estate'); cb.type='button';
+    erow.appendChild(eb);
+    var cb=el('button','a-go','Update checkers and consoles across the estate'); cb.type='button';
     cb.addEventListener('click',function(){
-      var pw=document.querySelector('#upwrap .up-pass');
-      if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
+      if(needpw()){ note(es,'Enter your operator password first.'); return; }
       if(!confirm('Update the checker AND the console on every box?\n\n'+
         'Each box keeps its own address and port, so it stays where you put it.\n\n'+
         'It runs one box at a time and STOPS at the first failure, leaving the rest alone. '+
         'A box whose console will not come up is a box you have to go to in person.')) return;
-      cb.disabled=true; cb.textContent='Updating the estate\u2026';
-      var lg=el('pre','deplog',''); r.appendChild(lg);
+      cb.disabled=true; cb.textContent='Updating the estate…';
+      var lg=logbox(es);
       fetch('/api/updates/estate',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({passphrase:pw?pw.value:'', consoles:true})})
+        body:JSON.stringify({passphrase:pw(), consoles:true})})
        .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
-       .then(function(x){ cb.disabled=false; cb.textContent='Update checkers AND consoles across the estate';
+       .then(function(x){ cb.disabled=false;
+         cb.textContent='Update checkers and consoles across the estate';
          (x.o.results||[]).forEach(function(q){
-           lg.textContent+=(q.ok?'OK   ':'FAIL ')+q.box+'  '+(q.was?(q.was+' \u2192 '+(q.now||'?')):'')+
+           lg.textContent+=(q.ok?'OK   ':'FAIL ')+q.box+'  '+(q.was?(q.was+' → '+(q.now||'?')):'')+
              (q.detail?('  '+q.detail):'')+'\n'; });
-         r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
+         note(es,(x.o.message||x.o.error||'')); })
        .catch(function(){ cb.disabled=false; cb.textContent='could not reach the console'; });
     });
-    row.appendChild(cb);
-    if(j.last_apply){ r.appendChild(el('div','meta','Last install: '+j.last_apply.status+
-      ' \u2014 '+(j.last_apply.message||''))); }
-    (j.staged||[]).forEach(function(sg){
-      r.appendChild(el('div','meta','On the shelf: '+sg.file+' ('+Math.round(sg.size/1048576)+' MB)'+
-        (sg.verified?', checksum verified':', not checked against a published value')));
-      var ub=el('button','a-go','Copy it to a USB stick'); ub.type='button';
-      ub.addEventListener('click',function(){
-        var pw=document.querySelector('#upwrap .up-pass');
-        if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
-        ub.disabled=true; ub.textContent='Copying\u2026';
-        fetch('/api/usb-export',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({folder:'updates', passphrase:pw?pw.value:''})})
-         .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
-         .then(function(x){ ub.disabled=false;
-           ub.textContent=(x.code===200)?'Copied to the stick':'Copy failed';
-           r.appendChild(el('div','meta',(x.o.copied||x.o.error||''))); })
-         .catch(function(){ ub.disabled=false; ub.textContent='could not reach the console'; });
-      });
-      var srow=el('div','upbtns'); r.appendChild(srow); srow.appendChild(ub);
-      var ib=el('button','a-go','Install '+sg.file+' on this box'); ib.type='button';
-      ib.addEventListener('click',function(){
-        var pw=document.querySelector('#upwrap .up-pass');
-        if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
-        if(!confirm('Install '+sg.file+' on this box?\n\nThis console restarts as part of it. '+
-          'If the new version does not come up, the old one is put back on its own.')) return;
-        ib.disabled=true; ib.textContent='Installing\u2026';
-        fetch('/api/updates/apply',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({file:sg.file, passphrase:pw?pw.value:''})})
-         .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
-         .then(function(x){ ib.textContent=(x.code===200)?'Installing, this page will drop':'Install failed';
-           r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
-         .catch(function(){ ib.textContent='Installing, this page will drop'; });
-      });
-      srow.appendChild(ib);
-    });
-    var dl=el('button','a-go','Download this release to the shelf'); dl.type='button';
-    dl.addEventListener('click',function(){
-      var pw=document.querySelector('#upwrap .up-pass');
-      if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
-      dl.disabled=true; dl.textContent='Downloading\u2026';
-      var lg=el('pre','deplog',''); r.appendChild(lg);
-      fetch('/api/updates/pull',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({passphrase:pw?pw.value:''})})
-       .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
-       .then(function(x){
-         if(x.code!==200){ dl.disabled=false; dl.textContent='Download failed';
-           lg.textContent=(x.o.error||'failed'); return; }
-         var t=setInterval(function(){
-           fetch('/api/job/'+x.o.job).then(function(y){return y.json();}).then(function(jb){
-             lg.textContent=(jb.log||'');
-             if(jb.status&&jb.status!=='running'){ clearInterval(t); dl.disabled=false;
-               dl.textContent=(jb.status==='done')?'Downloaded to the shelf':'Download failed'; }
-           }).catch(function(){});
-         },1200);
-       }).catch(function(){ dl.disabled=false; dl.textContent='could not reach the console'; });
-    });
-    row.appendChild(dl);
+    erow.appendChild(cb);
+
+    // ---- 5. baseline and drift, its own section rather than wedged between buttons ----
     var dev=j.deviation||[];
-    if(!j.manifest){
-      r.appendChild(el('div','meta','That release declares no component versions, so this '+
-        'console cannot say where the estate deviates from it.'));
+    if(l.ok && !j.manifest){
+      var bs0=section(r,'Baseline');
+      note(bs0,'That release declares no component versions, so this console cannot say '+
+               'where the estate deviates from it.');
     } else if(dev.length){
+      var bs=section(r,'Baseline and drift');
       var drift=dev.filter(function(d){return d.baseline_differs||(d.boxes&&d.boxes.length);});
       var tb=el('table','tinv'); var hr=el('tr');
-      ['Component','This release','Your baseline','Boxes running something else'].forEach(function(h){
-        hr.appendChild(el('th',null,h));});
+      ['Component','This release','Your baseline','Boxes running something else'].forEach(
+        function(h){hr.appendChild(el('th',null,h));});
       tb.appendChild(hr);
       dev.forEach(function(d){
         var tr=el('tr');
         tr.appendChild(el('th',null,d.component));
         tr.appendChild(el('td',null,d.release));
-        var tdb=el('td',d.baseline_differs?'b-drift':'b-ok',d.baseline||'\u2014');
-        tr.appendChild(tdb);
+        tr.appendChild(el('td',d.baseline_differs?'b-drift':'b-ok',d.baseline||'—'));
         var names=(d.boxes||[]).map(function(x){return x.name+' ('+x.version+')';}).join(', ');
         tr.appendChild(el('td',names?'b-drift':'b-ok',names||'none'));
         tb.appendChild(tr);
       });
-      r.appendChild(tb);
-      if(j.manifest.takserver){ r.appendChild(el('div','meta',j.manifest.takserver)); }
+      bs.appendChild(tb);
+      if(j.manifest && j.manifest.takserver) note(bs,j.manifest.takserver);
       if(drift.length){
-        var btn=el('button','a-go','Adopt this release as the baseline');
-        btn.type='button';
+        var btn=el('button','a-go','Adopt this release as the baseline'); btn.type='button';
         btn.addEventListener('click',function(){
           if(!confirm('Set the estate baseline to what '+l.tag+' ships?\n\n'+
              'Drift is then measured against the published release instead of the values '+
-             'entered by hand. It changes no box.')) return;
-          btn.disabled=true; btn.textContent='Saving\u2026';
+             'you set by hand.')) return;
+          btn.disabled=true; btn.textContent='Adopting…';
           fetch('/api/setup/baseline',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({components:j.manifest.components})})
             .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
             .then(function(x){ btn.textContent=(x.code===200)
-              ?'Baseline adopted. Reloading\u2026':(x.o.error||'failed');
+              ?'Baseline adopted. Reloading…':(x.o.error||'failed');
               if(x.code===200) setTimeout(function(){location.reload();},900); else btn.disabled=false;})
             .catch(function(){btn.disabled=false;btn.textContent='could not reach the console';});
         });
-        r.appendChild(btn);
+        btnrow(bs).appendChild(btn);
       }
     }
-    r.className='a-res up-res '+((j.state==='behind')?'warn':'ok');
   }).catch(function(){ b.disabled=false;
     document.getElementById('upres').textContent='could not reach the console'; });
 });})();</script>""")
@@ -14673,7 +14794,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"here": VANTAGE_RELEASE, "state": st, "text": text,
                                         "latest": latest, "repo": VANTAGE_REPO,
                                         "manifest": manifest, "deviation": dev,
-                                        "staged": staged_releases(),
+                                        "staged": staged_releases(latest.get("tag", "")),
                                         "last_apply": last_apply_result()}),
                        "application/json")
         elif path == "/api/kiosk/status":
