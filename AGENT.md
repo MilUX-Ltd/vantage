@@ -195,6 +195,29 @@ fails. **`federation`** and **`networks`** cover what reaches past your own esta
 server, a private network, the radio mesh. **`vantage-internals`** is where everything lives, for
 working over SSH or reading what a script will really do.
 
+Three more cover getting a plan onto the ground, which is the journey from an admin
+instruction on a desk to an overlay on a handset with no signal.
+
+**`knowledge-vault`** turns the material a deployment actually arrives as, an admin instruction,
+a deck, a thread of email, into a structured folder the rest can build from. It insists on two
+things that sound like bookkeeping and are not: every point and every boundary records where it
+came from, because a boundary lifted off a photographed slide and one read from a grid in the
+written order are worth different amounts to whoever is standing on it; and the originals are
+kept, because when the ground does not match the plan the only useful question is whether the
+extraction was wrong or the plan was.
+
+**`map-packs`** gets the ground onto the device. It starts with the question most tooling skips,
+which is whether a source may lawfully become an offline copy at all, and it will stop and ask
+rather than build a pack from data nobody was allowed to extract. It knows that a map on a tile
+server is invisible to a client until the client is told the server exists, which is the usual
+reason for "the maps are there and the device cannot see them", and it insists on verifying a
+pack has no holes before it ships, because a pack that opens is not a pack that is complete.
+
+**`mission-packs`** turns the plan into what is drawn on that ground: areas, boundaries, routes,
+ERVs and points, packaged so a device can import them. It is careful about the two different
+things both called a data package, because both import without complaint and only one of them
+then works.
+
 **`estate-brief`** builds and maintains the standing brief the agent reads at the start of every
 session. Most of it is derivable from your estate, so it drafts what it can and asks only about
 what a person alone knows. It never writes the brief without showing you the text first.

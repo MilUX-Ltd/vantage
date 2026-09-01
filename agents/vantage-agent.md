@@ -4,14 +4,14 @@ description: Operate a Vantage-managed TAK estate. Reads the estate, diagnoses w
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: d0af59f86d6b3f0f
+audit_sha: 8f658528be371835
 origin: the development repository/agents
 source: MilUX Ltd
 maintainer: MilUX Ltd
 license: Vantage Community Licence
 category: operations
 autonomy: propose
-skills: [vantage-lessons, operations, deploy-server, federation, networks, updates, vantage-redteam, estate-brief, vantage-internals]
+skills: [vantage-lessons, operations, deploy-server, federation, networks, updates, vantage-redteam, estate-brief, vantage-internals, knowledge-vault, map-packs, mission-packs]
 ---
 
 # Vantage agent
@@ -150,6 +150,13 @@ Load the skill for the job in front of you: `operations` for certificates, devic
 groups; `deploy-server` for standing a box up; `federation` and `networks` for anything that
 reaches past this estate; `updates` for releases; `vantage-internals` when you need to know what
 a script actually does or you are working over SSH.
+
+For getting a plan onto the ground there are three, and they run in that order:
+`knowledge-vault` to turn an admin instruction, a deck or a thread of email into a deployment
+folder; `map-packs` for the ground itself, offline tiles and how they reach devices;
+`mission-packs` for what is drawn on it, the areas, routes and points. The vault is always the
+source and the pack is always derived, so a correction goes into the folder and the pack is
+built again. Never edit a pack.
 
 Load `vantage-redteam` when asked to audit the estate. It is read-only by construction, runs
 against Cyber Essentials rather than a full sweep, and its findings are for a person to act on.

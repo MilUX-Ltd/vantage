@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.35.0"
+VERSION = "2.37.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.11-beta"
+VANTAGE_RELEASE = "0.9.12-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -4612,7 +4612,7 @@ CSS = """
  --ink:#1A1A1A;--ink2:#4A4A47;--ink3:#6A6A63;
  --bg:var(--paper);--card:#fff;--fg:var(--ink);--fg2:var(--ink2);--mute:var(--ink3);--line:var(--rule);
  --hdr-fg:var(--paper);--hdr-mute:rgba(247,246,235,.62);
- --ok:#2f6b2a;--ok-b:#2f6b2a17;--warn:#A35C17;--warn-b:#A35C1717;
+ --ok:#2f6b2a;--ok-b:#2f6b2a17;--warn:#A35C17;--warn-b:#A35C1717;--warn-ink:#7A4411;
  --fail:#98311f;--fail-b:#98311f17;--off:#586F7C;--off-b:#586F7C17;
  --acc:#6E6A3E;--bh:var(--paper2);--hover:var(--paper2);--code-bg:var(--paper2);--code-fg:var(--forest);--chip-fg:#fff;--focus:#113308;
  --r-card:6px;--r-sm:4px;--r-pill:999px;
@@ -4623,12 +4623,12 @@ CSS = """
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){
  --bg:#0d1108;--card:#141a0e;--fg:#ece9d6;--fg2:#c6c5b1;--mute:#8f9682;--line:#2a301f;
  --gold:#c9c589;--acc:#c9c589;--bh:#10160b;--hover:#1a2113;--code-bg:#1a2113;--code-fg:#c9c589;--chip-fg:#0A1F05;--focus:#c9c589;
- --ok:#7fa96f;--ok-b:#7fa96f1f;--warn:#cf913f;--warn-b:#cf913f1f;
+ --ok:#7fa96f;--ok-b:#7fa96f1f;--warn:#cf913f;--warn-b:#cf913f1f;--warn-ink:#e6b073;
  --fail:#d97a63;--fail-b:#d97a631f;--off:#7d8c85;--off-b:#7d8c851f;--shadow:none}}
 :root[data-theme=dark]{
  --bg:#0d1108;--card:#141a0e;--fg:#ece9d6;--fg2:#c6c5b1;--mute:#8f9682;--line:#2a301f;
  --gold:#c9c589;--acc:#c9c589;--bh:#10160b;--hover:#1a2113;--code-bg:#1a2113;--code-fg:#c9c589;--chip-fg:#0A1F05;--focus:#c9c589;
- --ok:#7fa96f;--ok-b:#7fa96f1f;--warn:#cf913f;--warn-b:#cf913f1f;
+ --ok:#7fa96f;--ok-b:#7fa96f1f;--warn:#cf913f;--warn-b:#cf913f1f;--warn-ink:#e6b073;
  --fail:#d97a63;--fail-b:#d97a631f;--off:#7d8c85;--off-b:#7d8c851f;--shadow:none}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-sans);
@@ -5369,8 +5369,11 @@ form.action.flash{outline:2px solid var(--gold);outline-offset:3px}
 .mod-b{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;
  border-radius:var(--r-pill);font-weight:700}
 .mod-b.ok{background:var(--ok-b);color:var(--ok)}
-.mod-b.drift{background:#4a3d10;color:var(--warn)}
-.mod-b.abs{background:var(--bh);color:var(--mute)}
+/* 2.36.0 contrast: .drift carried a hard-coded #4a3d10 while every sibling used
+   tokens, giving 2.09:1 for small bold text; .abs used --mute at 4.16:1. Both are
+   below AA (4.5:1) and both appear on the Modules panel and the AI page. */
+.mod-b.drift{background:var(--warn-b);color:var(--warn-ink)}
+.mod-b.abs{background:var(--bh);color:var(--fg2)}
 .mod-d{font-size:12.5px;color:var(--mute)}
 .mod-act{font-size:13px;font-weight:600;color:var(--gold)}
 .mod form.action{margin:0;padding:0;border:0;background:none}
@@ -13774,6 +13777,7 @@ if(sm)sm.addEventListener('submit',function(ev){ev.preventDefault();
       +'Add console, with this console\u2019s URL and this token.</p></div>';
   });
 });
+function peersCount(d){ return ((d||{}).peers||[]).length; }
 function drawSyncMap(){
   var svg=root.querySelector('.sync-map'), el=document.getElementById('sync-data');
   if(!svg||!el)return;
@@ -13783,7 +13787,10 @@ function drawSyncMap(){
       gold=(cs.getPropertyValue('--gold')||'#B5B171').trim(),
       warm='#A35C17', mute=(cs.getPropertyValue('--mute')||'#586F7C').trim(),
       ink=getComputedStyle(document.body).color;
-  var W=900,H=300,cx=W/2,cy=H/2;
+  // Height follows the peer count: three peers on a fixed 300 put their folder
+  // stacks 45px apart, which is less than a stack is tall, so they collided.
+  var W=900, H=Math.max(300, 110+(peersCount(d))*100), cx=W/2, cy=H/2;
+  svg.setAttribute('viewBox','0 0 '+W+' '+H);
   function node(x,y,label,sub,color,r){
     return '<circle cx="'+x+'" cy="'+y+'" r="'+(r||26)+'" fill="'+color+'" opacity="0.92"/>'
       +'<text x="'+x+'" y="'+(y+(r||26)+16)+'" text-anchor="middle" fill="'+ink+'" '
@@ -13793,16 +13800,25 @@ function drawSyncMap(){
   var out='';
   var peers=d.peers||[], n=peers.length;
   peers.forEach(function(p,i){
-    var px=W-120, py=n>1?60+i*(H-120)/(n-1):cy;
+    var px=W-120, py=n>1?70+i*(H-140)/(n-1):cy;
     p._x=px;p._y=py;
     out+='<line x1="'+(cx+30)+'" y1="'+cy+'" x2="'+(px-30)+'" y2="'+py+'" stroke="'+mute+'" stroke-width="1.2" stroke-dasharray="5 4"/>';
   });
-  (d.rules||[]).forEach(function(r){
-    var p=peers.filter(function(x){return x.id===r.peer;})[0]; if(!p)return;
-    var mx=(cx+p._x)/2, my=(cy+p._y)/2-14;
-    out+='<line x1="'+(p._x-30)+'" y1="'+p._y+'" x2="'+(cx+30)+'" y2="'+cy+'" stroke="'+warm+'" stroke-width="2.4" marker-end="url(#syncarrow)"/>'
-      +'<text x="'+mx+'" y="'+my+'" text-anchor="middle" fill="'+warm+'" font-size="12" font-weight="600">'+escapeHtml(r.folder)+' \u2192</text>'
-      +'<text x="'+mx+'" y="'+(my+14)+'" text-anchor="middle" fill="'+mute+'" font-size="10">'+escapeHtml((r.last_pull||'').slice(5,16))+'</text>';
+  // One arrow per peer, with that peer's folders stacked along it. Drawing per RULE
+  // put every folder label at the same midpoint and re-drew the arrow underneath each
+  // one, so a peer pulling three folders rendered as an unreadable smear.
+  var byPeer={};
+  (d.rules||[]).forEach(function(r){(byPeer[r.peer]=byPeer[r.peer]||[]).push(r);});
+  Object.keys(byPeer).forEach(function(pid){
+    var p=peers.filter(function(x){return x.id===pid;})[0]; if(!p)return;
+    var rs=byPeer[pid], mx=(cx+p._x)/2, my=(cy+p._y)/2;
+    out+='<line x1="'+(p._x-30)+'" y1="'+p._y+'" x2="'+(cx+30)+'" y2="'+cy+'" stroke="'+warm+'" stroke-width="2.4" marker-end="url(#syncarrow)"/>';
+    var top=my-6-(rs.length-1)*7;
+    rs.forEach(function(r,i){
+      out+='<text x="'+mx+'" y="'+(top+i*14)+'" text-anchor="middle" fill="'+warm+'" font-size="11.5" font-weight="600">'+escapeHtml(r.folder)+' \u2192</text>';
+    });
+    var last=rs.map(function(r){return r.last_pull||'';}).sort().pop();
+    out+='<text x="'+mx+'" y="'+(top+rs.length*14)+'" text-anchor="middle" fill="'+mute+'" font-size="10">'+escapeHtml(last.slice(5,16))+'</text>';
   });
   out+='<line x1="'+(cx-30)+'" y1="'+cy+'" x2="150" y2="'+cy+'" stroke="'+gold+'" stroke-width="1.6"/>';
   out+=node(cx,cy,d.me+(d.mode==='client'?' (client)':' (admin)'),
@@ -13841,6 +13857,10 @@ if(nodeSel){
   loadNodes();
 }
 if(probeBtn)probeBtn.onclick=loadNodes;
+// The map is the page's whole point: what syncs with what, and what moved. It was
+// written, styled and then never called, so the Sync page has been shipping an empty
+// 900x300 box. Draw it.
+drawSyncMap();
 })();
 """
 
