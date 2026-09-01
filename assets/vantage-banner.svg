@@ -1,4 +1,4 @@
-<svg viewBox="0 0 1200 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vantage - fleet management for TAK">
+<svg viewBox="0 0 1200 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vantage - the operations console for a whole TAK estate">
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
       <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#F7F6EB" stroke-width="1" opacity="0.05"/>
@@ -21,5 +21,5 @@
   <text x="500" y="228" font-family="Arial, Helvetica, sans-serif" font-size="92" font-weight="700" fill="#F7F6EB" letter-spacing="2">VANTAGE</text>
 
   <!-- tagline -->
-  <text x="503" y="266" font-family="Arial, Helvetica, sans-serif" font-size="24" fill="#B5B171" letter-spacing="1">Fleet management for TAK</text>
+  <text x="503" y="266" font-family="Arial, Helvetica, sans-serif" font-size="23" fill="#B5B171" letter-spacing="0.5">The operations console for a whole TAK estate</text>
 </svg>

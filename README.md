@@ -2,12 +2,16 @@
 
 # Vantage
 
-**The operations console for a fleet of TAK servers.** Vantage builds, secures, connects
-and runs an entire TAK estate from one browser tab — on your own hardware, online or
+**The operations console for a whole TAK estate.** Vantage builds, secures, connects
+and runs every TAK server you operate from one browser tab, on your own hardware, online or
 completely offline. It is not a single-server tool: it provisions servers from bare metal,
 adopts the ones you already run, issues device credentials, federates and synchronises
-servers, holds the estate's shared knowledge, and connects an AI assistant on your terms —
-every action gated, audited, and without ever holding an open shell to your fleet.
+servers, holds the estate's shared knowledge, and connects an AI assistant on your terms,
+every action gated, audited, and without ever holding an open shell to your estate.
+
+**[Walk the console without installing it](https://vantage.milux.co.uk)** ·
+[What it is and who it is for](https://milux.co.uk/vantage/) ·
+[User guide](USER-GUIDE.md)
 
 A MilUX product. Source-available; free for non-commercial use.
 
@@ -16,32 +20,46 @@ A MilUX product. Source-available; free for non-commercial use.
 ## More than a TAK server manager
 
 Most tooling stops at keeping one server alive. Vantage manages the whole lifecycle of a
-whole estate:
+whole estate, and it does three things.
 
-- **Build and adopt.** Turn a fresh Ubuntu box into a hardened TAK server — OS hardening,
-  TAK Server, its certificate authority, a trusted TLS certificate — in one guided run.
-  Or enrol servers you already operate and manage them in place, installing nothing.
+### The estate
+
+- **Build and adopt.** Turn a fresh Ubuntu box into a hardened TAK server, with OS
+  hardening, TAK Server, its certificate authority and a trusted TLS certificate, in one
+  guided run. Or enrol servers you already operate and manage them in place, installing
+  nothing.
 - **One estate, one pane.** Every server's health, software drift against your baseline,
   certificates, credentials and modules in a single Overview. No SSH, no dashboards to
   wire up, no agent to babysit.
-- **Connect the fleet.** Federate servers on a map to share groups; synchronise consoles
+- **Connect the estate.** Federate servers on a map to share groups; synchronise consoles
   so several can run as masters for redundancy; join boxes to a private network with
   WireGuard, Tailscale or OpenVPN.
 - **Get devices on the map.** Issue per-device certificates as QR codes from the browser,
-  organised by group, at scale — a whole team enrolled from one page.
+  organised by group, at scale: a whole team enrolled from one page.
+- **Field-ready.** Boot a box straight to the console as a kiosk appliance; build and push
+  mission and map packs; run entirely disconnected with a local model on a closed network.
+
+### The knowledge
+
 - **Carry the knowledge.** A Knowledge Vault holds the estate's orders, locations, people
   and reference, moves with the estate, and is what an AI assistant reads to answer "what
   do I need to know here?".
-- **Assist, on your terms.** Connect any MCP-capable AI — you bring the model, so no route
-  bills you for the AI itself — and set exactly how much it may do: observe, propose, or
-  act, every call audited under its own name.
-- **Field-ready.** Boot a box straight to the console as a kiosk appliance; build and push
-  mission and map packs; run entirely disconnected with a local model on a closed network.
 - **Onto the handset.** Vantage Deployed, the companion Android app, carries a deployment's
   vault and its mission and map packs to a phone: a device joins by scanning a QR from the
   console's Sync page, stays in step over a signed link, reads, searches, edits and answers
   questions from the vault offline, and hands packs to ATAK. Over LoRa it keeps syncing with
   no network at all. Source under `deployed/`.
+
+### The agent
+
+- **Assist, on your terms.** Connect any MCP-capable AI. You bring the model, so no route
+  bills you for the AI itself, and you set exactly how much it may do: observe, propose, or
+  act, every call audited under its own name.
+
+**You do not have to take all of it.** The console, the health checks and the gated actions
+all work with no AI at all; [MODELS.md](MODELS.md) covers what changes if you add one. And
+the skills under [`skills/`](skills/) can be used on your own kit without installing
+Vantage at all.
 
 ![A server's page, live: health in full, software against the baseline, modules, security posture, Add a device](assets/screens/06-a-server-s-page-health-in-full-software-against-.png)
 *A server's page, live. The [user guide](USER-GUIDE.md) walks every screen with captures
@@ -314,6 +332,6 @@ console from a box entirely, stop and disable the `vantage-console` services and
 
 Vantage is **source-available**, not open-source. It is free for personal, hobby, and
 other non-commercial, non-production use under the **Vantage Community Licence** (see
-[`LICENSE`](LICENSE)). Any commercial, governmental, military, or **production** use —
-including use by or for the UK Ministry of Defence — requires a commercial licence from
+[`LICENSE`](LICENSE)). Any commercial, governmental, military, or **production** use,
+including use by or for the UK Ministry of Defence, requires a commercial licence from
 MilUX Ltd. To arrange one, contact **matt@milux.co.uk**.

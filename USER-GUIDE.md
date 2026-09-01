@@ -7,7 +7,7 @@ button - illustrated with live captures from a real end-to-end build (a fresh Ub
 to a device on the map, entirely through the browser). Captured against console
 1.57.2 on a fresh Ubuntu 22.04 box, built end to end through the browser.
 
-Vantage is MilUX's fleet management system for TAK servers: one place to build, watch,
+Vantage is MilUX's operations console for a whole TAK estate: one place to build, watch,
 operate, upgrade and federate every TAK server you run, from a browser. It turns a fresh
 Ubuntu server into a running TAK server without an open shell, then grows with you.
 
