@@ -4,7 +4,8 @@ description: Diagnose a TAK estate the way someone who has been burned by it doe
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 3d37283e82cb9aa3
+audit_sha: abd68e58f6552268
+audit_sha_source: 3d37283e82cb9aa3
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

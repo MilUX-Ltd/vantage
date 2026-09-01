@@ -4,7 +4,8 @@ description: Work out where a Vantage estate stands against the current release 
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 7e9a7d8796460e86
+audit_sha: 626cc8c8a833cd67
+audit_sha_source: 7e9a7d8796460e86
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

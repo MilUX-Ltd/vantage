@@ -4,7 +4,8 @@ description: Turn the material a deployment actually arrives as, an admin instru
 audited: 2026-09-01
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 204ae52117e33a68
+audit_sha: 7c008ebeabc8de44
+audit_sha_source: 204ae52117e33a68
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

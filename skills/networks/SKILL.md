@@ -4,7 +4,8 @@ description: Private networks and the Meshtastic mesh. Join or remove a box from
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 72a23abd9133dd59
+audit_sha: 77afa99a6b9f5c33
+audit_sha_source: 72a23abd9133dd59
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

@@ -4,7 +4,8 @@ description: Build and maintain the standing brief an agent reads at the start o
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: c79ec46e0d75125e
+audit_sha: 601c4ff5c8171bbd
+audit_sha_source: c79ec46e0d75125e
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

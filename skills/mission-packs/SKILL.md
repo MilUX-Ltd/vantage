@@ -4,7 +4,8 @@ description: Turn a plan in the Knowledge Vault into something devices can impor
 audited: 2026-09-01
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 59383bc38a987cd0
+audit_sha: e32c0d30f572212c
+audit_sha_source: 59383bc38a987cd0
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

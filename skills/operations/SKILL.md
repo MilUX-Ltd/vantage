@@ -4,7 +4,8 @@ description: The day-to-day running of a TAK server. Issue and revoke certificat
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 6b37029861bdba47
+audit_sha: 8adff0b05250273f
+audit_sha_source: 6b37029861bdba47
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

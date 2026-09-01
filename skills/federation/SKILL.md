@@ -4,7 +4,8 @@ description: Join a TAK server to a partner's, and check who is trusted and what
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: b5c2614580bcea2f
+audit_sha: ce4f47c047ea28f8
+audit_sha_source: b5c2614580bcea2f
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

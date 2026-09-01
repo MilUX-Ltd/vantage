@@ -4,7 +4,8 @@ description: Get the ground onto a device. Work out what map coverage a deployme
 audited: 2026-09-01
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 475a67419a4b1a73
+audit_sha: 9c19e75a14cfa118
+audit_sha_source: 475a67419a4b1a73
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

@@ -4,7 +4,8 @@ description: Take a bare machine to a working, managed TAK server. Covers provis
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 4c3a5a3228157880
+audit_sha: f6294049cac69972
+audit_sha_source: 4c3a5a3228157880
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

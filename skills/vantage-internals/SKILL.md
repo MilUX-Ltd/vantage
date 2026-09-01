@@ -4,7 +4,8 @@ description: Where everything in Vantage lives and how the pieces fit. The actio
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 0e5d98148a6851a6
+audit_sha: fc7c2d624b26514f
+audit_sha_source: 0e5d98148a6851a6
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

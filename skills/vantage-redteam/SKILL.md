@@ -4,7 +4,8 @@ description: Review a Vantage estate's security posture against good practice an
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 4f9a332f0212c59b
+audit_sha: 4e2bed47859260a6
+audit_sha_source: 4f9a332f0212c59b
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
