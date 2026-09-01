@@ -536,7 +536,12 @@ apply-release)
     # would be killed halfway through its own update. systemd-run outlives that; setsid is
     # the fallback for a box without it. The verdict is left in
     # /var/lib/vantage-console/last-apply.json for whatever console comes back.
-    archive="${3:-}"
+    # $1, not $3. `op` and `name` are shifted off the front above, so a branch's own
+    # arguments start at $1 like every other branch here. Reading $3 made this always
+    # empty, so the Install button denied "archive must be a .tgz filename" every time
+    # it was ever pressed. Nothing caught it: the helper it launches is tested hard, and
+    # the call that has to reach the helper was not tested at all.
+    archive="${1:-}"
     [[ "$archive" =~ ^[A-Za-z0-9._-]{1,120}\.tgz$ ]] || deny "archive must be a .tgz filename"
     full="/var/lib/vantage-console/agent/store/updates/$archive"
     [[ -f "$full" ]] || deny "no staged release called $archive"

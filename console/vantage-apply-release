@@ -120,6 +120,13 @@ if [[ -d "$ROOT/console/actions" ]]; then
     mkdir -p "$LIB/actions"
     install -m 0755 "$ROOT/console/actions"/* "$LIB/actions/" 2>/dev/null || true
     install -m 0755 "$ROOT/console/actions"/tak-* "$BIN/" 2>/dev/null || true
+    # The privileged helper too. sudoers names /usr/local/bin/console-setup-priv, so a copy
+    # left only in $LIB/actions is not the one root ever runs: without this line a release
+    # can carry a fix to it and the box keeps the old one for ever. That is not theoretical.
+    # The Install button was dead in every release that had one because of a bug in this
+    # file, and this line is why pressing Install could never have delivered its own fix.
+    # The snapshot above already covers $BIN/console-*, so the rollback path is unchanged.
+    install -m 0755 "$ROOT/console/actions/console-setup-priv" "$BIN/" 2>/dev/null || true
 fi
 [[ -f "$ROOT/console/console-self-enrol.sh" ]] && \
     install -m 0755 "$ROOT/console/console-self-enrol.sh" "$LIB/console-self-enrol.sh"
