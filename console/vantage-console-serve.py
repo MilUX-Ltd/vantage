@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.32.0"
+VERSION = "2.33.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.8-beta"
+VANTAGE_RELEASE = "0.9.9-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -4984,6 +4984,25 @@ form.action{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;
 .a-res.error{background:var(--fail-b);border:1px solid var(--fail);color:var(--fail)}
 .a-res a.dl{font-weight:700;text-decoration:underline;color:inherit}
 .a-res:empty{display:none}
+/* The updates result is not a line of output: it is buttons, a table and prose, so it
+   needs the whole card rather than one 240px grid column, and normal flow rather than
+   the pre-wrap that made inline-block buttons overlap each other.
+   Written as `.a-res.up-res` on purpose. The handler finishes by setting the state class
+   (`a-res up-res ok`), and `.a-res.ok` paints a tinted box with green text: at one class
+   this rule loses to it and the whole table turns green inside a padded panel. Two
+   classes and a later position in the sheet, and the layout holds whatever state lands. */
+.a-res.up-res{grid-column:1/-1;white-space:normal;font-family:var(--font-body);font-size:13.5px;padding:0;background:none;border:0;color:var(--fg)}
+.up-res>div{margin:2px 0}
+.up-res>a{display:inline-block;margin:4px 0 2px}
+.upbtns{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 2px}
+.upbtns .a-go{align-self:auto;margin:0}
+.up-res .tinv{margin-top:16px}
+.up-res .deplog{margin-top:12px}
+/* Nothing in the updates card is a labelled field pair, so the depcard grid put a
+   paragraph of prose in a 240px column beside an empty half. Every child takes the full
+   width; the grid then supplies the row gaps and the card keeps its own frame. */
+#upwrap>p.meta,#upwrap>.a-act,#upwrap>.cred-pass{grid-column:1/-1}
+#upwrap>p.meta{max-width:74ch}
 .vband{padding:11px 22px;font-family:var(--font-display);font-weight:600;font-size:14px;
  display:flex;align-items:center;gap:10px;color:var(--chip-fg)}
 .vband .vdot{width:9px;height:9px;border-radius:50%;background:currentColor;flex:0 0 auto}
@@ -10146,7 +10165,7 @@ def render_operations(state):
            if auth_configured() else "")
         + "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "
         "updates</button></div>"
-        "<div id=upres class='a-res' role=status aria-live=polite></div></div>")
+        "<div id=upres class='a-res up-res' role=status aria-live=polite></div></div>")
     # RAW string, and it must stay raw. Python turns \n into a real newline, and a real
     # newline inside a single-quoted JS string is a SyntaxError that kills the WHOLE
     # block: the check, download and install buttons all silently did nothing while the
@@ -10158,19 +10177,20 @@ b.addEventListener('click',function(){
   var r=document.getElementById('upres');
   b.disabled=true; r.textContent='Asking github.com\u2026';
   fetch('/api/updates/check').then(function(x){return x.json();}).then(function(j){
-    b.disabled=false; r.innerHTML=''; r.className='a-res';
+    b.disabled=false; r.innerHTML=''; r.className='a-res up-res';
     var l=j.latest||{};
-    if(!l.ok){ r.textContent=j.text||'could not check'; r.className='a-res err'; return; }
+    if(!l.ok){ r.textContent=j.text||'could not check'; r.className='a-res up-res err'; return; }
     r.appendChild(el('div',null,j.text));
     var where=(l.source==='release')?'published release':'latest tag';
     r.appendChild(el('div','meta','The repository\u2019s '+where+' is '+l.tag+
       (l.published?(' ('+l.published.slice(0,10)+')'):'')+'.'));
     if(l.url){var a=document.createElement('a');a.href=l.url;a.target='_blank';
       a.rel='noopener noreferrer';a.textContent='Open it on GitHub \u203a';r.appendChild(a);}
+    var row=el('div','upbtns'); r.appendChild(row);
     var eb=el('button','a-go','Update the checker on every box'); eb.type='button';
     eb.addEventListener('click',function(){
       var pw=document.querySelector('#upwrap .up-pass');
-      if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+      if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
       if(!confirm('Push this console\u2019s health checker to every box in the estate?\n\n'+
         'It only updates the checker, so boxes stop reporting against a stale one. '+
         'Consoles on the boxes are not touched.')) return;
@@ -10186,7 +10206,7 @@ b.addEventListener('click',function(){
          r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
        .catch(function(){ eb.disabled=false; eb.textContent='could not reach the console'; });
     });
-    r.appendChild(eb);
+    row.appendChild(eb);
     var cb=el('button','a-go','Update checkers AND consoles across the estate'); cb.type='button';
     cb.addEventListener('click',function(){
       var pw=document.querySelector('#upwrap .up-pass');
@@ -10207,7 +10227,7 @@ b.addEventListener('click',function(){
          r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
        .catch(function(){ cb.disabled=false; cb.textContent='could not reach the console'; });
     });
-    r.appendChild(cb);
+    row.appendChild(cb);
     if(j.last_apply){ r.appendChild(el('div','meta','Last install: '+j.last_apply.status+
       ' \u2014 '+(j.last_apply.message||''))); }
     (j.staged||[]).forEach(function(sg){
@@ -10216,7 +10236,7 @@ b.addEventListener('click',function(){
       var ub=el('button','a-go','Copy it to a USB stick'); ub.type='button';
       ub.addEventListener('click',function(){
         var pw=document.querySelector('#upwrap .up-pass');
-        if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+        if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
         ub.disabled=true; ub.textContent='Copying\u2026';
         fetch('/api/usb-export',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({folder:'updates', passphrase:pw?pw.value:''})})
@@ -10226,11 +10246,11 @@ b.addEventListener('click',function(){
            r.appendChild(el('div','meta',(x.o.copied||x.o.error||''))); })
          .catch(function(){ ub.disabled=false; ub.textContent='could not reach the console'; });
       });
-      r.appendChild(ub);
+      var srow=el('div','upbtns'); r.appendChild(srow); srow.appendChild(ub);
       var ib=el('button','a-go','Install '+sg.file+' on this box'); ib.type='button';
       ib.addEventListener('click',function(){
         var pw=document.querySelector('#upwrap .up-pass');
-        if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+        if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
         if(!confirm('Install '+sg.file+' on this box?\n\nThis console restarts as part of it. '+
           'If the new version does not come up, the old one is put back on its own.')) return;
         ib.disabled=true; ib.textContent='Installing\u2026';
@@ -10241,12 +10261,12 @@ b.addEventListener('click',function(){
            r.appendChild(el('div','meta',(x.o.message||x.o.error||''))); })
          .catch(function(){ ib.textContent='Installing, this page will drop'; });
       });
-      r.appendChild(ib);
+      srow.appendChild(ib);
     });
     var dl=el('button','a-go','Download this release to the shelf'); dl.type='button';
     dl.addEventListener('click',function(){
       var pw=document.querySelector('#upwrap .up-pass');
-      if(pw && !pw.value){ res.appendChild(el('div','meta','Enter your operator password first.')); return; }
+      if(pw && !pw.value){ r.appendChild(el('div','meta','Enter your operator password first.')); return; }
       dl.disabled=true; dl.textContent='Downloading\u2026';
       var lg=el('pre','deplog',''); r.appendChild(lg);
       fetch('/api/updates/pull',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -10264,7 +10284,7 @@ b.addEventListener('click',function(){
          },1200);
        }).catch(function(){ dl.disabled=false; dl.textContent='could not reach the console'; });
     });
-    r.appendChild(dl);
+    row.appendChild(dl);
     var dev=j.deviation||[];
     if(!j.manifest){
       r.appendChild(el('div','meta','That release declares no component versions, so this '+
@@ -10306,7 +10326,7 @@ b.addEventListener('click',function(){
         r.appendChild(btn);
       }
     }
-    r.className='a-res '+((j.state==='behind')?'warn':'ok');
+    r.className='a-res up-res '+((j.state==='behind')?'warn':'ok');
   }).catch(function(){ b.disabled=false;
     document.getElementById('upres').textContent='could not reach the console'; });
 });})();</script>""")
