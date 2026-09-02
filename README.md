@@ -161,18 +161,35 @@ their own baselines - the console and the health checker each version independen
 the release number and a component's number are not the same thing and are not expected
 to match.
 
-Download the latest release archive and its checksum from the
-[Releases page](https://github.com/MilUX-Ltd/vantage/releases/latest), then copy it to the
-server and run the installer. Put the version you downloaded in place of `<version>`:
+Always install the latest release. This fetches it, verifies it against its published
+checksum, and copies it to the server. There is no version number to look up or type: it
+prints the one it found. Run it on your own machine.
 
 ```bash
-shasum -a 256 -c vantage-<version>.tgz.sha256    # one line reading OK
-scp vantage-<version>.tgz you@your-server:~/
+TAG=$(curl -fsSL https://api.github.com/repos/MilUX-Ltd/vantage/releases \
+        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+echo "Installing $TAG"
+curl -fsSLO "https://github.com/MilUX-Ltd/vantage/releases/download/$TAG/vantage-${TAG#v}.tgz"
+curl -fsSLO "https://github.com/MilUX-Ltd/vantage/releases/download/$TAG/vantage-${TAG#v}.tgz.sha256"
+shasum -a 256 -c "vantage-${TAG#v}.tgz.sha256"   # must print one line reading OK
+scp "vantage-${TAG#v}.tgz" you@your-server:~/
+```
+
+If the checksum line does not read `OK`, stop. Then on the server, where the wildcard
+matches whichever archive you just copied:
+
+```bash
 ssh you@your-server
-tar -xzf vantage-<version>.tgz
+tar -xzf vantage-*.tgz
 cd vantage/console
 sudo ./install-vantage.sh --bind YOUR.SERVER.IP.ADDRESS
 ```
+
+To browse the releases yourself, or to install an older one deliberately, the
+[Releases page](https://github.com/MilUX-Ltd/vantage/releases) lists them newest first.
+Note that every 0.9.x release is marked pre-release through the beta, so GitHub's
+"Latest release" badge does not appear and `/releases/latest` lands on the list rather
+than on a release. That is why the command above reads the list instead.
 
 Install as your own account with `sudo`, or as root if your provider gave you root
 directly. A stock Ubuntu Server has neither a root password nor root SSH, so `sudo` is the

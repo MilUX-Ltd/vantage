@@ -301,8 +301,12 @@ The name does not have to resolve to anything yet. You have to be able to edit i
 
 ### 2.1 The A record
 
-In the zone, add an **A record** for the hostname, pointing at the address the outside world
-should reach.
+**Skip this if the box publishes nothing.** A fully private build needs no A record at all,
+and 2.3 covers why. Add one only if something outside the box's own network has to reach it
+by name.
+
+Otherwise, in the zone, add an **A record** for the hostname, pointing at the address the
+outside world should reach.
 
 **Set it to DNS only. The proxy must be off.** In Cloudflare that is the grey cloud, not the
 orange one. The proxy breaks TAK's ports (8089, 8443, 8446) and it breaks the HTTP-01

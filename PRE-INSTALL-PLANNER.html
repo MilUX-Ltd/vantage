@@ -297,13 +297,6 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     </div>
   </div>
 
-  <h3>Vantage</h3>
-  <div class="field">
-    <label for="ver">Release you downloaded</label>
-    <span class="hint">From the Releases page. Copy the version out of the file name.</span>
-    <input type="text" id="ver" placeholder="0.9.13-beta">
-  </div>
-
   <div class="actions">
     <button type="button" id="print">Print or save as PDF</button>
     <button type="button" class="ghost" id="reset">Start again</button>
@@ -333,7 +326,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
   "use strict";
 
   var KEY = "vantage-build-planner";
-  var ids = ["human", "fqdn", "host", "user", "router", "box", "mac", "certhost", "public", "ver"];
+  var ids = ["human", "fqdn", "host", "user", "router", "box", "mac", "certhost", "public"];
   var radios = ["shape", "kiosk", "vpn", "cert", "journey"];
 
   function $(id) { return document.getElementById(id); }
@@ -440,8 +433,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     "YOUR-USERNAME":   "Your username on the box",
     "ROUTER-ADDRESS":  "Router address",
     "BOX-ADDRESS":     "Box address",
-    "BOX-MAC-ADDRESS": "Box ethernet MAC",
-    "VERSION":         "Release you downloaded"
+    "BOX-MAC-ADDRESS": "Box ethernet MAC"
   };
 
   function missingIn(text) {
@@ -485,7 +477,6 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     var box = s.box || "BOX-ADDRESS";
     var router = s.router || "ROUTER-ADDRESS";
     var mac = normaliseMac(s.mac) || "BOX-MAC-ADDRESS";
-    var ver = s.ver || "VERSION";
     var human = s.human || "this box";
     var certhost = s.certhost || "";
     var MINE = "your own machine";
@@ -509,7 +500,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
       (kit && s.cert === "none") ? "nothing published" : (s.public || "not decided yet")]);
     rows.push(["Private network", s.vpn === "none" ? "none" : s.vpn]);
     rows.push(["Kiosk", s.kiosk === "yes" ? "yes" : "no"]);
-    rows.push(["Vantage release", ver]);
+    rows.push(["Vantage release", "the latest, resolved at download"]);
 
     out.push(block("Record", "Your build record", 
       "<p>Keep this. Every step below uses it, and you will want it again the next time anyone asks how this box is set up.</p>" +
@@ -547,8 +538,15 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     }
 
     // ---- step 2, DNS
-    out.push(block("Step 2", "The public DNS record",
-      "<p>In your DNS provider, add an A record. This is a web page, not a command, so here is what to type into it.</p>" +
+    // A build with no public certificate publishes nothing, so the record is a
+    // convenience and not a step. Saying so here, not only in step 3, because the
+    // operator reads step 2 first and does the work before reaching the caveat.
+    var dnsOptional = (s.cert === "none");
+    out.push(block("Step 2", "The public DNS record" + (dnsOptional ? " (optional)" : ""),
+      (dnsOptional
+        ? '<p class="skipped">You do not need this. You chose no public certificate, so nothing about this box is published and the build never asks for the record.</p>' +
+          "<p>Add one only if you want to reach the box by name from outside its own network, over the VPN. Without it you use the VPN address, which works just as well. If you skip it, skip the rest of this step.</p>"
+        : "<p>In your DNS provider, add an A record. This is a web page, not a command, so here is what to type into it.</p>") +
       '<div class="tablewrap"><table><tbody>' +
       "<tr><td>Type</td><td class=\"k\">A</td></tr>" +
       "<tr><td>Name</td><td class=\"" + (BLANKS.hasOwnProperty(host) ? "fill" : "k") + "\">" +
@@ -556,14 +554,15 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
       "<tr><td>Points at</td><td class=\"k\">" + esc(s.public || (kit ? "the box's VPN address, once it has one (step 5)" : box)) + "</td></tr>" +
       "<tr><td>Proxy</td><td class=\"k\">OFF. DNS only</td></tr>" +
       "</tbody></table></div>" +
-      '<div class="trap"><p><b>The proxy must be off.</b> On Cloudflare that is the grey cloud, not the orange one. Leaving it on breaks TAK\'s ports and the certificate check, and the symptom will not tell you that is why.</p></div>'));
+      (dnsOptional ? "" :
+        '<div class="trap"><p><b>The proxy must be off.</b> On Cloudflare that is the grey cloud, not the orange one. Leaving it on breaks TAK\'s ports and the certificate check, and the symptom will not tell you that is why.</p></div>')));
 
     // ---- step 3, certificate
     if (kit && s.cert === "none") {
       out.push(block("Step 3", "Certificate",
         "<p>You have chosen not to have a public one, which is a real answer on a closed network.</p>" +
         '<div class="trap"><p><b>Enrolling devices still works, QR included.</b> The build gives TAK its own certificate authority either way, and it is used on all three ports: 8089, 8443 and 8446. What you give up is a browser that does not warn on first connect, so everyone who uses the console learns to click through a security warning. Choose that on purpose.</p></div>' +
-        "<p>Pass <code>--no-letsencrypt</code> to the build to make the choice explicit, and skip the A record in step 2 as well.</p>" +
+        "<p>Pass <code>--no-letsencrypt</code> to the build to make the choice explicit.</p>" +
         "<p>You can get rid of the warning without a public certificate: install your own CA into the trust store of the browsers and devices that will use the box. That is a step per device, and it leaves the warning in place for everyone else.</p>" +
         '<div class="trap"><p><b>A local DNS server does not help here.</b> Running your own DNS solves names resolving offline, which step 1 already does on the router. It cannot get you a public certificate, because the certificate authority checks the record from its own resolvers out on the internet, where your local answer is invisible.</p></div>'));
     } else if (kit && s.cert === "laptop") {
@@ -727,12 +726,19 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
           : "")));
     } else {
       out.push(block("Step 6", "Install Vantage",
-        "<p>Download the release and its checksum from the Releases page first. Then, from your own machine:</p>" +
-        cmd("shasum -a 256 -c vantage-" + ver + ".tgz.sha256\n" +
-            "scp vantage-" + ver + ".tgz " + user + "@" + box + ":~/", MINE) +
-        "<p>Then on the box:</p>" +
+        "<p>This fetches the latest release, checks it against its published checksum, and copies it over. You do not need to know the version number: it prints the one it found.</p>" +
+        cmd("cd ~/Downloads\n" +
+            "TAG=$(curl -fsSL https://api.github.com/repos/MilUX-Ltd/vantage/releases \\\n" +
+            "        | sed -n 's/.*\"tag_name\": *\"\\([^\"]*\\)\".*/\\1/p' | head -1)\n" +
+            'echo "Installing $TAG"\n' +
+            'curl -fsSLO "https://github.com/MilUX-Ltd/vantage/releases/download/$TAG/vantage-${TAG#v}.tgz"\n' +
+            'curl -fsSLO "https://github.com/MilUX-Ltd/vantage/releases/download/$TAG/vantage-${TAG#v}.tgz.sha256"\n' +
+            'shasum -a 256 -c "vantage-${TAG#v}.tgz.sha256"\n' +
+            'scp "vantage-${TAG#v}.tgz" ' + user + "@" + box + ":~/", MINE) +
+        '<div class="trap"><p><b>The checksum line must say <code>OK</code>.</b> If it does not, stop: the download is damaged or tampered with, and installing it anyway puts something you did not verify on the box.</p></div>' +
+        "<p>Then on the box. It matches whichever tarball you just copied, so there is still no version to type:</p>" +
         cmd("ssh " + user + "@" + box + "\n" +
-            "tar -xzf vantage-" + ver + ".tgz\n" +
+            "tar -xzf vantage-*.tgz\n" +
             "cd vantage/console\n" +
             "sudo ./install-vantage.sh --bind " + box, MINE) +
         "<p>It finishes by telling you where to go:</p>" +

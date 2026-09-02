@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.25-beta"
+VANTAGE_RELEASE = "0.9.26-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -4020,7 +4020,8 @@ def setup_api(path, data, client):
         new = str(data.get("new", ""))
         if len(new) < 12:
             return 400, {"error": "use at least 12 characters"}
-        if auth_configured() and not session_valid(self) and not verify_operator_password(str(data.get("current", ""))):
+        if (auth_configured() and not data.get("_session_ok")
+                and not verify_operator_password(str(data.get("current", "")))):
             audit({"action": "set-password", "result": "DENIED", "client": client})
             return 403, {"error": "current password is wrong"}
         blob = base64.b64encode(json.dumps(hash_password(new)).encode()).decode()
@@ -10181,7 +10182,8 @@ def set_console_mode_api(data, client):
                      "its own Vantage console, enrolled for the console-mode action"}
     # operator-password re-entry, exactly like the local mode gate; skipped only when this
     # console runs open (there is no password to ask for)
-    if auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
+    if (auth_configured() and not data.get("_session_ok")
+            and not verify_operator_password(data.get("passphrase", ""))):
         return 403, {"error": "your operator password is required to change a box's console role"}
     key = os.path.join(ACTION_KEYS, ACTIONS["console-mode"]["key"])
     dest = cfg["targets"][target]
