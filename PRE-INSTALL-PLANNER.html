@@ -87,6 +87,8 @@ select{font-family:var(--f-body);font-size:15px}
 .certcompare[data-cert="none"] tr[data-c="none"],
 .certcompare[data-cert="laptop"] tr[data-c="laptop"],
 .certcompare[data-cert="token"] tr[data-c="token"]{opacity:1;background:var(--ok-fill)}
+.note-quiet{background:var(--surface-sunk);margin-top:8px}
+.hint-spaced{margin-top:6px}
 .note{font-size:13.5px;border-radius:3px;padding:9px 12px;margin:6px 0 0}
 .note.warn{background:var(--flag-fill);border:1px solid var(--flag);color:var(--ink)}
 .note.warn b{color:var(--flag)}
@@ -189,7 +191,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
       <label><input type="radio" name="journey" value="first" checked> My first one</label>
       <label><input type="radio" name="journey" value="estate"> Adding to an estate I run</label>
     </div>
-    <div class="note" id="journeynote" style="background:var(--surface-sunk);margin-top:8px"></div>
+    <div class="note note-quiet" id="journeynote"></div>
   </div>
   <div class="field">
     <label>Shape</label>
@@ -269,7 +271,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
         </tbody>
       </table>
     </div>
-    <span class="hint" style="margin-top:6px">Either <b>Yes</b> has to be arranged <b>before</b> the build, because a kit behind a router cannot be reached by the certificate authority. <b>No</b> needs nothing doing.</span>
+    <span class="hint hint-spaced">Either <b>Yes</b> has to be arranged <b>before</b> the build, because a kit behind a router cannot be reached by the certificate authority. <b>No</b> needs nothing doing.</span>
   </div>
   <div class="field kit-only cert-token">
     <label for="certhost">Machine that holds your DNS token</label>
