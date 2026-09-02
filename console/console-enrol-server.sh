@@ -264,14 +264,24 @@ echo "[4/6] authorized_keys (idempotent)"
 } | $SSH "$RSUDO bash -c 'install -d -m 700 -o takwatch -g takwatch /home/USER/.ssh; touch /home/USER/.ssh/authorized_keys; while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takwatch:takwatch /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys'" \
   || die "could not write takwatch's authorized_keys"
 for k in "${!ACTION_SCRIPTS[@]}"; do
-  printf 'command="/usr/local/bin/%s",restrict %s\n' "${ACTION_SCRIPTS[$k]}" "$(cat "$KEYDIR/$k.pub")"
+  # An unreadable or empty .pub used to produce 'command="...",restrict ' with NOTHING
+  # after it. sshd skips a keyless line in silence, the count below still saw a non-empty
+  # line, and enrolment reported success over an authorized_keys file in which not one
+  # key could authenticate. The failure then surfaced two phases later as a bare
+  # "Permission denied", pointing at sshd.
+  [[ -s "$KEYDIR/$k.pub" ]] || die "$KEYDIR/$k.pub is missing or empty - this console's action keys are incomplete, so re-run the console installer here before enrolling anything"
+  kp=$(cat "$KEYDIR/$k.pub") || die "cannot read $KEYDIR/$k.pub (run this as root or as vantage-console)"
+  [[ "$kp" == ssh-* ]] || die "$KEYDIR/$k.pub does not look like a public key"
+  printf 'command="/usr/local/bin/%s",restrict %s\n' "${ACTION_SCRIPTS[$k]}" "$kp"
 done | $SSH "$RSUDO bash -c 'install -d -m 700 -o takadmin -g takadmin /home/USER/.ssh; touch /home/USER/.ssh/authorized_keys; while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takadmin:takadmin /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys'" \
   || die "could not write takadmin's authorized_keys"
 
 # Earned, not announced. Ask the box what it actually has, and refuse to continue if the
 # keys are not there - the next three phases all authenticate as these users, and a build
 # that stops here with the reason is worth more than one that stops later without it.
-KEYCOUNT=$($SSH "$RSUDO bash -c 'w=0; a=0; [ -s /home/USER/.ssh/authorized_keys ] && w=\$(grep -c . /home/USER/.ssh/authorized_keys); [ -s /home/USER/.ssh/authorized_keys ] && a=\$(grep -c . /home/USER/.ssh/authorized_keys); echo \"\$w \$a\"'" 2>/dev/null || echo "0 0")
+# grep -c . counted LINES. A line reading 'command="...",restrict ' with no key on the
+# end is a line, and 36 of them counted as 36 keys. Count lines carrying an actual key.
+KEYCOUNT=$($SSH "$RSUDO bash -c 'w=0; a=0; [ -s /home/USER/.ssh/authorized_keys ] && w=\$(grep -c \"ssh-[a-z0-9-]* AAAA\" /home/USER/.ssh/authorized_keys); [ -s /home/USER/.ssh/authorized_keys ] && a=\$(grep -c \"ssh-[a-z0-9-]* AAAA\" /home/USER/.ssh/authorized_keys); echo \"\$w \$a\"'" 2>/dev/null || echo "0 0")
 read -r WKEYS AKEYS <<<"$KEYCOUNT"
 [[ "${WKEYS:-0}" -ge 1 ]] || die "takwatch has no authorized_keys on the box - enrolment cannot have worked"
 [[ "${AKEYS:-0}" -ge 1 ]] || die "takadmin has no authorized_keys on the box - enrolment cannot have worked"
@@ -312,7 +322,16 @@ case "$H" in FAIL*|HEALTH-FAIL*) H="$H   (expected before TAK Server is installe
 B=$(sudo -H -u vantage-console ssh -i "$KEYDIR/id_action_logs" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
     "takadmin@$HOST" "wrong-verb x" 2>&1 | grep -v "known hosts" | head -1 || true)
 echo "health check:   $H"
-echo "boundary check: $B   (an ERR refusal here is CORRECT)"
+# A refusal from the forced command is the pass. "Permission denied (publickey)" is NOT:
+# it means no action key authenticates as takadmin at all, and every phase after this one
+# connects as takadmin. This printed the auth failure and called it CORRECT, so enrolment
+# announced success and phase 3 died on the same denial with nothing to point at.
+case "$B" in
+  *"Permission denied"*|*"Too many authentication failures"*|*"Host key verification failed"*)
+    echo "boundary check: $B"
+    die "no action key authenticates as takadmin@$HOST, so provisioning cannot run. The keys were written but sshd will not accept them: check that /home/USER and its .ssh are owned by takadmin, that authorized_keys lines carry a key after 'restrict', and that sshd_config does not exclude takadmin (AllowUsers/AllowGroups)." ;;
+  *) echo "boundary check: $B   (an ERR refusal here is CORRECT)" ;;
+esac
 echo
 echo "'$NAME' is enrolled. It appears on the console at the next poll; its software"
 echo "inventory is judged against the baseline, and its server page carries its actions."

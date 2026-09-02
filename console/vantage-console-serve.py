@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.27-beta"
+VANTAGE_RELEASE = "0.9.28-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -6459,6 +6459,14 @@ form.action{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;
 .up-res{display:flex;flex-direction:column;gap:14px}
 .up-state{display:flex;flex-direction:column;gap:3px}
 .up-verdict{font-weight:600;font-size:15px}
+/* A gated action: password then button, on one line, wrapping to two on a narrow
+   screen. The field is only as wide as it needs to be, so the button stays the thing
+   your eye lands on. */
+.up-install{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0}
+.up-install .a-go{margin:0;align-self:auto}
+.up-pass-inline{font:400 13px/1.4 var(--font-sans);color:var(--fg);background:var(--card);
+  border:1px solid var(--rule2);border-radius:6px;padding:9px 11px;width:190px;max-width:100%}
+.up-pass-inline:focus{outline:2px solid var(--accent);outline-offset:1px}
 .up-primary{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
 .up-primary .a-go.primary{font-size:13px;padding:11px 18px}
 .up-quiet{color:var(--fg2)}
@@ -11706,24 +11714,23 @@ def render_operations(state):
     # with no route to github.com simply says so.
     doc.append("<h2 class=sec-eye>Vantage updates</h2>")
     doc.append(
-        "<div class=depcard id=upwrap><p class=meta>This box runs Vantage "
+        f"<div class=depcard id=upwrap data-auth='{'1' if auth_configured() else '0'}'>"
+        "<p class=meta>This box runs Vantage "
         f"<b>{e(VANTAGE_RELEASE)}</b> (console {e(VERSION)}). Check what "
         f"<code>{e(VANTAGE_REPO)}</code> publishes, and see whether an update is waiting. "
         "The check calls github.com only when you press it; nothing is downloaded and no "
         "credentials leave this box. An offline box will say it could not reach GitHub, "
         "which is not a fault.</p>"
         # The check is a READ: /api/updates/check is a GET and is not gated, and the
-        # handler below sends no passphrase. The field used to sit ABOVE this button,
-        # which read as "you must sign in to look" and is the opposite of what the
-        # security model says - reads are separated from writes. It now follows the
-        # button, and says what it is actually for.
+        # handler below sends no passphrase.
         + "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "
         "updates</button></div>"
-        + ("<label class=cred-pass><span>Operator password"
-           "<small class=up-passnote> \u2014 needed to download or install. "
-           "Checking needs nothing.</small></span>"
-           "<input type=password class=up-pass autocomplete=off></label>"
-           if auth_configured() else "")
+        # No password field here any more. It said "needed to download or install", which
+        # was wrong on both counts: checking is a GET, and downloading writes one file to
+        # this console's own shelf and touches no box - neither has ever been gated. It sat
+        # above the buttons, so the first thing the panel asked for was a password to look
+        # at a version number. Installing IS gated, so its field now sits against the
+        # Install button, which stays disabled until it has something in it.
         + "<div id=upres class='a-res up-res' role=status aria-live=polite></div></div>")
     # RAW string, and it must stay raw. Python turns \n into a real newline, and a real
     # newline inside a single-quoted JS string is a SyntaxError that kills the WHOLE
@@ -11732,8 +11739,36 @@ def render_operations(state):
     doc.append(r"""<script>(function(){
 var b=document.getElementById('upchk'); if(!b)return;
 function el(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;}
-function pw(){var p=document.querySelector('#upwrap .up-pass'); return p?p.value:'';}
-function needpw(){var p=document.querySelector('#upwrap .up-pass'); return !!(p && !p.value);}
+var AUTH=(document.getElementById('upwrap')||{}).getAttribute
+        ? document.getElementById('upwrap').getAttribute('data-auth')==='1' : false;
+
+// A gated button: the password belongs to THIS button and nothing else, so it is built
+// with it. One row, field then button, and the button is dead until the field has
+// something in it. Five buttons in this panel are gated and each carried its own copy of
+// the check, all reading one field somewhere further up the page. This is the single
+// implementation, and it is why that shared field could be deleted.
+function gatedControl(parent, label, onGo, cls){
+  var row=el('div','up-install'), field=null;
+  var ib=el('button',cls||'a-go primary',label); ib.type='button';
+  if(AUTH){
+    field=document.createElement('input');
+    field.type='password'; field.className='up-pass-inline'; field.autocomplete='off';
+    field.placeholder='Operator password';
+    field.setAttribute('aria-label','Operator password, needed to install');
+    ib.disabled=true;
+    field.addEventListener('input',function(){ ib.disabled = !field.value; });
+    field.addEventListener('keydown',function(ev){
+      if(ev.key==='Enter' && field.value && !ib.disabled){ ev.preventDefault(); ib.click(); }
+    });
+    row.appendChild(field);
+  }
+  row.appendChild(ib);
+  parent.appendChild(row);
+  var ctl={btn:ib, row:row, pass:function(){return field?field.value:'';},
+           reset:function(){ if(field) ib.disabled=!field.value; else ib.disabled=false; }};
+  ib.addEventListener('click',function(){ onGo(ctl); });
+  return ctl;
+}
 function mb(n){return Math.max(1,Math.round(n/1048576))+' MB';}
 
 // ONE log, reused. Every download used to append a fresh transcript, so pressing the button
@@ -11790,21 +11825,21 @@ b.addEventListener('click',function(){
     var target = (cand && cand.version !== j.here) ? cand : null;
     var act=el('div','up-primary'); r.appendChild(act);
     if(target){
-      var ib=el('button','a-go primary','Install '+target.version+' on this box'); ib.type='button';
-      ib.addEventListener('click',function(){
-        if(needpw()){ note(act,'Enter your operator password first.'); return; }
+      gatedControl(act,'Install '+target.version+' on this box',function(c){
         if(!confirm('Install '+target.file+' on this box?\n\nThis console restarts as part of '+
-          'it. If the new version does not come up, the old one is put back on its own.')) return;
-        ib.disabled=true; ib.textContent='Installing, this page will drop…';
+          'it. If the new version does not come up, the old one is put back on its own.')){
+          c.reset(); return; }
+        c.btn.disabled=true; c.btn.textContent='Installing, this page will drop…';
         fetch('/api/updates/apply',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({file:target.file, passphrase:pw()})})
+          body:JSON.stringify({file:target.file, passphrase:c.pass()})})
          .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
-         .then(function(x){ if(x.code!==200){ ib.disabled=false;
-             ib.textContent='Install '+target.version+' on this box'; }
+         .then(function(x){ if(x.code!==200){ c.reset();
+             c.btn.textContent=(x.code===403?'Password rejected, try again':'Install '+target.version+' on this box'); }
            note(act,(x.o.message||x.o.error||'')); })
          .catch(function(){ note(act,'Installing. Reload this page in a moment.'); });
       });
-      act.appendChild(ib);
+      if(AUTH) note(act,'Your operator password is needed here: installing replaces this '+
+                    'console and restarts it.');
       if(!l.ok) note(act,'From the shelf. This box could not check what is published.');
     } else if(j.state==='behind'){
       var dl=el('button','a-go primary','Download '+l.tag+' to the shelf'); dl.type='button';
@@ -11828,24 +11863,23 @@ b.addEventListener('click',function(){
                  // Downloaded, so offer the next step here rather than sending the operator
                  // back to press Check a second time to make a button appear.
                  dl.textContent='Downloaded'; dl.disabled=true;
-                 var ib=el('button','a-go primary','Install '+l.tag+' on this box'); ib.type='button';
-                 ib.addEventListener('click',function(){
-                   if(needpw()){ note(act,'Installing changes this box, so it needs your operator password.'); return; }
-                   ib.disabled=true; ib.textContent='Installing…';
+                 gatedControl(act,'Install '+l.tag+' on this box',function(c){
+                   c.btn.disabled=true; c.btn.textContent='Installing…';
                    fetch('/api/updates/apply',{method:'POST',headers:{'Content-Type':'application/json'},
                      // The pull job does not report the name it wrote, and an empty file
                      // would fail apply with a useless error. The name is deterministic:
                      // the tag without its leading v, which is what the asset is called.
                      body:JSON.stringify({file:(jb.file||('vantage-'+String(l.tag).replace(/^v/,'')+'.tgz')),
-                                          passphrase:pw()})})
+                                          passphrase:c.pass()})})
                     .then(function(y){return y.json().then(function(o){return{code:y.status,o:o};});})
-                    .then(function(y){ ib.disabled=false;
-                      if(y.code!==200){ ib.textContent=(y.code===403?'Password rejected':'Install failed');
+                    .then(function(y){ c.reset();
+                      if(y.code!==200){ c.btn.textContent=(y.code===403?'Password rejected, try again':'Install failed');
                         note(act,(y.o.error||'failed')); return; }
-                      ib.textContent='Installing…'; note(act,'The console restarts on the new version; reload in a moment.'); })
-                    .catch(function(){ ib.disabled=false; ib.textContent='could not reach the console'; });
+                      c.btn.textContent='Installing…'; note(act,'The console restarts on the new version; reload in a moment.'); })
+                    .catch(function(){ c.reset(); c.btn.textContent='could not reach the console'; });
                  });
-                 act.appendChild(ib);
+                 if(AUTH) note(act,'Your operator password is needed to install: it replaces '+
+                               'this console and restarts it. Downloading needed nothing.');
                }
              }).catch(function(){});
            },1200);
@@ -11876,19 +11910,18 @@ b.addEventListener('click',function(){
         else if(sg.newest && !l.ok) lab.appendChild(el('span','pill ok','newest here'));
         else lab.appendChild(el('span','pill','superseded'));
         row.appendChild(lab);
-        var ub=el('button','a-go small','Copy '+sg.version+' to a USB stick'); ub.type='button';
-        ub.addEventListener('click',function(){
-          if(needpw()){ note(row,'Enter your operator password first.'); return; }
+        gatedControl(row,'Copy '+sg.version+' to a USB stick',function(c){
+          var ub=c.btn;
           ub.disabled=true; ub.textContent='Copying…';
           fetch('/api/usb-export',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({folder:'updates', passphrase:pw()})})
+            body:JSON.stringify({folder:'updates', passphrase:c.pass()})})
            .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
-           .then(function(x){ ub.disabled=false;
-             ub.textContent='Copy '+sg.version+' to a USB stick';
+           .then(function(x){ c.reset();
+             ub.textContent=(x.code===403?'Password rejected, try again'
+                                         :'Copy '+sg.version+' to a USB stick');
              note(row,(x.o.copied||x.o.error||'')); })
-           .catch(function(){ ub.disabled=false; ub.textContent='could not reach the console'; });
-        });
-        row.appendChild(ub);
+           .catch(function(){ c.reset(); ub.textContent='could not reach the console'; });
+        },'a-go small');
         // Staged archives used to accumulate with no way to clear them from the page that
         // created them: five superseded releases, every one offering only a USB copy.
         if(!sg.current && !sg.newest){
@@ -11916,16 +11949,15 @@ b.addEventListener('click',function(){
     var es=section(r,'The rest of the estate');
     note(es,'These write to every enrolled box, not just this one.');
     var erow=btnrow(es);
-    var eb=el('button','a-go','Update the checker on every box'); eb.type='button';
-    eb.addEventListener('click',function(){
-      if(needpw()){ note(es,'Enter your operator password first.'); return; }
+    gatedControl(erow,'Update the checker on every box',function(c){
+      var eb=c.btn;
       if(!confirm('Push this console’s health checker to every box in the estate?\n\n'+
         'It only updates the checker, so boxes stop reporting against a stale one. '+
         'Consoles on the boxes are not touched.')) return;
       eb.disabled=true; eb.textContent='Updating the estate…';
       var lg=logbox(es);
       fetch('/api/updates/estate',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({passphrase:pw()})})
+        body:JSON.stringify({passphrase:c.pass()})})
        .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
        .then(function(x){ eb.disabled=false; eb.textContent='Update the checker on every box';
          (x.o.results||[]).forEach(function(q){
@@ -11934,10 +11966,8 @@ b.addEventListener('click',function(){
          note(es,(x.o.message||x.o.error||'')); })
        .catch(function(){ eb.disabled=false; eb.textContent='could not reach the console'; });
     });
-    erow.appendChild(eb);
-    var cb=el('button','a-go','Update checkers and consoles across the estate'); cb.type='button';
-    cb.addEventListener('click',function(){
-      if(needpw()){ note(es,'Enter your operator password first.'); return; }
+    gatedControl(erow,'Update checkers and consoles across the estate',function(c){
+      var cb=c.btn;
       if(!confirm('Update the checker AND the console on every box?\n\n'+
         'Each box keeps its own address and port, so it stays where you put it.\n\n'+
         'It runs one box at a time and STOPS at the first failure, leaving the rest alone. '+
@@ -11945,7 +11975,7 @@ b.addEventListener('click',function(){
       cb.disabled=true; cb.textContent='Updating the estate…';
       var lg=logbox(es);
       fetch('/api/updates/estate',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({passphrase:pw(), consoles:true})})
+        body:JSON.stringify({passphrase:c.pass(), consoles:true})})
        .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
        .then(function(x){ cb.disabled=false;
          cb.textContent='Update checkers and consoles across the estate';
@@ -11955,7 +11985,6 @@ b.addEventListener('click',function(){
          note(es,(x.o.message||x.o.error||'')); })
        .catch(function(){ cb.disabled=false; cb.textContent='could not reach the console'; });
     });
-    erow.appendChild(cb);
 
     // ---- 5. baseline and drift, its own section rather than wedged between buttons ----
     var dev=j.deviation||[];
@@ -16994,7 +17023,9 @@ class Handler(BaseHTTPRequestHandler):
             sub = str(data.get("folder", "updates"))
             if sub not in ("updates", "tak-server", "software", "map-packs", "mission-packs"):
                 code, res = 400, {"error": "unknown shelf"}
-            elif auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
+            # real gate, same reasoning as apply: the button asks for a password, so the
+            # password has to be what decides it
+            elif auth_configured() and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to copy files "
                                   "onto a stick"}
             else:
@@ -17004,8 +17035,9 @@ class Handler(BaseHTTPRequestHandler):
                 code, res = ((200, {"copied": txt.strip()[:200]}) if ok else
                              (500, {"error": (txt or "copy failed").strip()[:200]}))
         elif path == "/api/updates/estate":
-            # push the current checker to every box. Gated: it writes to every box at once.
-            if auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
+            # push the current checker to every box. Gated: it writes to every box at once,
+            # and like apply above the gate is real rather than session-satisfied.
+            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to update the estate"}
             else:
                 code, res = update_estate(client, str(data.get("passphrase", "")),
@@ -17018,7 +17050,12 @@ class Handler(BaseHTTPRequestHandler):
             # nothing outside the shelf can be named.
             code, res = remove_staged_release(data.get("file", ""), client)
         elif path == "/api/updates/apply":
-            if auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
+            # A REAL gate, not one a session satisfies. The button beside this action is
+            # dead until its password field has something in it, so if a signed-in session
+            # were accepted here a WRONG password would install anyway and "Password
+            # rejected" could never appear. Re-entry is the point: this is the consequential
+            # action, and the operator is confirming it is them.
+            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to install a release"}
             else:
                 code, res = apply_release(data, client)
