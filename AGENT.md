@@ -190,6 +190,12 @@ not that it is authentic.
 managing users and groups, reading and backing up the configuration. It carries the rule that
 catches people out, that deleting an account does not revoke a certificate.
 
+**`plan-a-build`** works out what a box needs before anything is installed, and hands the
+operator a plan code the Deploy wizard fills itself in from. It asks the same questions as the
+build planner, in the same order, and finds what it can from the console instead of asking.
+Its point is the preconditions: a build fails on those, not on steps, and it names them before
+twenty minutes are spent.
+
 **`deploy-server`** takes a bare machine to a managed server, stage by stage, with how each stage
 fails. **`federation`** and **`networks`** cover what reaches past your own estate: a partner's
 server, a private network, the radio mesh. **`vantage-internals`** is where everything lives, for

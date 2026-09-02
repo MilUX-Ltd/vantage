@@ -115,6 +115,10 @@ install -m 0755 "$SRC/vantage-build-offline-bundle" /usr/local/bin/vantage-build
 # out here the way they are in the repo, so the console reads the fact rather than deriving
 # it) and served to operators and agents through baseline_status.
 [[ -r "$SRC/third-party.json" ]] && install -m 0644 "$SRC/third-party.json" "$LIB/"
+# The build planner, served by the console at /planner. One self-contained file that
+# fetches nothing, so a box with no route out still has it and every update refreshes it.
+[[ -r "$SRC/../PRE-INSTALL-PLANNER.html" ]] && \
+    install -m 0644 "$SRC/../PRE-INSTALL-PLANNER.html" "$LIB/planner.html"
 install -m 0755 "$SRC/vantage-baseline" /usr/local/bin/vantage-baseline 2>/dev/null || true
 # the full action catalogue lives on the console as the SOURCE enrolment pushes to
 # every box it manages - the whole gated-management surface travels from here

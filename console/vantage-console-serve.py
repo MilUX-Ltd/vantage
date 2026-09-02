@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.28-beta"
+VANTAGE_RELEASE = "0.9.29-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -6462,6 +6462,17 @@ form.action{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;
 /* A gated action: password then button, on one line, wrapping to two on a narrow
    screen. The field is only as wide as it needs to be, so the button stays the thing
    your eye lands on. */
+.wz-plan-get{margin:8px 0 0;font-size:12.5px;color:var(--muted);max-width:70ch;line-height:1.5}
+.wz-plan-get a{color:var(--accent);font-weight:600}
+/* The mint gate is its own block under the credential rows, not a stray field in the
+   button row where it lined up under the remove column and explained nothing. */
+.wz-mintgate{margin:14px 0 0;padding:12px 14px;background:var(--sunk);border:1px solid var(--rule2);
+  border-left:3px solid var(--accent);border-radius:6px;max-width:52ch}
+.wz-mintgate .fl{display:block;margin:0 0 5px}
+.wz-mintgate input{width:100%;font:400 13.5px/1.4 var(--font-sans);color:var(--fg);
+  background:var(--card);border:1px solid var(--rule2);border-radius:6px;padding:9px 11px}
+.wz-mintgate input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.wz-mintgate .meta{margin:8px 0 0;font-size:12.5px;line-height:1.5}
 .up-install{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0}
 .up-install .a-go{margin:0;align-self:auto}
 .up-pass-inline{font:400 13px/1.4 var(--font-sans);color:var(--fg);background:var(--card);
@@ -16081,6 +16092,16 @@ def render_deploy(state):
                "Fill the form from this plan</button><span class=meta>from the pre-install "
                "planner. Settings only - it carries no password or key. Nothing is saved "
                "until you press the button at step 5.</span></div>"
+               # An operator can reach this page never having heard of the planner, and
+               # the paste box alone does not tell them one exists. The planner ships in
+               # every release, so this console serves its own copy: a box with no route
+               # out still gets it, and it is refreshed by the same update that refreshes
+               # everything else.
+               "<p class=wz-plan-get>No plan yet? The planner asks these questions in "
+               "order, warns about the traps, and hands you the line to paste above. "
+               "<a href='/planner' target=_blank rel=noopener>Open the build planner</a>"
+               " &middot; <a href='/planner?download=1' download='vantage-planner.html'>"
+               "download it</a> to use on a machine with no console.</p>"
                "<div id=wz-planres class=a-res role=status></div></div>"
                "<div class=wz-selfrow><button type=button id=wz-selfbox class='a-go confirm'>"
                "Deploy on this box</button><span class=hint>the console's own server "
@@ -16217,10 +16238,19 @@ def render_deploy(state):
                "from the box's Credentials panel.</p>"
                "<div id=wz-creds></div>"
                "<div class=wz-acc-row><button type=button id=wz-addcred class=cred-dl>+ Add a "
-               "user</button><label class=cred-pass id=wz-passwrap hidden>"
-               "<span>Operator password <b class=req>required</b></span>"
+               "user</button></div>"
+               # This used to sit inside the button row, so it landed against the "+ Add a
+               # user" button and lined up under the remove column of the rows above, with
+               # nothing saying what it was for. It is its own block now, below the rows it
+               # belongs to, and it says why it is being asked.
+               "<div class=wz-mintgate id=wz-passwrap hidden>"
+               "<label class=fl for=wz-pass>Operator password <b class=req>required</b></label>"
                "<input type=password id=wz-pass autocomplete=off "
-               "placeholder='required to mint users'></label></div></fieldset>")
+               "placeholder='your operator password'>"
+               "<p class=meta>Needed to mint the certificates. Each user above gets an "
+               "enrolment credential that is a certificate signed by this box's own "
+               "certificate authority, and signing is what your password releases. Add no "
+               "users and you are not asked for it.</p></div></fieldset>")
     doc.append("<fieldset class='wz-step depcard locked'><legend>5 · Run</legend>"
                "<label class=depdry><input type=checkbox id=wz-console checked> "
                "<b>Install a console on this box</b> - a self-manage Vantage console (the "
@@ -16523,6 +16553,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503 if err else 200,
                        json.dumps({"error": err}) if err else json.dumps(state, indent=2),
                        "application/json")
+        elif path == "/planner" or path.startswith("/planner?"):
+            # The build planner, served by the console itself. It ships in every release,
+            # so a box with no route to the internet still has it, and the same update
+            # that refreshes the console refreshes this. It is one self-contained file
+            # that fetches nothing, which is why it can be handed out whole.
+            pf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "planner.html")
+            try:
+                with open(pf, "rb") as fh:
+                    body = fh.read()
+            except OSError:
+                self._send(404, "<h1>The planner is not on this console</h1><p>It ships with "
+                           "the release. Re-run the console installer here, or use "
+                           "<a href='https://tak.example.com/vantage/planner'>the copy on "
+                           "milux.co.uk</a>.</p>", "text/html; charset=utf-8")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            import urllib.parse as _upp
+            if "download=1" in (_upp.urlparse(self.path).query or ""):
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="vantage-planner.html"')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         elif path == "/healthz":
             self._send(200 if not err else 503, "ok\n" if not err else err, "text/plain")
         elif path == "/api/updates/check":
