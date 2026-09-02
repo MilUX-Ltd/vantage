@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.40.1"
+VERSION = "2.41.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.17-beta"
+VANTAGE_RELEASE = "0.9.18-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -15981,12 +15981,22 @@ def render_deploy(state):
                # The explainer sits OUTSIDE the label. .fl sets text-transform:uppercase and
                # every child opts out one by one, so a div in there came out shouting in full
                # caps. It is better HTML out here too: a block of prose is not part of a label.
+               # TWO profiles, because only one thing here is a profile question: is this
+               # box reachable from the internet? That decides the firewall expectation and
+               # the certificate expectation, and those two flags moved together in all
+               # three old profiles. Everything else - services, ports, tilesets - is what
+               # the box CARRIES, which is the loadout's job, and apply_loadout() already
+               # replaces the profile's lists wholesale when a box declares one.
+               # "Deployable kit" was a third profile only because this wizard offered two
+               # of the eight components the provisioner can install, so a bundle had to
+               # stand in for a kit. Step 3 now offers all eight, so it does not.
+               # The checker keeps 'deployed' for boxes already declaring it, exactly as it
+               # keeps 'nuc'. It is simply no longer offered for a new build.
                "<label class=fl>Health profile<select id=wz-profile>"
-               "<option value=cloud>Public cloud server - anyone can reach it</option>"
-               "<option value=firmbase>Private network server - only your people can "
-               "reach it</option>"
-               "<option value=deployed>Deployable kit - goes out and works with the cable "
-               "pulled</option></select></label>"
+               "<option value=cloud>Public server - anyone can reach it over the "
+               "internet</option>"
+               "<option value=firmbase selected>Private server - only your own people can "
+               "reach it</option></select></label>"
                "<div class=wz-profx id=wz-profx></div>"
                "<div class=wz-access><b>Bootstrap access</b> - used once, then destroyed:"
                "<div class=wz-acc-row><button type=button id=wz-genkey class=cred-refresh>"
@@ -16043,14 +16053,40 @@ def render_deploy(state):
                "<label class=fl>.deb path on the box<input id=wz-deb placeholder='/root/takserver.deb'>"
                "<span class=hint>filled from the library selection; edit only for an "
                "already-on-box package</span></label>"
-               "<div class=fl><span class=wz-comp-t>Extra components</span>"
+               # All EIGHT the provisioner can install, not the two that were offered.
+               # What is ticked here is also what the box DECLARES it carries: enrolment
+               # seeds /etc/tak-health.d/loadout.conf from this list and the checker narrows
+               # its expectations to exactly it. Offering two of eight is what made a
+               # "deployable kit" profile necessary in the first place.
+               "<div class=fl><span class=wz-comp-t>What this box carries</span>"
+               "<span class=hint>Tick what the build should install. The box declares "
+               "exactly this, and its health checks then expect exactly this - no more, no "
+               "less. Changeable later from the box's own page.</span>"
                "<div class=wz-comps>"
                "<label class=wz-comp><input type=checkbox class=wzcomp value=cloudtak>"
-               "<span><b>CloudTAK</b><small>web map + missions stack (Docker, pinned "
-               "v13.70.0); web port stays loopback until exposed deliberately</small></span></label>"
+               "<span><b>Web map</b><small>the map and missions in a browser, for people "
+               "without ATAK</small></span></label>"
                "<label class=wz-comp><input type=checkbox class=wzcomp value=mediamtx>"
-               "<span><b>MediaMTX</b><small>video relay for drone and camera feeds (pinned "
-               "v1.20.0); firewall untouched until a producer needs in</small></span></label>"
+               "<span><b>Video</b><small>drone and camera feeds relayed onto the "
+               "map</small></span></label>"
+               "<label class=wz-comp><input type=checkbox class=wzcomp value=maps>"
+               "<span><b>Offline maps</b><small>map tiles served from this box, so devices "
+               "have maps with no internet</small></span></label>"
+               "<label class=wz-comp><input type=checkbox class=wzcomp value=lanntp>"
+               "<span><b>Time source</b><small>this box gives the network its clock, which "
+               "matters when nothing can reach the internet</small></span></label>"
+               "<label class=wz-comp><input type=checkbox class=wzcomp value=mosquitto>"
+               "<span><b>Sensor messaging</b><small>for sensors and other systems feeding "
+               "the picture</small></span></label>"
+               "<label class=wz-comp><input type=checkbox class=wzcomp value=nodered>"
+               "<span><b>Integrations</b><small>wiring other systems into TAK without "
+               "writing code</small></span></label>"
+               "<label class=wz-comp><input type=checkbox class=wzcomp value=ollama>"
+               "<span><b>Local AI</b><small>a model on the box itself, so an assistant "
+               "works with no internet at all</small></span></label>"
+               "<label class=wz-comp><input type=checkbox class=wzcomp value=takbot>"
+               "<span><b>Automated feeds</b><small>positions and messages posted onto the "
+               "map on their own</small></span></label>"
                "</div><input type=hidden id=wz-components value=''></div></fieldset>")
     doc.append("<fieldset class='wz-step depcard locked'><legend>4 · First users (optional)</legend>"
                "<p class=meta>Each row mints an enrolment credential once the server is up: a QR "
@@ -16096,11 +16132,9 @@ def render_deploy(state):
            fit:'Demonstrations, a shared server, anything with a public address.'},
     firmbase:{what:'A server only your own people can reach, over a VPN or your own network.',
            why:'Nothing about it is published, so a port open to the world is treated as a fault rather than as normal.',
-           fit:'Most boxes. Anything behind a VPN, and any box running TAK Server with a console.'},
-    deployed:{what:'A box that goes out with a team and keeps working when the cable is pulled.',
-           why:'It carries the whole field stack \u2014 video, offline maps, its own clock, messaging \u2014 and is checked for all of it.',
-           fit:'A packed kit that runs everything on its own. Not a laptop running TAK Server.'}
+           fit:''}
   };
+  P.firmbase.fit='Everything else \u2014 a box behind a VPN, and a kit that goes out with a team. What the box carries is the next step, not this question.';
   function draw(){
     var p=P[sel.value]||P.cloud;
     box.innerHTML='<div class=wz-profx-in><b>'+p.what+'</b>'
