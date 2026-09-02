@@ -692,6 +692,18 @@ server, and it carries whichever one you chose:
 
 **When to join, in order of preference:**
 
+> **On the estate journey the private network is not a preference, it is a prerequisite**, and
+> so is one other thing. Before your existing console can build this box, both of these must
+> already be true, and the Deploy wizard cannot tell you either — it lets you fill the whole
+> form in and fails at phase 1 of 5:
+>
+> - **The console can reach the box.** Same network, or both on the same VPN. A kit LAN behind
+>   its own router is reachable from nowhere else.
+> - **The admin user can elevate.** Enrolment needs **root, or passwordless sudo**. An ordinary
+>   sudo account that prompts is refused with *neither root nor passwordless-sudo*. Grant it
+>   with a file under `/etc/sudoers.d/`, validate with `visudo -c -f`, and **take it off before
+>   the box ships** — see the end of this step.
+
 1. **After the console is installed, from the console.** Its Network action installs the
    provider and joins the box: the join material is sent once, written root-only, never
    logged, gated by the operator password, and audited like every other action. Prefer this,

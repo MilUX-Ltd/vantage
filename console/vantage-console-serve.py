@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.39.2"
+VERSION = "2.40.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.15-beta"
+VANTAGE_RELEASE = "0.9.16-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -6313,6 +6313,14 @@ a.sw-up:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .ca-toggle{background:var(--bh);color:var(--fg);border:1px solid var(--rule2);border-radius:var(--r-sm);font-size:11px;padding:4px 10px;cursor:pointer}
 .ca-toggle.on{background:var(--forest);color:var(--gold-light);border-color:var(--forest)}
 .ca-toggle[disabled]{opacity:.6;cursor:default}
+/* The health profile explainer. It exists because the three labels describe where a box
+   lives while the profiles assert what it runs, and an operator who knew the product could
+   not tell them apart from the labels alone. */
+.wz-profx{margin:8px 0 0}
+.wz-profx-in{background:var(--sunk,#EFEDDD);border-radius:3px;padding:10px 13px;font-size:13.5px}
+.wz-profx-in ul{margin:6px 0 8px;padding-left:18px}
+.wz-profx-in li{margin:0 0 4px}
+.wz-profx-in .meta{font-size:12.5px}
 /* deploy page: top-of-page flow launchers */
 .dflow-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 18px}
 .dtab{background:var(--card);color:var(--fg);border:1px solid var(--rule2);border-radius:var(--r-sm);
@@ -15959,15 +15967,21 @@ def render_deploy(state):
                "<span class=hint>IP or hostname the console can reach over SSH</span></label>"
                "<label class=fl>Admin user<input id=wz-user value='root'>"
                "<span class=hint>root, or a passwordless-sudo user</span></label>"
+               # The three labels used to describe where a box LIVES, while the profiles
+               # actually assert what a box RUNS - twelve services and six tilesets separate
+               # "deployable kit" from the other two. An operator who knew the product could
+               # not tell them apart, and picked the one whose words matched his deployment
+               # rather than his service list, which would have reported a dozen absent
+               # things as unhealthy. Say what each one expects to find, because that is
+               # what it checks.
                "<label class=fl>Health profile<select id=wz-profile>"
-               "<option value=cloud>Public cloud server - internet-facing, trusted "
-               "certificate, ports open</option>"
-               "<option value=firmbase>Private network server - VPN or tailnet only, "
-               "not internet-facing</option>"
-               "<option value=deployed>Deployable kit - field hardware running the "
-               "full stack</option></select>"
-               "<span class=hint>the ROLE this box plays; sets what healthy means "
-               "on the health checks</span></label>"
+               "<option value=cloud>Public cloud server - reachable from the internet</option>"
+               "<option value=firmbase>Private network server - TAK Server only</option>"
+               "<option value=deployed>Deployable kit - TAK Server plus the full field "
+               "stack</option></select>"
+               "<span class=hint>This sets what the health checks expect to <b>find "
+               "running</b>. Pick by what the box carries, not by where it lives.</span>"
+               "<div class=wz-profx id=wz-profx></div></label>"
                "<div class=wz-access><b>Bootstrap access</b> - used once, then destroyed:"
                "<div class=wz-acc-row><button type=button id=wz-genkey class=cred-refresh>"
                "Generate a key</button><span class=meta>the console mints a keypair and shows "
@@ -16064,6 +16078,42 @@ def render_deploy(state):
                "<pre id=wz-log class=deplog aria-label='Setup log'></pre>"
                "<div id=wz-credout></div></fieldset>")
     doc.append("</div>")
+    doc.append(r"""<script>(function(){
+  var sel=document.getElementById('wz-profile'), box=document.getElementById('wz-profx');
+  if(!sel||!box) return;
+  // Straight from the checker's own profile table, so this cannot drift from what is tested.
+  var P={
+    cloud:{svc:'TAK Server and PostgreSQL',
+           ports:'8089, 8443, 8446',
+           fw:'TAK ports open to Anywhere is <b>expected</b>',
+           cert:'a trusted certificate <b>is</b> expected',
+           extra:''},
+    firmbase:{svc:'TAK Server and PostgreSQL',
+           ports:'8089, 8443, 8446',
+           fw:'a rule open to Anywhere is a <b>security failure</b>',
+           cert:'no public certificate expected',
+           extra:''},
+    deployed:{svc:'TAK Server, PostgreSQL, MediaMTX, mbtileserver, chrony, takbot, Mosquitto, Node-RED, Ollama, Docker, Tailscale and the Meshtastic gateway',
+           ports:'8089, 8443, 8446, 1935, 8554, 8888, 8080, and UDP 123',
+           fw:'a rule open to Anywhere is a <b>security failure</b>',
+           cert:'no public certificate expected',
+           extra:'It also expects <b>six map tilesets</b>.'}
+  };
+  function draw(){
+    var p=P[sel.value]||P.cloud;
+    box.innerHTML='<div class=wz-profx-in><b>What this profile checks for</b>'
+      +'<ul><li>Services running: '+p.svc+'</li>'
+      +'<li>Ports answering: '+p.ports+'</li>'
+      +'<li>Firewall: '+p.fw+'</li>'
+      +'<li>Certificate: '+p.cert+'</li>'
+      +(p.extra?'<li>'+p.extra+'</li>':'')
+      +'</ul><div class=meta>Choosing a profile richer than the box actually carries makes it '
+      +'report unhealthy for things it was never meant to run. You can change it later, and the '
+      +'box\u2019s <b>loadout</b> refines it further \u2014 anything you untick there reads '
+      +'\u201cnot fitted\u201d instead of failing.</div></div>';
+  }
+  sel.addEventListener('change',draw); draw();
+})();</script>""")
     doc.append(f"<script>{SETUP_JS}</script>")
     doc.append("</div>")                              # close flow-new
     doc.append("<div class=dflow id=flow-provision>")

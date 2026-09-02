@@ -701,12 +701,19 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
           ? "You have chosen no private network, so the console and this box must already be on one network. If they are not, go back: there is no route in."
           : "That is the VPN address from <code>tailscale ip -4</code> in step 5, not <span class=\"val\">" + esc(box) + "</span>. The kit LAN address only exists behind your router.") +
         "</p></div>" +
-        "<p>On your estate console, open <b>Deploy</b> and stay on <b>Build a new server</b>. Then, step by step:</p>" +
+        '<div class="trap"><p><b>Two things must be true before you open Deploy, and the wizard cannot tell you either.</b> It will let you fill the whole form in and fail at phase 1 of 5.</p></div>' +
+        check([
+          "<b>The console can reach the box.</b> Same network, or both on the same VPN. A kit LAN behind its own router is reachable from nowhere else",
+          "<b>The admin user can elevate.</b> Enrolment needs <b>root, or passwordless sudo</b>. An ordinary sudo account that prompts for a password is refused with <i>neither root nor passwordless-sudo</i>"
+        ]) +
+        cmd('echo "' + user + ' ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-build-' + user + " >/dev/null \\\n" +
+            "  && sudo chmod 0440 /etc/sudoers.d/90-build-" + user + " \\\n" +
+            "  && sudo visudo -c -f /etc/sudoers.d/90-build-" + user, BOX) +
+        '<div class="trap"><p><b>That comes off before the box ships.</b> <code>sudo rm /etc/sudoers.d/90-build-' + esc(user) + "</code>, then <code>sudo -n true</code> must <b>fail</b>. A build-time convenience that ships is a build-time convenience you have deployed.</p></div>" +
+        "<p>Then, on your estate console, open <b>Deploy</b> and stay on <b>Build a new server</b>:</p>" +
         check([
           "<b>1 · The box.</b> Estate name <span class=\"val\">" + esc(host) + "</span>, a label, the <b>VPN address</b>, admin user <span class=\"val\">" + esc(user) + "</span>",
-          "<b>Health profile.</b> " + (s.shape === "kit"
-            ? "<b>Deployable kit</b> if this box carries the full stack into the field; <b>Private network server</b> if it simply lives on your VPN. Both are right for a laptop on a kit LAN, so pick by what it is <i>for</i>. It sets what the health checks expect, and it can be changed later"
-            : "<b>Public cloud server</b>"),
+          "<b>Health profile.</b> Pick by <b>what the box runs</b>, not where it lives \u2014 the names suggest otherwise. <b>Private network server</b> expects TAK Server and PostgreSQL. <b>Deployable kit</b> expects <b>twelve</b> services and six map tilesets, so choosing it for a box that carries only TAK reports a dozen absent things as unhealthy" + (s.shape === "kit" ? ". For a laptop running TAK and a console, that means <b>Private network server</b>" : ""),
           "<b>Bootstrap access.</b> The deciding question is whether anything already has SSH into this box. Nothing does, so press <b>Generate a key</b>: the console keeps the private half and shows you a one-line command to place the public half. Run that on this box, then press <b>Test the connection</b>",
           "<b>2 · The package.</b> Pick the TAK release off the shelf. You do not download it again",
           "<b>3 · The server.</b> FQDN <span class=\"val\">" + esc(fqdn) + "</span>, and the certificate identity",
