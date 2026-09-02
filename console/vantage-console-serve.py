@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.40.0"
+VERSION = "2.40.1"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.16-beta"
+VANTAGE_RELEASE = "0.9.17-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -6316,11 +6316,15 @@ a.sw-up:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 /* The health profile explainer. It exists because the three labels describe where a box
    lives while the profiles assert what it runs, and an operator who knew the product could
    not tell them apart from the labels alone. */
-.wz-profx{margin:8px 0 0}
-.wz-profx-in{background:var(--sunk,#EFEDDD);border-radius:3px;padding:10px 13px;font-size:13.5px}
-.wz-profx-in ul{margin:6px 0 8px;padding-left:18px}
-.wz-profx-in li{margin:0 0 4px}
-.wz-profx-in .meta{font-size:12.5px}
+.wz-profx{margin:6px 0 0}
+/* text-transform and letter-spacing are reset explicitly. This block sits in a form column
+   where .fl uppercases its children and each one opts out by hand; the first version of it
+   came out shouting in full caps. */
+.wz-profx-in{background:var(--sunk,#EFEDDD);border-radius:3px;padding:11px 14px;
+  font:400 13.5px/1.5 var(--font-sans);text-transform:none;letter-spacing:0;color:var(--ink)}
+.wz-profx-in b{font-weight:600}
+.wz-profx-in p{margin:6px 0 0}
+.wz-profx-in .meta{font-size:12.5px;color:var(--mute);margin-top:8px}
 /* deploy page: top-of-page flow launchers */
 .dflow-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 18px}
 .dtab{background:var(--card);color:var(--fg);border:1px solid var(--rule2);border-radius:var(--r-sm);
@@ -15974,14 +15978,16 @@ def render_deploy(state):
                # rather than his service list, which would have reported a dozen absent
                # things as unhealthy. Say what each one expects to find, because that is
                # what it checks.
+               # The explainer sits OUTSIDE the label. .fl sets text-transform:uppercase and
+               # every child opts out one by one, so a div in there came out shouting in full
+               # caps. It is better HTML out here too: a block of prose is not part of a label.
                "<label class=fl>Health profile<select id=wz-profile>"
-               "<option value=cloud>Public cloud server - reachable from the internet</option>"
-               "<option value=firmbase>Private network server - TAK Server only</option>"
-               "<option value=deployed>Deployable kit - TAK Server plus the full field "
-               "stack</option></select>"
-               "<span class=hint>This sets what the health checks expect to <b>find "
-               "running</b>. Pick by what the box carries, not by where it lives.</span>"
-               "<div class=wz-profx id=wz-profx></div></label>"
+               "<option value=cloud>Public cloud server - anyone can reach it</option>"
+               "<option value=firmbase>Private network server - only your people can "
+               "reach it</option>"
+               "<option value=deployed>Deployable kit - goes out and works with the cable "
+               "pulled</option></select></label>"
+               "<div class=wz-profx id=wz-profx></div>"
                "<div class=wz-access><b>Bootstrap access</b> - used once, then destroyed:"
                "<div class=wz-acc-row><button type=button id=wz-genkey class=cred-refresh>"
                "Generate a key</button><span class=meta>the console mints a keypair and shows "
@@ -16081,36 +16087,28 @@ def render_deploy(state):
     doc.append(r"""<script>(function(){
   var sel=document.getElementById('wz-profile'), box=document.getElementById('wz-profx');
   if(!sel||!box) return;
-  // Straight from the checker's own profile table, so this cannot drift from what is tested.
+  // The job the box does, not the service list the checker holds. The first version of this
+  // panel listed daemon names and port numbers: accurate, and no use at all to someone
+  // deciding which one their box is. The operator who built the estate could not choose.
   var P={
-    cloud:{svc:'TAK Server and PostgreSQL',
-           ports:'8089, 8443, 8446',
-           fw:'TAK ports open to Anywhere is <b>expected</b>',
-           cert:'a trusted certificate <b>is</b> expected',
-           extra:''},
-    firmbase:{svc:'TAK Server and PostgreSQL',
-           ports:'8089, 8443, 8446',
-           fw:'a rule open to Anywhere is a <b>security failure</b>',
-           cert:'no public certificate expected',
-           extra:''},
-    deployed:{svc:'TAK Server, PostgreSQL, MediaMTX, mbtileserver, chrony, takbot, Mosquitto, Node-RED, Ollama, Docker, Tailscale and the Meshtastic gateway',
-           ports:'8089, 8443, 8446, 1935, 8554, 8888, 8080, and UDP 123',
-           fw:'a rule open to Anywhere is a <b>security failure</b>',
-           cert:'no public certificate expected',
-           extra:'It also expects <b>six map tilesets</b>.'}
+    cloud:{what:'A server anyone can reach over the internet.',
+           why:'Devices join it from anywhere and browsers trust its certificate, so its TAK ports are meant to be open to the world.',
+           fit:'Demonstrations, a shared server, anything with a public address.'},
+    firmbase:{what:'A server only your own people can reach, over a VPN or your own network.',
+           why:'Nothing about it is published, so a port open to the world is treated as a fault rather than as normal.',
+           fit:'Most boxes. Anything behind a VPN, and any box running TAK Server with a console.'},
+    deployed:{what:'A box that goes out with a team and keeps working when the cable is pulled.',
+           why:'It carries the whole field stack \u2014 video, offline maps, its own clock, messaging \u2014 and is checked for all of it.',
+           fit:'A packed kit that runs everything on its own. Not a laptop running TAK Server.'}
   };
   function draw(){
     var p=P[sel.value]||P.cloud;
-    box.innerHTML='<div class=wz-profx-in><b>What this profile checks for</b>'
-      +'<ul><li>Services running: '+p.svc+'</li>'
-      +'<li>Ports answering: '+p.ports+'</li>'
-      +'<li>Firewall: '+p.fw+'</li>'
-      +'<li>Certificate: '+p.cert+'</li>'
-      +(p.extra?'<li>'+p.extra+'</li>':'')
-      +'</ul><div class=meta>Choosing a profile richer than the box actually carries makes it '
-      +'report unhealthy for things it was never meant to run. You can change it later, and the '
-      +'box\u2019s <b>loadout</b> refines it further \u2014 anything you untick there reads '
-      +'\u201cnot fitted\u201d instead of failing.</div></div>';
+    box.innerHTML='<div class=wz-profx-in><b>'+p.what+'</b>'
+      +'<p>'+p.why+'</p>'
+      +'<p><b>Choose this for:</b> '+p.fit+'</p>'
+      +'<p class=meta>Pick the one that matches the job. Choosing a bigger profile than the box '
+      +'really is makes it report the missing parts as faults. You can change it later.</p>'
+      +'</div>';
   }
   sel.addEventListener('change',draw); draw();
 })();</script>""")
