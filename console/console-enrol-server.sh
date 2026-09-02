@@ -115,7 +115,12 @@ HOST="${ADMIN#*@}"
 # The guard is a marker, not a hostname: install-vantage.sh (or install-console.sh on the
 # MilUX estate) stamps /etc/vantage-console/console-host on the box that IS the console.
 # Any box can be a console; no box is one by accident.
-[[ -f /etc/vantage-console/console-host || "$(hostname -s)" == *the admin box* ]] \
+# The hostname fallback is an internal convenience, and the publish scrub rewrites the name
+# it looks for. Held in a QUOTED variable so a rewritten value survives as one token: as a
+# bare glob this became `== *the admin box*`, a syntax error, and shipped that way in every
+# release from 25 Aug 2026. The scrub is right to rewrite it; the code has to survive it.
+CONSOLE_HOST_HINT="the admin box"
+[[ -f /etc/vantage-console/console-host || "$(hostname -s)" == *"$CONSOLE_HOST_HINT"* ]] \
     || die "run this on the console box (no /etc/vantage-console/console-host marker)"
 [[ "$(id -u)" == 0 ]] || die "run as root (sudo console-enrol-server ...)"
 [[ -f "$ARTEFACT" ]] || die "no checker artefact at $ARTEFACT"

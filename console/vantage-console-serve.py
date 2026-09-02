@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.39.1"
+VERSION = "2.39.2"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.14-beta"
+VANTAGE_RELEASE = "0.9.15-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -11654,12 +11654,19 @@ def render_operations(state):
         "The check calls github.com only when you press it; nothing is downloaded and no "
         "credentials leave this box. An offline box will say it could not reach GitHub, "
         "which is not a fault.</p>"
-        + ("<label class=cred-pass><span>Operator password</span>"
-           "<input type=password class=up-pass autocomplete=off></label>"
-           if auth_configured() else "")
+        # The check is a READ: /api/updates/check is a GET and is not gated, and the
+        # handler below sends no passphrase. The field used to sit ABOVE this button,
+        # which read as "you must sign in to look" and is the opposite of what the
+        # security model says - reads are separated from writes. It now follows the
+        # button, and says what it is actually for.
         + "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "
         "updates</button></div>"
-        "<div id=upres class='a-res up-res' role=status aria-live=polite></div></div>")
+        + ("<label class=cred-pass><span>Operator password"
+           "<small class=up-passnote> \u2014 needed to download or install. "
+           "Checking needs nothing.</small></span>"
+           "<input type=password class=up-pass autocomplete=off></label>"
+           if auth_configured() else "")
+        + "<div id=upres class='a-res up-res' role=status aria-live=polite></div></div>")
     # RAW string, and it must stay raw. Python turns \n into a real newline, and a real
     # newline inside a single-quoted JS string is a SyntaxError that kills the WHOLE
     # block: the check, download and install buttons all silently did nothing while the
@@ -11751,7 +11758,12 @@ b.addEventListener('click',function(){
           body:JSON.stringify({passphrase:pw()})})
          .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
          .then(function(x){
-           if(x.code!==200){ dl.disabled=false; dl.textContent='Download failed';
+           if(x.code!==200){ dl.disabled=false;
+             // 403 is a rejected operator password, not a network or repository problem.
+             // Saying 'Download failed' sent an operator hunting through GitHub and the
+             // box's connectivity for an hour when the real answer was six characters in
+             // the password box.
+             dl.textContent=(x.code===403?'Password rejected':'Download failed');
              lg.textContent=(x.o.error||'failed'); return; }
            var t=setInterval(function(){
              fetch('/api/job/'+x.o.job).then(function(y){return y.json();}).then(function(jb){

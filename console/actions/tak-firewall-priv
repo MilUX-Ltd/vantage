@@ -29,10 +29,14 @@ PROFILE=""
 [[ -r /etc/tak-health.conf ]] && PROFILE=$(sed -n 's/^PROFILE=//p' /etc/tak-health.conf)
 # fall back: infer from hostname the way the checker's hostmatch does
 host=$(hostname -s 2>/dev/null || echo "")
+# Quoted, for the same reason as console-enrol-server.sh: the publish scrub rewrites this
+# name, and an unquoted glob turned into `*the admin box*)` - a syntax error in a shipped
+# action wrapper.
+CONSOLE_HOST_HINT="the admin box"
 if [[ -z "$PROFILE" ]]; then
     case "$host" in
-        *milux-dev*|*milux*) PROFILE=cloud ;;
-        *the admin box*)          PROFILE=firmbase ;;
+        *milux-dev*|*milux*)        PROFILE=cloud ;;
+        *"$CONSOLE_HOST_HINT"*)     PROFILE=firmbase ;;
         *deployed*)          PROFILE=deployed ;;
         *)                   PROFILE=firmbase ;;
     esac
