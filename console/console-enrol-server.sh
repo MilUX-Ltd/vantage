@@ -226,8 +226,22 @@ fi
 
 # ---------------------------------------------------------------- remote: users + scripts
 echo "[2/6] users and action scripts"
-tar -C /usr/local/bin -cf - $(for k in "${!ACTION_SCRIPTS[@]}"; do s="${ACTION_SCRIPTS[$k]}"; printf '%s ' "$s"; [[ -z "${NO_PRIV[$s]:-}" ]] && printf '%s-priv ' "$s"; done) "${EXTRA_SCRIPTS[@]}" \
-  | $SSH "$RSUDO tar -C /usr/local/bin -xf -"
+# Piping a tar stream into ssh + sudo is the same channel that silently delivered nothing
+# on edge-laptop1, and an empty tar stream unpacks to no scripts while reporting success.
+# The heredoc into `bash -s` is the channel that demonstrably carries on this estate, so
+# the payload rides in it, and the box is asked afterwards what it actually has.
+SCRIPT_LIST=$(for k in "${!ACTION_SCRIPTS[@]}"; do s="${ACTION_SCRIPTS[$k]}"; printf '%s ' "$s"; [[ -z "${NO_PRIV[$s]:-}" ]] && printf '%s-priv ' "$s"; done)
+# shellcheck disable=SC2086
+SCRIPTS_B64=$(tar -C /usr/local/bin -cf - $SCRIPT_LIST "${EXTRA_SCRIPTS[@]}" | base64 | tr -d '\n')
+$SSH "$RSUDO bash -s" <<EOF || die "could not unpack the action scripts on the box"
+set -euo pipefail
+echo $SCRIPTS_B64 | base64 -d | tar -C /usr/local/bin -xf -
+EOF
+WANT_SCRIPTS=$(printf '%s' "$SCRIPT_LIST" | wc -w | tr -d ' ')
+GOT_SCRIPTS=$($SSH "$RSUDO bash -c 'n=0; for f in $SCRIPT_LIST; do [ -x /usr/local/bin/\$f ] && n=\$((n+1)); done; echo \$n'" 2>/dev/null || echo 0)
+[[ "${GOT_SCRIPTS:-0}" -ge "$WANT_SCRIPTS" ]] \
+  || die "only ${GOT_SCRIPTS:-0} of $WANT_SCRIPTS action scripts are on the box. The copy reported success and did not happen, so every action would fail with a missing command."
+echo "  action scripts: $GOT_SCRIPTS on the box"
 $SSH "$RSUDO bash -s" <<'EOF'
 set -euo pipefail
 useradd --system --create-home --shell /bin/bash takwatch 2>/dev/null || true
@@ -241,51 +255,92 @@ EOF
 
 # ---------------------------------------------------------------- remote: sudoers + extras
 echo "[3/6] sudoers, qrencode, enrol host"
-{
+# tee with nothing on stdin writes an EMPTY sudoers file, and `visudo -c` passes an empty
+# file, so this printed "sudoers OK" over a file granting nothing. Built here, sent in the
+# heredoc, and counted back off the box.
+SUDOERS=$(
   echo "# console actions for the Vantage estate console - written by console-enrol-server"
   for k in "${!ACTION_SCRIPTS[@]}"; do
     s="${ACTION_SCRIPTS[$k]}"
     [[ -n "${NO_PRIV[$s]:-}" ]] || echo "takadmin ALL=(root) NOPASSWD: /usr/local/bin/$s-priv"
   done
-} | $SSH "$RSUDO tee /etc/sudoers.d/milux-actions >/dev/null && $RSUDO chmod 440 /etc/sudoers.d/milux-actions && $RSUDO visudo -c >/dev/null && echo 'sudoers OK'"
+)
+WANT_SUDO=$(printf '%s\n' "$SUDOERS" | grep -c '^takadmin ALL=' || true)
+[[ "$WANT_SUDO" -ge 1 ]] || die "built an empty sudoers block - refusing to write one"
+SUDOERS_B64=$(printf '%s\n' "$SUDOERS" | base64 | tr -d '\n')
+$SSH "$RSUDO bash -s" <<EOF || die "could not write /etc/sudoers.d/milux-actions"
+set -euo pipefail
+echo $SUDOERS_B64 | base64 -d > /etc/sudoers.d/milux-actions
+chmod 440 /etc/sudoers.d/milux-actions
+visudo -c >/dev/null
+EOF
+GOT_SUDO=$($SSH "$RSUDO grep -c '^takadmin ALL=' /etc/sudoers.d/milux-actions" 2>/dev/null || echo 0)
+[[ "${GOT_SUDO:-0}" -ge "$WANT_SUDO" ]] \
+  || die "/etc/sudoers.d/milux-actions holds ${GOT_SUDO:-0} rules on the box, expected $WANT_SUDO. It reported success over a file that grants nothing."
+echo "sudoers OK ($GOT_SUDO rules)"
 $SSH "$RSUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q qrencode >/dev/null 2>&1 && echo 'qrencode OK' || echo 'qrencode NOT installed (offline box?) - enrol-device will refuse politely'"
-[[ -n "$ENROL_HOST" ]] && printf '%s\n' "$ENROL_HOST" | $SSH "$RSUDO tee /etc/tak-enrol-host >/dev/null && echo 'enrol host OK'"
+if [[ -n "$ENROL_HOST" ]]; then
+  # Same class as the key write: this was data on stdin through ssh + sudo, into tee. tee
+  # with no input writes an empty file and still reports success, so the box would carry an
+  # empty enrol host and say "enrol host OK" over the top of it. Sent as an argument, then
+  # read back and compared.
+  ENROL_HOST_B64=$(printf '%s\n' "$ENROL_HOST" | base64 | tr -d '\n')
+  $SSH "$RSUDO bash -c 'echo $ENROL_HOST_B64 | base64 -d > /etc/tak-enrol-host'" \
+    || die "could not write /etc/tak-enrol-host on the box"
+  [[ "$($SSH "$RSUDO cat /etc/tak-enrol-host" 2>/dev/null | tr -d '\r\n')" == "$ENROL_HOST" ]] \
+    || die "/etc/tak-enrol-host on the box does not hold '$ENROL_HOST' after writing it"
+  echo "enrol host OK"
+fi
 
 # ---------------------------------------------------------------- remote: keys
 echo "[4/6] authorized_keys (idempotent)"
-# Each side creates the directory it writes into before writing. Step 2 makes these too,
-# but a step that appends into a path it has not ensured is a step that fails silently:
-# on 2 Sep 2026 a box came out of enrolment with no /home/USER/.ssh at all, every
-# append discarded, and this script printed "keys OK" underneath it because the echo was
-# unconditional. The build then died three phases later on "Permission denied", pointing
-# at sshd instead of here.
-{
-  echo "$HEALTH_LINE"
-} | $SSH "$RSUDO bash -c 'install -d -m 700 -o takwatch -g takwatch /home/USER/.ssh; touch /home/USER/.ssh/authorized_keys; while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takwatch:takwatch /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys'" \
-  || die "could not write takwatch's authorized_keys"
-for k in "${!ACTION_SCRIPTS[@]}"; do
-  # An unreadable or empty .pub used to produce 'command="...",restrict ' with NOTHING
-  # after it. sshd skips a keyless line in silence, the count below still saw a non-empty
-  # line, and enrolment reported success over an authorized_keys file in which not one
-  # key could authenticate. The failure then surfaced two phases later as a bare
-  # "Permission denied", pointing at sshd.
-  [[ -s "$KEYDIR/$k.pub" ]] || die "$KEYDIR/$k.pub is missing or empty - this console's action keys are incomplete, so re-run the console installer here before enrolling anything"
-  kp=$(cat "$KEYDIR/$k.pub") || die "cannot read $KEYDIR/$k.pub (run this as root or as vantage-console)"
-  [[ "$kp" == ssh-* ]] || die "$KEYDIR/$k.pub does not look like a public key"
-  printf 'command="/usr/local/bin/%s",restrict %s\n' "${ACTION_SCRIPTS[$k]}" "$kp"
-done | $SSH "$RSUDO bash -c 'install -d -m 700 -o takadmin -g takadmin /home/USER/.ssh; touch /home/USER/.ssh/authorized_keys; while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takadmin:takadmin /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys'" \
-  || die "could not write takadmin's authorized_keys"
+# The keys used to be piped into a remote `while read` loop over ssh + sudo. On
+# edge-laptop1 that pipe delivered NOTHING: takadmin's authorized_keys came out of
+# enrolment 0 bytes, created by the touch and never appended to, and sshd then answered
+# every action key with "Connection closed ... [preauth]" because the file was empty.
+# Nothing in the chain noticed. So the payload no longer travels on stdin at all: it is
+# built and checked here, sent as a base64 argument, and counted back off the box.
+#
+# The block is also built into a variable BEFORE it is sent. It used to be generated
+# inside `for ... done | ssh`, which puts it in a subshell, where `die` exits the subshell
+# and the script carries on regardless.
+build_keyblock() {
+    local k kp out=""
+    for k in "${!ACTION_SCRIPTS[@]}"; do
+        [[ -s "$KEYDIR/$k.pub" ]] || die "$KEYDIR/$k.pub is missing or empty - this console's action keys are incomplete, so re-run the console installer here before enrolling anything"
+        kp=$(cat "$KEYDIR/$k.pub") || die "cannot read $KEYDIR/$k.pub (run this as root or as vantage-console)"
+        [[ "$kp" == ssh-* ]] || die "$KEYDIR/$k.pub does not look like a public key"
+        out+="command=\"/usr/local/bin/${ACTION_SCRIPTS[$k]}\",restrict $kp"$'\n'
+    done
+    printf '%s' "$out"
+}
 
-# Earned, not announced. Ask the box what it actually has, and refuse to continue if the
-# keys are not there - the next three phases all authenticate as these users, and a build
-# that stops here with the reason is worth more than one that stops later without it.
-# grep -c . counted LINES. A line reading 'command="...",restrict ' with no key on the
-# end is a line, and 36 of them counted as 36 keys. Count lines carrying an actual key.
-KEYCOUNT=$($SSH "$RSUDO bash -c 'w=0; a=0; [ -s /home/USER/.ssh/authorized_keys ] && w=\$(grep -c \"ssh-[a-z0-9-]* AAAA\" /home/USER/.ssh/authorized_keys); [ -s /home/USER/.ssh/authorized_keys ] && a=\$(grep -c \"ssh-[a-z0-9-]* AAAA\" /home/USER/.ssh/authorized_keys); echo \"\$w \$a\"'" 2>/dev/null || echo "0 0")
-read -r WKEYS AKEYS <<<"$KEYCOUNT"
-[[ "${WKEYS:-0}" -ge 1 ]] || die "takwatch has no authorized_keys on the box - enrolment cannot have worked"
-[[ "${AKEYS:-0}" -ge 1 ]] || die "takadmin has no authorized_keys on the box - enrolment cannot have worked"
-echo "keys OK (takwatch $WKEYS, takadmin $AKEYS)"
+# user, then the lines to merge in. Sent as one base64 token so no data crosses stdin.
+install_authkeys() {
+    local u="$1" block="$2" want got b64
+    want=$(printf '%s' "$block" | grep -c 'ssh-[a-z0-9-]* AAAA' || true)
+    [[ "$want" -ge 1 ]] || die "built no key lines for $u - refusing to write an empty authorized_keys"
+    b64=$(printf '%s' "$block" | base64 | tr -d '\n')
+    $SSH "$RSUDO bash -c 'set -e
+        install -d -m 700 -o $u -g $u /home/$u/.ssh
+        touch /home/$u/.ssh/authorized_keys
+        echo $b64 | base64 -d | while IFS= read -r line; do
+            [ -n \"\$line\" ] || continue
+            grep -qF \"\$line\" /home/$u/.ssh/authorized_keys || printf \"%s\\n\" \"\$line\" >> /home/$u/.ssh/authorized_keys
+        done
+        chown $u:$u /home/$u/.ssh/authorized_keys
+        chmod 600 /home/$u/.ssh/authorized_keys'" \
+        || die "could not write $u's authorized_keys"
+    # Count what is actually on the box, and match it against what we meant to put there.
+    got=$($SSH "$RSUDO grep -c 'ssh-[a-z0-9-]* AAAA' /home/$u/.ssh/authorized_keys" 2>/dev/null || echo 0)
+    [[ "${got:-0}" -ge "$want" ]] \
+        || die "$u's authorized_keys holds ${got:-0} keys on the box, expected at least $want. The write reported success and did not happen; nothing after this could authenticate as $u."
+    echo "  $u: $got keys on the box"
+}
+
+install_authkeys takwatch "$HEALTH_LINE"
+install_authkeys takadmin "$(build_keyblock)"
+echo "keys OK"
 
 # ---------------------------------------------------------------- local: configs
 echo "[5/6] console configs (locked)"
