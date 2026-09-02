@@ -362,6 +362,10 @@ stage_letsencrypt() {
     # CoT and 8443 for the web and admin interface, on the certificates this box's own CA
     # issued in stage 5. What is missing is only the browser-TRUSTED certificate on 8446, and
     # nothing on a closed network can obtain one.
+    # capass BEFORE the branch below: the own-certificate path uses $pass to build the
+    # 8446 keystore and the assignment used to sit after it, so that path ran with an
+    # empty password. It is the path a private build takes.
+    local pass; pass=$(capass)
     if (( NO_LE )) || [[ -n "$OFFLINE_REPO" ]]; then
         local why="--no-letsencrypt"
         [[ -n "$OFFLINE_REPO" ]] && why="an offline build"
@@ -384,10 +388,32 @@ stage_letsencrypt() {
         echo "STAGE-OK letsencrypt (own certificate)"
         return 0
     fi
-    local pass; pass=$(capass)
     run "apt-get install -y -qq certbot"
     if [[ ! -d /etc/letsencrypt/live/$FQDN ]]; then
         run "certbot certonly -d $FQDN -m $LE_EMAIL --standalone --agree-tos --no-eff-email --non-interactive"
+    fi
+    # certbot is allowed to fail: a box with no public A record cannot be validated, which
+    # is CORRECT on a private build. What is not allowed is carrying on as though it
+    # worked. This stage used to run the export hook against a private key that was never
+    # written, point the 8446 connector at a keystore that does not exist, and print
+    # STAGE-OK. TAK's API process will not start with a connector whose keystore is
+    # missing, so 8443 went down with 8446 and the box served only 8089 - while the build
+    # reported success. Seen live on edge-laptop1, 2 Sep 2026.
+    if (( ! DRY )) && [[ ! -s /etc/letsencrypt/live/$FQDN/privkey.pem ]]; then
+        log "no public certificate was issued for $FQDN"
+        log "  certbot could not prove control of the name from the internet. On a private"
+        log "  box that is expected: there is no public A record, by choice."
+        log "  falling back to this box's own certificate on 8446, so the API still starts"
+        local own="$CERTS/files/${FQDN}.jks"
+        if [[ -f "$own" ]]; then
+            add_8446_connector "certs/files/${FQDN}.jks" "$pass" "cert_https_own"
+            log "  8446 serves this box's own certificate; browsers and devices will warn"
+        else
+            log "  no server keystore at $own, so no 8446 connector was added"
+        fi
+        log "  8089 for CoT and 8443 for web and admin are unaffected"
+        echo "STAGE-OK letsencrypt (own certificate: no public one could be issued)"
+        return 0
     fi
     # renew hook: LE PEM -> p12 -> jks, keyed with the CA password (mirrors the cloud box).
     if (( DRY )); then
