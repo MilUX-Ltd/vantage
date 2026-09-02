@@ -77,6 +77,13 @@ Starting from bare hardware, a router and no box at all? Read
 router, getting a name and a certificate, and installing Ubuntu, and it ends with the record
 you type into the steps below.
 
+**Or open [`PRE-INSTALL-PLANNER.html`](PRE-INSTALL-PLANNER.html) in a browser and work through
+it there.** It is the same guide made interactive: one self-contained file, no server and no
+internet, so it runs from a stick on a box that has never been online. Put your details in once
+and every command below appears with your values already in it, each labelled with the machine
+it runs on. It ends by giving you a **build plan** - one line you paste into the console's
+Deploy page so you never type the same fact twice.
+
 
 - A server running **Ubuntu 22.04 or 24.04 LTS**, reachable on the internet or your
   private network. Both are tested; 2 CPU cores and 4GB of memory are enough to start,
@@ -231,7 +238,10 @@ secrets need your operator password.
 Everything else lives in the same console:
 
 - **Deploy** builds TAK servers on *other* fresh boxes (paste that box's root key once;
-  it is destroyed the moment the build succeeds) and enrols servers you already run.
+  it is destroyed the moment the build succeeds) and enrols servers you already run. Its first
+  step takes the **build plan** from the pre-install planner, so the box's name, address, admin
+  user, posture and components fill themselves in; the console shows you what it read before
+  anything is saved.
 - **Every server's page** shows its health, software against your chosen baseline, an
   upgrade button when a newer TAK release is in your library, modules you can add
   (CloudTAK's web map, MediaMTX video), its security posture with one-press hardening,

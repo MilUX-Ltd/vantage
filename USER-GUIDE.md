@@ -128,6 +128,13 @@ real** (tick **Dry run** to preview every step with nothing changed - the button
 which it will do). The health profile speaks operator language: public cloud server,
 private network server, or deployable kit.
 
+**Start by pasting the plan.** If the box was prepared with the pre-install planner, step 1's
+first field takes the line it gave you and fills in the name, label, address, admin user,
+posture and components at once. The console prints what it understood in plain language before
+anything is saved, so the code saves typing without ever acting unlooked at. The one field it
+deliberately leaves blank is the address this console must reach, because on a box that has
+just joined a private network that address did not exist when the plan was made.
+
 **Reaching the box** is the journey's one terminal moment, and the wizard owns it. The
 admin user is root *or any passwordless-sudo user* - no need to enable root SSH. Choose a
 console-minted keypair and the wizard renders the exact placement command, already
@@ -438,6 +445,19 @@ other console working. If any box cannot be authorised the promotion stops and n
 the box changes, because a console that believes it is an admin and cannot act is worse than
 one that never changed. Taking it back to client revokes its keys everywhere, and says
 plainly if a box was unreachable and still holds them.
+
+## Before any of this: the pre-install planner
+
+The guide above starts at a box that already exists. Getting there - the kit, the router, DNS,
+the certificate, the Ubuntu install - is **`PRE-INSTALL.md`**, and
+**`PRE-INSTALL-PLANNER.html`** is that guide made interactive: one self-contained file that
+runs from a stick with no server and no internet. It takes your details once, prints every
+command with your own values in it, refuses to show a command that still has a blank in it,
+and ends with the build plan you paste into Deploy.
+
+**One thing it will tell you plainly:** a box that cannot reach the internet *during the build*
+cannot be built from the console yet. Running disconnected afterwards is a different thing, and
+is what the rest of this guide describes.
 
 ## Kiosk mode
 
