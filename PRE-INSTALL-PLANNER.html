@@ -4,9 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vantage Build Planner</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
 <style>
 :root{
   --ground:#F7F6EB; --surface:#FFFEF7; --surface-sunk:#EFEDDD;
@@ -16,9 +13,13 @@
   --flag:#8A4B22; --flag-fill:#F3E5D6;
   --ok:#3F6B2E; --ok-fill:#E6EEDD;
   --code-ground:#14200E; --code-ink:#E4E4D2; --code-dim:#9AA48C; --code-accent:#CFC98F;
-  --f-display:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
-  --f-body:"IBM Plex Serif",Georgia,"Times New Roman",serif;
-  --f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  /* System stacks only. This page is meant to run from a stick on a box that has never
+     been online, and it was linking webfonts from Google - so it silently fell back
+     offline, and a strict content-security-policy blocks it outright. Same three voices,
+     nothing fetched: a sans for headings, a serif for prose, a mono for commands. */
+  --f-display:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --f-body:Georgia,"Iowan Old Style","Times New Roman",Times,serif;
+  --f-mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --ground:#0D140A; --surface:#141C10; --surface-sunk:#1A2415;
