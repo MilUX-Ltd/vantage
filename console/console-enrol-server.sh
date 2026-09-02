@@ -238,7 +238,7 @@ set -euo pipefail
 echo $SCRIPTS_B64 | base64 -d | tar -C /usr/local/bin -xf -
 EOF
 WANT_SCRIPTS=$(printf '%s' "$SCRIPT_LIST" | wc -w | tr -d ' ')
-GOT_SCRIPTS=$($SSH "$RSUDO bash -c 'n=0; for f in $SCRIPT_LIST; do [ -x /usr/local/bin/\$f ] && n=\$((n+1)); done; echo \$n'" 2>/dev/null || echo 0)
+GOT_SCRIPTS=$($SSH "$RSUDO bash -c 'n=0; for f in $SCRIPT_LIST; do [ -x /usr/local/bin/\$f ] && n=\$((n+1)); done; echo \$n'" 2>/dev/null | head -1 | tr -dc '0-9')
 [[ "${GOT_SCRIPTS:-0}" -ge "$WANT_SCRIPTS" ]] \
   || die "only ${GOT_SCRIPTS:-0} of $WANT_SCRIPTS action scripts are on the box. The copy reported success and did not happen, so every action would fail with a missing command."
 echo "  action scripts: $GOT_SCRIPTS on the box"
@@ -274,7 +274,7 @@ echo $SUDOERS_B64 | base64 -d > /etc/sudoers.d/milux-actions
 chmod 440 /etc/sudoers.d/milux-actions
 visudo -c >/dev/null
 EOF
-GOT_SUDO=$($SSH "$RSUDO grep -c '^takadmin ALL=' /etc/sudoers.d/milux-actions" 2>/dev/null || echo 0)
+GOT_SUDO=$($SSH "$RSUDO grep -c '^takadmin ALL=' /etc/sudoers.d/milux-actions 2>/dev/null || true" | head -1 | tr -dc '0-9')
 [[ "${GOT_SUDO:-0}" -ge "$WANT_SUDO" ]] \
   || die "/etc/sudoers.d/milux-actions holds ${GOT_SUDO:-0} rules on the box, expected $WANT_SUDO. It reported success over a file that grants nothing."
 echo "sudoers OK ($GOT_SUDO rules)"
@@ -320,11 +320,15 @@ install_authkeys() {
     local u="$1" block="$2" want got b64
     want=$(printf '%s' "$block" | grep -c 'ssh-[a-z0-9-]* AAAA' || true)
     [[ "$want" -ge 1 ]] || die "built no key lines for $u - refusing to write an empty authorized_keys"
-    b64=$(printf '%s' "$block" | base64 | tr -d '\n')
+    # printf '%s' writes NO trailing newline, and `read` discards a final line that has
+    # none: a single-line block (takwatch's is one line) therefore decoded to 95 bytes and
+    # the loop ran zero times, leaving the file empty. Terminate it here AND accept an
+    # unterminated last line below, so neither end depends on the other being right.
+    b64=$(printf '%s\n' "$block" | base64 | tr -d '\n')
     $SSH "$RSUDO bash -c 'set -e
         install -d -m 700 -o $u -g $u /home/$u/.ssh
         touch /home/$u/.ssh/authorized_keys
-        echo $b64 | base64 -d | while IFS= read -r line; do
+        echo $b64 | base64 -d | while IFS= read -r line || [ -n \"\$line\" ]; do
             [ -n \"\$line\" ] || continue
             grep -qF \"\$line\" /home/$u/.ssh/authorized_keys || printf \"%s\\n\" \"\$line\" >> /home/$u/.ssh/authorized_keys
         done
@@ -332,7 +336,9 @@ install_authkeys() {
         chmod 600 /home/$u/.ssh/authorized_keys'" \
         || die "could not write $u's authorized_keys"
     # Count what is actually on the box, and match it against what we meant to put there.
-    got=$($SSH "$RSUDO grep -c 'ssh-[a-z0-9-]* AAAA' /home/$u/.ssh/authorized_keys" 2>/dev/null || echo 0)
+    # grep -c prints 0 AND exits 1 when it matches nothing, so `|| echo 0` appended a
+    # SECOND line and [[ "0\n0" -ge 1 ]] was a syntax error rather than a clear refusal.
+    got=$($SSH "$RSUDO grep -c 'ssh-[a-z0-9-]* AAAA' /home/$u/.ssh/authorized_keys 2>/dev/null || true" | head -1 | tr -dc '0-9')
     [[ "${got:-0}" -ge "$want" ]] \
         || die "$u's authorized_keys holds ${got:-0} keys on the box, expected at least $want. The write reported success and did not happen; nothing after this could authenticate as $u."
     echo "  $u: $got keys on the box"

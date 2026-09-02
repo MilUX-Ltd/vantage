@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.30-beta"
+VANTAGE_RELEASE = "0.9.31-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -8601,7 +8601,7 @@ def action_form_html(aid, targets=None, fixed=None, prefill=None):
                    "then selects itself</span></label>")
     if a["needs_passphrase"]:
         out.append("<label class=fl>Operator password"
-                   "<input name=passphrase type=password required></label>")
+                   "<input name=passphrase type=password autocomplete=current-password required></label>")
     out.append("<div class=a-act><button class=a-go type=submit>Run</button></div>"
                "<div class='a-res' role=status aria-live=polite aria-atomic=true></div></form>")
     return "".join(out)
@@ -8830,7 +8830,7 @@ def render_customization(state):
     if auth_configured():
         doc.append("<label class=fl id=cz-modepw-row hidden style='grid-column:1/-1'>"
                    "Operator password"
-                   "<input type=password id=cz-modepw autocomplete=off>"
+                   "<input type=password id=cz-modepw autocomplete=current-password>"
                    "<span class=hint>changing console mode needs your operator "
                    "password</span></label>")
     doc.append("<div class=fl style='grid-column:1/-1'><span class=wz-comp-t>Maps</span>"
@@ -9285,7 +9285,7 @@ def render_estate(state):
             "<button type=button class=cred-refresh id=fr-addcred>+ Add a device</button>"
             + ("" if auth_configured() else
                "<label class=fl id=fr-passwrap hidden>Operator password"
-               "<input type=password id=fr-pass autocomplete=off>"
+               "<input type=password id=fr-pass autocomplete=current-password>"
                "<span class=hint>this console runs open, so minting credentials asks "
                "for the action passphrase</span>"
                "</label>") + "</div>"
@@ -10747,7 +10747,7 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
     # not a danger zone - it is reversible - but gated with the operator password.
     if "console-mode" in acts and name in act_targets:
         pw = ("<label class=cred-pass><span>Operator password</span>"
-              "<input type=password class=cr-pass autocomplete=off></label>"
+              "<input type=password class=cr-pass autocomplete=current-password></label>"
               if auth_configured() else "")
         doc.append(
             "<h2 class=sec-eye>Console role</h2>"
@@ -10769,7 +10769,7 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
         # admin and a console that discovers it is powerless the day the main one dies.
         if all(a in acts for a in ("authorize-console", "console-admin")):
             pw2 = ("<label class=cred-pass><span>Operator password</span>"
-                   "<input type=password class=sa-pass autocomplete=off></label>"
+                   "<input type=password class=sa-pass autocomplete=current-password></label>"
                    if auth_configured() else "")
             doc.append(
                 "<h2 class=sec-eye>Standby admin</h2>"
@@ -11099,7 +11099,7 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
             # password field the generic action submit reads - exactly as action_form_html does.
             # Without it the submit sent an empty passphrase and the box answered "incorrect".
             "<label class=fl>Operator password"
-            "<input name=passphrase type=password required autocomplete=off></label>"
+            "<input name=passphrase type=password required autocomplete=current-password></label>"
             "<div class=a-act><button class=a-go type=submit>Save loadout</button></div>"
             "<div class='a-res' role=status aria-live=polite></div></form>")
         doc.append(f"<script>{LOADOUT_EDITOR_JS}</script>")
@@ -11763,7 +11763,11 @@ function gatedControl(parent, label, onGo, cls){
   var ib=el('button',cls||'a-go primary',label); ib.type='button';
   if(AUTH){
     field=document.createElement('input');
-    field.type='password'; field.className='up-pass-inline'; field.autocomplete='off';
+    field.type='password'; field.className='up-pass-inline';
+    // Not 'off': a lone password field with autocomplete off reads to a password manager
+    // as a NEW password, so 1Password offered to generate one instead of filling the saved
+    // one. This asks for the operator's existing password, and now says so.
+    field.autocomplete='current-password'; field.name='operator-password';
     field.placeholder='Operator password';
     field.setAttribute('aria-label','Operator password, needed to install');
     ib.disabled=true;
@@ -16245,7 +16249,7 @@ def render_deploy(state):
                # belongs to, and it says why it is being asked.
                "<div class=wz-mintgate id=wz-passwrap hidden>"
                "<label class=fl for=wz-pass>Operator password <b class=req>required</b></label>"
-               "<input type=password id=wz-pass autocomplete=off "
+               "<input type=password id=wz-pass autocomplete=current-password "
                "placeholder='your operator password'>"
                "<p class=meta>Needed to mint the certificates. Each user above gets an "
                "enrolment credential that is a certificate signed by this box's own "
