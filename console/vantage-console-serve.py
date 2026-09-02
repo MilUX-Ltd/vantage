@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.33-beta"
+VANTAGE_RELEASE = "0.9.34-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -6049,7 +6049,7 @@ CSS = """
  --forest:#113308;--forest-deep:#0A1F05;--forest-soft:#1F4214;
  --gold:#B5B171;--gold-warm:#C9C589;--gold-deep:#8E8A55;--gold-light:#D2C78D;
  --blue:#586F7C;--clay:#A35C17;
- --paper:#F7F6EB;--paper2:#E5E2C9;--rule:#DDDAC4;--rule2:#C0BCA2;
+ --paper:#F7F6EB;--paper2:#E5E2C9;--rule:#DDDAC4;--rule2:#C0BCA2; --btn-edge:#687855;
  --ink:#1A1A1A;--ink2:#4A4A47;--ink3:#5C5C55;
  --bg:var(--paper);--card:#fff;--fg:var(--ink);--fg2:var(--ink2);--mute:var(--ink3);--line:var(--rule);
  --hdr-fg:var(--paper);--hdr-mute:rgba(247,246,235,.62);
@@ -6065,12 +6065,12 @@ CSS = """
  --bg:#0d1108;--card:#141a0e;--fg:#ece9d6;--fg2:#c6c5b1;--mute:#8f9682;--line:#2a301f;
  --gold:#c9c589;--acc:#c9c589;--blue:#9fb2ba;--bh:#10160b;--hover:#1a2113;--code-bg:#1a2113;--code-fg:#c9c589;--chip-fg:#0A1F05;--focus:#c9c589;
  --ok:#7fa96f;--ok-b:#7fa96f1f;--warn:#cf913f;--warn-b:#cf913f1f;--warn-ink:#e6b073;
- --fail:#d97a63;--fail-b:#d97a631f;--off:#7d8c85;--off-b:#7d8c851f;--shadow:none}}
+ --fail:#d97a63;--fail-b:#d97a631f;--off:#7d8c85;--off-b:#7d8c851f;--shadow:none;--btn-edge:#8E9A63;}}
 :root[data-theme=dark]{
  --bg:#0d1108;--card:#141a0e;--fg:#ece9d6;--fg2:#c6c5b1;--mute:#8f9682;--line:#2a301f;
  --gold:#c9c589;--acc:#c9c589;--blue:#9fb2ba;--bh:#10160b;--hover:#1a2113;--code-bg:#1a2113;--code-fg:#c9c589;--chip-fg:#0A1F05;--focus:#c9c589;
  --ok:#7fa96f;--ok-b:#7fa96f1f;--warn:#cf913f;--warn-b:#cf913f1f;--warn-ink:#e6b073;
- --fail:#d97a63;--fail-b:#d97a631f;--off:#7d8c85;--off-b:#7d8c851f;--shadow:none}
+ --fail:#d97a63;--fail-b:#d97a631f;--off:#7d8c85;--off-b:#7d8c851f;--shadow:none;--btn-edge:#8E9A63;}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-sans);
  font-size:15px;line-height:1.55;font-weight:400;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
@@ -6647,9 +6647,16 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:var(--r-sm);
  border:1px solid var(--line);border-radius:var(--r-sm)}
 .cred-name{font-family:var(--font-mono);font-weight:600;font-size:14px;color:var(--fg)}
 .cred-meta{color:var(--mute);font-size:12.5px;flex:1}
-.cred-dl{background:var(--bh);color:var(--fg);border:1px solid var(--rule2);border-radius:var(--r-sm);
+.cred-dl{background:var(--card);color:var(--fg);border:1px solid var(--btn-edge);border-radius:var(--r-sm);
  font-size:13px;padding:6px 14px;cursor:pointer}
-.cred-dl:hover{background:var(--hover)}
+/* This button sits inside .wz-plan and the bootstrap block, and both use var(--bh). It
+   used --bh itself, so it was EXACTLY the colour of the panel behind it, bounded by a
+   --rule2 border at 1.47:1 against its own face: not a visible boundary, so it did not
+   read as a button. --hover resolved to --bh as well, so hovering changed nothing either.
+   It now sits on the card colour with an edge clearing 3:1 against both its own face and
+   the panel behind it. */
+.cred-dl:hover{background:var(--bh);border-color:var(--fg)}
+.cred-dl:focus-visible{outline:3px solid var(--btn-edge);outline-offset:2px}
 .cred-empty{color:var(--mute);font-size:13.5px;padding:4px 2px}
 .cred-view{margin-top:12px}
 .cred-enrol{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);padding:16px;

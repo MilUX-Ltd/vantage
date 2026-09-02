@@ -198,6 +198,21 @@ stage_deps() {
     apt_install postgresql-18 postgresql-18-postgis-3
     # OpenJDK 17 (temurin/openjdk both work; the .deb depends on a 17 JRE).
     apt_install openjdk-17-jre-headless
+    # This script runs without `set -e` and run() ignores exit status, so apt failing here
+    # used to print STAGE-OK and hand a broken box to stage 3. Worse, apt is SILENT when a
+    # package is already installed - which is exactly the state a half-finished teardown
+    # leaves: the postgresql-18 package present, but its data directory deleted. TAK's own
+    # setup then says "Cannot find PostgreSQL data directory", the .deb fails to configure,
+    # and every stage after it reports OK over a server that cannot start. Seen live on
+    # edge-laptop1, 3 Sep 2026. So the stage proves what it is for instead of announcing it.
+    if (( ! DRY )); then
+        dpkg-query -W -f '${Status}' postgresql-18 2>/dev/null | grep -q "install ok installed" \
+            || die "PostgreSQL 18 is not installed after the dependency stage"
+        pg_lsclusters 2>/dev/null | tail -n +2 | grep -q . \
+            || die "PostgreSQL 18 is installed but has NO cluster, so TAK cannot set up its database. A purge that left the package while its data directory was deleted does this. Create one with: sudo pg_createcluster 18 main --start"
+        pg_isready -q 2>/dev/null \
+            || die "PostgreSQL has a cluster but is not accepting connections. Start it with: sudo systemctl start postgresql"
+    fi
     echo "STAGE-OK deps"
 }
 
@@ -215,6 +230,15 @@ stage_install() {
     export DEBIAN_FRONTEND=noninteractive
     apt_install "'$DEB'"   # apt resolves the .deb's own dependencies, offline or not
     (( DRY )) || [[ -d /opt/tak ]] || die "install did not create /opt/tak"
+    # /opt/tak exists as soon as the .deb UNPACKS. It is the postinst that sets up the
+    # database and it can fail on its own, leaving the package half-configured with the
+    # directory in place - which passed the check above and printed STAGE-OK over
+    # "dpkg: error processing package takserver (--configure)".
+    if (( ! DRY )); then
+        local st; st=$(dpkg-query -W -f '${Status}' takserver 2>/dev/null || echo "not installed")
+        [[ "$st" == "install ok installed" ]] \
+            || die "the takserver package unpacked but did not configure (dpkg says: $st). Its postinst sets up the database, so the usual cause is PostgreSQL having no data directory. Nothing after this stage can work; fix that and re-run."
+    fi
     echo "STAGE-OK install"
 }
 
@@ -226,6 +250,14 @@ stage_database() {
     (( DRY )) || [[ -x /opt/tak/db-utils/takserver-setup-db.sh ]] || die "no takserver-setup-db.sh - is TAK installed?"
     run "systemctl enable --now postgresql"
     run "/opt/tak/db-utils/takserver-setup-db.sh"
+    # takserver-setup-db.sh prints its own ERROR and exits 0-ish, and run() ignores the
+    # status either way, so this printed STAGE-OK directly under "Cannot find PostgreSQL
+    # data directory". The database either exists or it does not: ask.
+    if (( ! DRY )); then
+        su - postgres -c "psql -Atqc \"SELECT 1 FROM pg_database WHERE datname='cot'\"" 2>/dev/null \
+            | grep -q 1 \
+            || die "the 'cot' database does not exist after the database stage. TAK cannot run without it; the log above says why, and a missing PostgreSQL data directory is the usual cause."
+    fi
     echo "STAGE-OK database"
 }
 
@@ -460,6 +492,22 @@ stage_start() {
             sleep 5
         done
         (( ok )) || die "takserver did not open 8089 within ~15min (check journalctl -u takserver)"
+        # 8089 is the MESSAGING process. The API is a separate process serving 8443 (web and
+        # admin) and 8446 (enrolment), and it can be dead while 8089 is happily up: a broken
+        # connector, or a database that was never created, stops it on its own. Waiting only
+        # for 8089 is how two builds reported PROVISION-COMPLETE on a box serving CoT and
+        # nothing else (edge-laptop1, 2 and 3 Sep 2026). Wait for the API too.
+        local j api=0
+        for j in $(seq 1 120); do
+            ss -ltn 2>/dev/null | grep -qE '[:.]8443 ' && { api=1; break; }
+            sleep 5
+        done
+        (( api )) || die "takserver opened 8089 but the API never opened 8443 within ~10min. The web and admin interface, device enrolment and QR codes all live in that process, so the box is NOT usable. Look at journalctl -u takserver for the connector or database error that stopped it."
+        # 8446 is the enrolment connector and only exists if a keystore was wired for it, so
+        # a private build without one is not a failure - but say so rather than leave it to
+        # be discovered when a QR code will not scan.
+        ss -ltn 2>/dev/null | grep -qE '[:.]8446 ' \
+            || echo "NOTE 8446 is not listening, so device enrolment by QR will not work. That is expected only if no 8446 connector was wired for this box."
         java -jar /opt/tak/utils/UserManager.jar certmod -A /opt/tak/certs/files/webadmin.pem || \
             echo "WARN could not mark webadmin admin (do it manually)"
     fi
