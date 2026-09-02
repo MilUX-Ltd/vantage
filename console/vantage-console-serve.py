@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.41.0"
+VERSION = "2.42.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.18-beta"
+VANTAGE_RELEASE = "0.9.19-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -11298,6 +11298,37 @@ def release_deviation(manifest, state, desired):
 # software shelf (that is the app channel), because a staged release is neither installed nor
 # discarded: it is evidence, and an operator should be able to see exactly what is sitting there.
 UPDATES_DIR = os.environ.get("VANTAGE_CONSOLE_UPDATES", os.path.join(STORE_ROOT, "updates"))
+
+
+def remove_staged_release(fname, client):
+    """Delete one staged release archive and its checksum from this console's shelf.
+
+    Staged archives accumulate: five superseded ones had built up with no way to remove
+    them from the page that created them. This touches no box, so it is not passphrase
+    gated - but the name is validated against the exact shape the pull writes, and the
+    resolved path must sit inside UPDATES_DIR, so no traversal can name anything else.
+    """
+    fname = str(fname or "").strip()
+    if not re.fullmatch(r"vantage-[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.\-]*\.tgz", fname):
+        return 400, {"error": "that is not a release archive name"}
+    root = os.path.realpath(UPDATES_DIR)
+    target = os.path.realpath(os.path.join(UPDATES_DIR, fname))
+    if os.path.dirname(target) != root:
+        return 400, {"error": "outside the shelf"}
+    if not os.path.isfile(target):
+        return 404, {"error": "not on the shelf"}
+    removed = []
+    for pth in (target, target + ".sha256"):
+        try:
+            os.remove(pth)
+            removed.append(os.path.basename(pth))
+        except FileNotFoundError:
+            pass
+        except Exception as ex:
+            return 500, {"error": f"could not remove {os.path.basename(pth)}: {ex}"}
+    audit({"action": "updates-remove", "target": fname, "result": "OK",
+           "removed": ",".join(removed), "client": client})
+    return 200, {"status": "removed", "removed": removed}
 # where the root helper leaves a file it copied off a stick, before the console files it
 USB_STAGE_DIR = os.environ.get("VANTAGE_CONSOLE_USB_STAGE",
                                "/var/lib/vantage-console/agent/usb-import")
@@ -11763,26 +11794,44 @@ b.addEventListener('click',function(){
     } else if(j.state==='behind'){
       var dl=el('button','a-go primary','Download '+l.tag+' to the shelf'); dl.type='button';
       dl.addEventListener('click',function(){
-        if(needpw()){ note(act,'Enter your operator password first.'); return; }
+        // No password: this writes one file to this console's own shelf and touches no
+        // box. Asking a signed-in operator to retype their password to fetch a file was
+        // friction with nothing behind it, and a rejected one read as a download failure.
         dl.disabled=true; dl.textContent='Downloading…';
         var lg=logbox(act);
         fetch('/api/updates/pull',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({passphrase:pw()})})
+          body:JSON.stringify({})})
          .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
          .then(function(x){
-           if(x.code!==200){ dl.disabled=false;
-             // 403 is a rejected operator password, not a network or repository problem.
-             // Saying 'Download failed' sent an operator hunting through GitHub and the
-             // box's connectivity for an hour when the real answer was six characters in
-             // the password box.
-             dl.textContent=(x.code===403?'Password rejected':'Download failed');
+           if(x.code!==200){ dl.disabled=false; dl.textContent='Download failed';
              lg.textContent=(x.o.error||'failed'); return; }
            var t=setInterval(function(){
              fetch('/api/job/'+x.o.job).then(function(y){return y.json();}).then(function(jb){
                lg.textContent=(jb.log||'');
-               if(jb.status&&jb.status!=='running'){ clearInterval(t); dl.disabled=false;
-                 dl.textContent=(jb.status==='done')
-                   ?'Downloaded. Press Check again to install it.':'Download failed'; }
+               if(jb.status&&jb.status!=='running'){ clearInterval(t);
+                 if(jb.status!=='done'){ dl.disabled=false; dl.textContent='Download failed'; return; }
+                 // Downloaded, so offer the next step here rather than sending the operator
+                 // back to press Check a second time to make a button appear.
+                 dl.textContent='Downloaded'; dl.disabled=true;
+                 var ib=el('button','a-go primary','Install '+l.tag+' on this box'); ib.type='button';
+                 ib.addEventListener('click',function(){
+                   if(needpw()){ note(act,'Installing changes this box, so it needs your operator password.'); return; }
+                   ib.disabled=true; ib.textContent='Installing…';
+                   fetch('/api/updates/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+                     // The pull job does not report the name it wrote, and an empty file
+                     // would fail apply with a useless error. The name is deterministic:
+                     // the tag without its leading v, which is what the asset is called.
+                     body:JSON.stringify({file:(jb.file||('vantage-'+String(l.tag).replace(/^v/,'')+'.tgz')),
+                                          passphrase:pw()})})
+                    .then(function(y){return y.json().then(function(o){return{code:y.status,o:o};});})
+                    .then(function(y){ ib.disabled=false;
+                      if(y.code!==200){ ib.textContent=(y.code===403?'Password rejected':'Install failed');
+                        note(act,(y.o.error||'failed')); return; }
+                      ib.textContent='Installing…'; note(act,'The console restarts on the new version; reload in a moment.'); })
+                    .catch(function(){ ib.disabled=false; ib.textContent='could not reach the console'; });
+                 });
+                 act.appendChild(ib);
+               }
              }).catch(function(){});
            },1200);
          }).catch(function(){ dl.disabled=false; dl.textContent='could not reach the console'; });
@@ -11825,6 +11874,23 @@ b.addEventListener('click',function(){
            .catch(function(){ ub.disabled=false; ub.textContent='could not reach the console'; });
         });
         row.appendChild(ub);
+        // Staged archives used to accumulate with no way to clear them from the page that
+        // created them: five superseded releases, every one offering only a USB copy.
+        if(!sg.current && !sg.newest){
+          var rb=el('button','a-go small ghost','Remove'); rb.type='button';
+          rb.addEventListener('click',function(){
+            rb.disabled=true; rb.textContent='Removing…';
+            fetch('/api/updates/remove',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({file:sg.file||('vantage-'+sg.version+'.tgz')})})
+             .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
+             .then(function(x){
+               if(x.code!==200){ rb.disabled=false; rb.textContent='Remove';
+                 note(row,(x.o.error||'could not remove it')); return; }
+               row.parentNode.removeChild(row); })
+             .catch(function(){ rb.disabled=false; rb.textContent='Remove'; });
+          });
+          row.appendChild(rb);
+        }
         sh.appendChild(row);
       });
       if(staged.length>1) note(sh,'Only one release is offered for install: the one above. '+
@@ -16732,7 +16798,8 @@ class Handler(BaseHTTPRequestHandler):
                             "/api/enrol-batch", "/api/usb-copy", "/api/module/load-offline",
                             "/api/usb-list", "/api/usb-import", "/api/software/current",
                             "/api/destroy", "/api/console/set-mode", "/api/console/kiosk",
-                            "/api/console/admin", "/api/updates/pull", "/api/updates/apply", "/api/updates/estate", "/api/usb-export",
+                            "/api/console/admin", "/api/updates/pull", "/api/updates/apply",
+                            "/api/updates/estate", "/api/updates/remove", "/api/usb-export",
                             "/api/kiosk/exit",
                             "/api/store/mkdir", "/api/store/move", "/api/store/delete",
                             "/api/vault/save", "/api/networks/channel",
@@ -16865,18 +16932,25 @@ class Handler(BaseHTTPRequestHandler):
                 code, res = update_estate(client, str(data.get("passphrase", "")),
                                           consoles=bool(data.get("consoles")),
                                           passphrase_ok=True)
+        elif path == "/api/updates/remove":
+            # Take a superseded archive off this console's shelf. Deleting a staged file
+            # is not a change to any box, so it is gated the same way the download is:
+            # not at all. The name is validated hard and resolved inside UPDATES_DIR, so
+            # nothing outside the shelf can be named.
+            code, res = remove_staged_release(data.get("file", ""), client)
         elif path == "/api/updates/apply":
             if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to install a release"}
             else:
                 code, res = apply_release(data, client)
         elif path == "/api/updates/pull":
-            # download a published release onto the shelf and verify it. Staging only: an
-            # operator still decides what happens to it. Gated like any write.
-            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
-                code, res = 403, {"error": "your operator password is required to download a release"}
-            else:
-                code, res = start_release_pull(data, client)
+            # Download a published release onto THIS console's shelf and verify its
+            # checksum. It writes one file here and touches no box - the log says so in
+            # as many words: "staged, not applied: no box has been touched". It was gated
+            # behind the operator password anyway, so an operator already signed in had to
+            # retype it to fetch a file, and a rejected password read as a download
+            # failure. Installing is still gated; staging is not.
+            code, res = start_release_pull(data, client)
         elif path == "/api/console/admin":
             # promote/demote a standby admin: keys, authorisation across the estate, the
             # estate itself, then the mode. Operator password gated like the mode change.
