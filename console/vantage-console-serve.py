@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.32-beta"
+VANTAGE_RELEASE = "0.9.33-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -11725,7 +11725,8 @@ def render_operations(state):
     # with no route to github.com simply says so.
     doc.append("<h2 class=sec-eye>Vantage updates</h2>")
     doc.append(
-        f"<div class=depcard id=upwrap data-auth='{'1' if auth_configured() else '0'}'>"
+        f"<div class=depcard id=upwrap data-auth='{'1' if auth_configured() else '0'}' "
+        f"data-release='{e(VANTAGE_RELEASE)}'>"
         "<p class=meta>This box runs Vantage "
         f"<b>{e(VANTAGE_RELEASE)}</b> (console {e(VERSION)}). Check what "
         f"<code>{e(VANTAGE_REPO)}</code> publishes, and see whether an update is waiting. "
@@ -11750,8 +11751,35 @@ def render_operations(state):
     doc.append(r"""<script>(function(){
 var b=document.getElementById('upchk'); if(!b)return;
 function el(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=null)e.textContent=x; return e;}
+// Installing restarts this console under the page's feet. It used to say "reload in a
+// moment" and sit there, which is a job the page can do itself. Poll /healthz, which is
+// open and now names the running release, and reload once it reports a DIFFERENT one, so
+// the page never reloads onto the version it was already showing. A reinstall of the same
+// release reports the same version, so answering again after having been unreachable
+// counts too.
+function reloadWhenBack(where, was){
+  note(where,'The console is restarting on the new version. This page reloads itself when '+
+             'it is back, so there is nothing to do.');
+  var tries=0, wasDown=false;
+  var t=setInterval(function(){
+    tries++;
+    if(tries>150){ clearInterval(t);
+      note(where,'Still not back after five minutes. Reload the page yourself. If the new '+
+                 'version did not come up, the old one is put back on its own.'); return; }
+    fetch('/healthz',{cache:'no-store'})
+      .then(function(r){ return r.text(); })
+      .then(function(txt){
+        var now=(txt||'').trim().split(/\s+/)[1]||'';
+        if((now && was && now!==was) || wasDown){ clearInterval(t); location.reload(); }
+      })
+      .catch(function(){ wasDown=true; });   // gone: now wait for it to answer again
+  },2000);
+}
+
 var AUTH=(document.getElementById('upwrap')||{}).getAttribute
         ? document.getElementById('upwrap').getAttribute('data-auth')==='1' : false;
+var RELEASE=(document.getElementById('upwrap')||{}).getAttribute
+        ? document.getElementById('upwrap').getAttribute('data-release') : '';
 
 // A gated button: the password belongs to THIS button and nothing else, so it is built
 // with it. One row, field then button, and the button is dead until the field has
@@ -11848,10 +11876,15 @@ b.addEventListener('click',function(){
         fetch('/api/updates/apply',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({file:target.file, passphrase:c.pass()})})
          .then(function(x){return x.json().then(function(o){return{code:x.status,o:o};});})
-         .then(function(x){ if(x.code!==200){ c.reset();
-             c.btn.textContent=(x.code===403?'Password rejected, try again':'Install '+target.version+' on this box'); }
-           note(act,(x.o.message||x.o.error||'')); })
-         .catch(function(){ note(act,'Installing. Reload this page in a moment.'); });
+         .then(function(x){
+           if(x.code!==200){ c.reset();
+             c.btn.textContent=(x.code===403?'Password rejected, try again':'Install '+target.version+' on this box');
+             note(act,(x.o.message||x.o.error||'')); return; }
+           note(act,(x.o.message||''));
+           reloadWhenBack(act, RELEASE); })
+         // The install restarts the console mid-request, so the connection dying here is the
+         // NORMAL outcome, not a failure. Wait for the new one and reload.
+         .catch(function(){ reloadWhenBack(act, RELEASE); });
       });
       if(AUTH) note(act,'Your operator password is needed here: installing replaces this '+
                     'console and restarts it.');
@@ -11887,11 +11920,13 @@ b.addEventListener('click',function(){
                      body:JSON.stringify({file:(jb.file||('vantage-'+String(l.tag).replace(/^v/,'')+'.tgz')),
                                           passphrase:c.pass()})})
                     .then(function(y){return y.json().then(function(o){return{code:y.status,o:o};});})
-                    .then(function(y){ c.reset();
-                      if(y.code!==200){ c.btn.textContent=(y.code===403?'Password rejected, try again':'Install failed');
+                    .then(function(y){
+                      if(y.code!==200){ c.reset();
+                        c.btn.textContent=(y.code===403?'Password rejected, try again':'Install failed');
                         note(act,(y.o.error||'failed')); return; }
-                      c.btn.textContent='Installing…'; note(act,'The console restarts on the new version; reload in a moment.'); })
-                    .catch(function(){ c.reset(); c.btn.textContent='could not reach the console'; });
+                      c.btn.textContent='Installing…'; reloadWhenBack(act, RELEASE); })
+                    // the restart kills this request: that is the normal outcome, not a fault
+                    .catch(function(){ c.btn.textContent='Installing…'; reloadWhenBack(act, RELEASE); });
                  });
                  if(AUTH) note(act,'Your operator password is needed to install: it replaces '+
                                'this console and restarts it. Downloading needed nothing.');
@@ -16583,7 +16618,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         elif path == "/healthz":
-            self._send(200 if not err else 503, "ok\n" if not err else err, "text/plain")
+            self._send(200 if not err else 503,
+                       f"ok {VANTAGE_RELEASE}\n" if not err else err, "text/plain")
         elif path == "/api/updates/check":
             # Spec 004 slice 1: what does the publish surface carry? Runs only because a
             # person pressed Check - the console never polls github.com on its own.
