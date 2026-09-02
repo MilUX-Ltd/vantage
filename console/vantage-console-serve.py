@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.43.0"
+VERSION = "2.43.1"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.20-beta"
+VANTAGE_RELEASE = "0.9.21-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -6644,6 +6644,9 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:var(--r-sm);
  border-left:3px solid var(--gold);border-radius:var(--r-card);box-shadow:var(--shadow);
  display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px 18px}
 .depcard .fedpop-note,.depcard .fedpop-act,.depdry{grid-column:1/-1}
+/* The components block spans the whole card. Left in one 240px form column it could only
+   ever be a single tall list, whatever its own grid said. */
+.depcard .wz-comps-wrap{grid-column:1/-1}
 .depdry{font-size:13.5px;color:var(--fg2);display:flex;gap:8px;align-items:center}
 .depstatus{margin:12px 0 0;font-family:var(--font-mono);font-size:13px;min-height:20px}
 .depstatus.run{color:var(--fg2)}
@@ -6838,8 +6841,9 @@ form.action.flash{outline:2px solid var(--gold);outline-offset:3px}
 /* Two columns from 560px. Eight options in one tall column made the step scroll for no
    reason, and it sits in a .fl column that uppercases its children, so the labels came out
    shouting - reset here rather than relying on each element opting out. */
-.wz-comps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;
+.wz-comps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;
  text-transform:none;letter-spacing:0}
+@media (min-width:860px){.wz-comps{grid-template-columns:repeat(3,1fr)}}
 .wz-comp{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;background:var(--card);
  border:1px solid var(--line);border-radius:var(--r-sm);cursor:pointer;font-size:13.5px;
  text-transform:none;letter-spacing:0;font-family:var(--font-sans);color:var(--ink)}
@@ -16131,7 +16135,7 @@ def render_deploy(state):
                # seeds /etc/tak-health.d/loadout.conf from this list and the checker narrows
                # its expectations to exactly it. Offering two of eight is what made a
                # "deployable kit" profile necessary in the first place.
-               "<div class=fl><span class=wz-comp-t>What this box carries</span>"
+               "<div class='fl wz-comps-wrap'><span class=wz-comp-t>What this box carries</span>"
                "<span class=hint>Tick what the build should install. The box declares "
                "exactly this, and its health checks then expect exactly this - no more, no "
                "less. Changeable later from the box's own page.</span>"
