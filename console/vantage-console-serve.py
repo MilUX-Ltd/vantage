@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.43.1"
+VERSION = "2.44.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.21-beta"
+VANTAGE_RELEASE = "0.9.22-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -6841,6 +6841,8 @@ form.action.flash{outline:2px solid var(--gold);outline-offset:3px}
 /* Two columns from 560px. Eight options in one tall column made the step scroll for no
    reason, and it sits in a .fl column that uppercases its children, so the labels came out
    shouting - reset here rather than relying on each element opting out. */
+.wz-plan{grid-column:1/-1;padding:12px 14px;background:var(--bh);border:1px dashed var(--gold);border-radius:var(--r-sm);margin:0 0 6px}
+.wz-plan #wz-planres{white-space:pre-line;font-size:13px}
 .wz-comps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;
  text-transform:none;letter-spacing:0}
 @media (min-width:860px){.wz-comps{grid-template-columns:repeat(3,1fr)}}
@@ -16036,6 +16038,19 @@ def render_deploy(state):
     doc.append("<div id=wz-deps class=wz-deps hidden></div>")
     doc.append("<div id=wizard>")
     doc.append("<fieldset class='wz-step depcard'><legend>1 · The box, and how to reach it</legend>"
+               # Spec 007: the pre-install planner emits one line carrying everything an
+               # operator has already decided. Retyping it here is where the wrong value
+               # gets in - a kit LAN address went into this form when a VPN address was
+               # needed, because both were true of the same box. It carries settings only,
+               # never a secret, and what it decodes is shown before anything is saved.
+               "<div class=wz-plan>"
+               "<label class=fl>Paste your build plan, if you made one"
+               "<input id=wz-plan placeholder='VANTAGE-PLAN-1...' autocomplete=off></label>"
+               "<div class=wz-acc-row><button type=button id=wz-planapply class=cred-refresh>"
+               "Fill the form from this plan</button><span class=meta>from the pre-install "
+               "planner. Settings only - it carries no password or key. Nothing is saved "
+               "until you press the button at step 5.</span></div>"
+               "<div id=wz-planres class=a-res role=status></div></div>"
                "<div class=wz-selfrow><button type=button id=wz-selfbox class='a-go confirm'>"
                "Deploy on this box</button><span class=hint>the console's own server "
                "becomes the first TAK server - no keys to paste, no addresses. Everything "
@@ -16222,6 +16237,51 @@ def render_deploy(state):
       +'</div>';
   }
   sel.addEventListener('change',draw); draw();
+})();</script>""")
+    doc.append(r"""<script>(function(){
+  var inp=document.getElementById('wz-plan'), btn=document.getElementById('wz-planapply'),
+      res=document.getElementById('wz-planres');
+  if(!inp||!btn) return;
+  function set(id,v){ var e=document.getElementById(id); if(e&&v!=null&&v!=='') e.value=v; }
+  btn.addEventListener('click',function(){
+    var raw=(inp.value||'').trim();
+    if(raw.indexOf('VANTAGE-PLAN-1.')!==0){
+      res.textContent='That is not a build plan. It starts with VANTAGE-PLAN-1.'; return; }
+    var p;
+    try{
+      var b=raw.slice('VANTAGE-PLAN-1.'.length).replace(/-/g,'+').replace(/_/g,'/');
+      while(b.length%4) b+='=';
+      // Matching the planner: the payload is UTF-8 bytes, so decode them as such rather
+      // than trusting atob's Latin-1 result, or a label with an accent comes back mangled.
+      var bin=atob(b), by=new Uint8Array(bin.length);
+      for(var i=0;i<bin.length;i++) by[i]=bin.charCodeAt(i);
+      p=JSON.parse(new TextDecoder().decode(by));
+    }catch(e){ res.textContent='That plan is damaged - copy it again.'; return; }
+    if(p.v!==1){ res.textContent='That plan was made by a different version of the planner.'; return; }
+    set('wz-name',p.name); set('wz-label',p.label); set('wz-addr',p.addr);
+    set('wz-user',p.user); set('wz-fqdn',p.fqdn);
+    var pr=document.getElementById('wz-profile');
+    if(pr&&(p.profile==='cloud'||p.profile==='firmbase')){ pr.value=p.profile;
+      pr.dispatchEvent(new Event('change')); }
+    if(Object.prototype.toString.call(p.comp)==='[object Array]'){
+      document.querySelectorAll('.wzcomp').forEach(function(c){
+        c.checked = p.comp.indexOf(c.value)!==-1; }); }
+    // Say what was understood, in words, before anything is built. The code is a way to
+    // avoid retyping, never a way to act without looking.
+    var lines=['Filled in from your plan:'];
+    lines.push('\u2022 ' + (p.label||p.name) + ', known to the estate as ' + p.name);
+    lines.push('\u2022 ' + (p.profile==='cloud'
+      ? 'a public server, reachable from the internet'
+      : 'a private server, reachable only by your own people'));
+    lines.push('\u2022 name: ' + (p.fqdn||'not set'));
+    lines.push('\u2022 admin user: ' + (p.user||'not set'));
+    lines.push('\u2022 carries: ' + ((p.comp&&p.comp.length)?p.comp.join(', '):'TAK Server only'));
+    if(p.kiosk) lines.push('\u2022 this box is meant to boot into its own console');
+    if(p.cert==='none') lines.push('\u2022 no public certificate was wanted for it');
+    if(!p.addr) lines.push('\u2022 the address is blank - fill it in yourself, it is the one '
+      + 'this console must be able to reach');
+    res.textContent=lines.join('\n');
+  });
 })();</script>""")
     doc.append(f"<script>{SETUP_JS}</script>")
     doc.append("</div>")                              # close flow-new

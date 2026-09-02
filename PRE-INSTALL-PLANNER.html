@@ -739,6 +739,52 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
           : "")));
     }
 
+    // ---- the build plan, as one line to paste into the console ------------
+    // Spec 007. Carries configuration only: no password, no key, no certificate
+    // material, because it is meant to survive being pasted into a chat window or
+    // read down a phone. Retyping these facts by hand is where the wrong one gets
+    // in - a kit LAN address went into a wizard that needed a VPN address on 2 Sep,
+    // because both were true of the same box and nothing carried the right one.
+    if (s.journey === "estate") {
+      var missingForPlan = [];
+      if (!s.host && !s.fqdn) missingForPlan.push("the name");
+      if (!s.user) missingForPlan.push("the username");
+      var planBody =
+        "<p>Paste this into the console's Deploy page and it fills the form in for you. " +
+        "It carries settings only \u2014 no password, no key \u2014 so it is safe to send " +
+        "yourself however is convenient.</p>";
+      if (missingForPlan.length) {
+        planBody += '<div class="blocked"><b>Not ready yet.</b> Fill in ' +
+          esc(missingForPlan.join(" and ")) + ", and the plan will appear here.</div>";
+      } else {
+        var plan = {
+          v: 1,
+          name: host,
+          label: s.human || host,
+          addr: "",                    // the VPN address, which does not exist yet
+          user: user,
+          profile: s.shape === "cloud" ? "cloud" : "firmbase",
+          fqdn: fqdn,
+          comp: [],
+          cert: s.cert,
+          kiosk: s.kiosk === "yes"
+        };
+        // btoa() only handles Latin-1 and THROWS on anything else, so a label with an
+        // en-dash or an accent in it produced no plan at all. Encode to UTF-8 bytes first.
+        var bytes = new TextEncoder().encode(JSON.stringify(plan));
+        var bin = ""; bytes.forEach(function (b) { bin += String.fromCharCode(b); });
+        var b64 = btoa(bin)
+          .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        planBody += cmd("VANTAGE-PLAN-1." + b64, "paste into the console, step 1") +
+          '<div class="why"><span class="why-label">One field it cannot fill</span>' +
+          "<p>The address the console reaches this box on is left blank, because on this " +
+          "journey it does not exist until the box has joined the network at step 5. Put " +
+          "that in yourself, and the console will show you everything it decoded before " +
+          "anything is saved.</p></div>";
+      }
+      out.push(block("Plan", "Your build plan, as one line", planBody));
+    }
+
     document.getElementById("out").innerHTML = out.join("");
   }
 
