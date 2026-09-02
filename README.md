@@ -72,6 +72,12 @@ server, get a device on the map, then grow the estate.
 
 ## What you need
 
+Starting from bare hardware, a router and no box at all? Read
+**[the pre-install guide](PRE-INSTALL.md)** first: it covers buying the kit, configuring the
+router, getting a name and a certificate, and installing Ubuntu, and it ends with the record
+you type into the steps below.
+
+
 - A server running **Ubuntu 22.04 or 24.04 LTS**, reachable on the internet or your
   private network. Both are tested; 2 CPU cores and 4GB of memory are enough to start,
   and 8GB is comfortable.
@@ -148,20 +154,28 @@ their own baselines - the console and the health checker each version independen
 the release number and a component's number are not the same thing and are not expected
 to match.
 
-Copy the release archive to the server and run the installer:
+Download the latest release archive and its checksum from the
+[Releases page](https://github.com/MilUX-Ltd/vantage/releases/latest), then copy it to the
+server and run the installer. Put the version you downloaded in place of `<version>`:
 
 ```bash
-scp vantage-0.9.0-beta.tgz root@your-server:/root/
-ssh root@your-server
-tar -xzf vantage-0.9.0-beta.tgz
+shasum -a 256 -c vantage-<version>.tgz.sha256    # one line reading OK
+scp vantage-<version>.tgz you@your-server:~/
+ssh you@your-server
+tar -xzf vantage-<version>.tgz
 cd vantage/console
-./install-vantage.sh --bind YOUR.SERVER.IP.ADDRESS
+sudo ./install-vantage.sh --bind YOUR.SERVER.IP.ADDRESS
 ```
+
+Install as your own account with `sudo`, or as root if your provider gave you root
+directly. A stock Ubuntu Server has neither a root password nor root SSH, so `sudo` is the
+usual route.
 
 `--bind` decides where the console listens. Use the server's address to reach it from
 your browser; leave it off to bind to localhost only (for use behind your own reverse
-proxy or VPN). The installer is idempotent - re-running it updates the code and leaves
-your configuration alone.
+proxy or VPN). It is also the address a kiosk on this box points its browser at, so on a
+box taking a DHCP lease, reserve the address before you install. The installer is
+idempotent - re-running it updates the code and leaves your configuration alone.
 
 Two minutes later:
 

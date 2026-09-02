@@ -112,6 +112,21 @@ COMPONENTS = [
         "offline": "not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md",
     },
     {
+        "id": "fonts",
+        "name": "Bai Jamjuree, Manrope, Roboto Mono",
+        "what": "the console's three typefaces, embedded in the program and served by it",
+        "fixed": "latin subsets from Google Fonts; the woff2 files in console/fonts/ are "
+                 "the source of truth and their SHA is the version",
+        "project": "https://fonts.google.com/",
+        "releases": None,
+        "licence": "SIL Open Font Licence 1.1 (text in console/fonts/)",
+        "offline": "yes, embedded in the console; nothing is fetched at page load",
+        "note": "embedded rather than laid beside the program because deploy-console "
+                "base64-embeds the program alone, and a fonts directory would not "
+                "travel that path. A box that is disconnected by design must not reach "
+                "the internet to draw its own interface.",
+    },
+    {
         "id": "ollama",
         "name": "Ollama",
         "what": "the local model runtime on a box that carries one",

@@ -16,6 +16,7 @@ nothing: it reports, and moving a pin stays a deliberate edit with a changelog n
 | [MediaMTX](https://github.com/bluenviron/mediamtx) | `v1.20.0` | the video server behind the Streams page | MIT | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [CloudTAK](https://github.com/dfpc-coe/CloudTAK) | `v13.70.0` | the browser client, in docker | MIT | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [mbtileserver](https://github.com/consbio/mbtileserver) | `v0.11.0` | serves the offline map tilesets | ISC | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
+| [Bai Jamjuree, Manrope, Roboto Mono](https://fonts.google.com/) | `latin subsets from Google Fonts; the woff2 files in console/fonts/ are the source of truth and their SHA is the version` | the console's three typefaces, embedded in the program and served by it | SIL Open Font Licence 1.1 (text in console/fonts/) | yes, embedded in the console; nothing is fetched at page load |
 | [Ollama](https://github.com/ollama/ollama) | `v0.33.2` | the local model runtime on a box that carries one | MIT | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [Node-RED](https://nodered.org/) | `nodered/node-red@sha256:7d8a2bc628f80d2efc9a21832eac7c579a2c9ea4cda9040d3b0d4d68a1e36bc4` | the automation flows, in docker | Apache-2.0 | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [infra-TAK](https://github.com/takwerx/infra-TAK) | `v10.1.55-alpha` | an alternative stack, offered as a choice: its marketplace deploys the TAK ecosystem and Vantage manages the box underneath | see the upstream repository | no |
@@ -24,6 +25,7 @@ nothing: it reports, and moving a pin stays a deliberate edit with a changelog n
 
 ## Notes
 
+- **Bai Jamjuree, Manrope, Roboto Mono**: embedded rather than laid beside the program because deploy-console base64-embeds the program alone, and a fonts directory would not travel that path. A box that is disconnected by design must not reach the internet to draw its own interface.
 - **Node-RED**: pinned by image digest, which is the strongest pin here: a tag can be repointed at different bytes, a digest cannot
 - **infra-TAK**: every upstream release is tagged -alpha; there is no stable line, so the pin records what we have stood up rather than what is blessed
 
@@ -35,6 +37,7 @@ nothing: it reports, and moving a pin stays a deliberate edit with a changelog n
 - **MediaMTX** is pinned at `console/provision/vantage-tak-provision.sh:MEDIAMTX_VER`.
 - **CloudTAK** is pinned at `console/provision/vantage-tak-provision.sh:CLOUDTAK_TAG`.
 - **mbtileserver** is pinned at `console/provision/vantage-tak-provision.sh:MBTILESERVER_VER`.
+- **Bai Jamjuree, Manrope, Roboto Mono** is not pinned by a constant: latin subsets from Google Fonts; the woff2 files in console/fonts/ are the source of truth and their SHA is the version.
 - **Ollama** is pinned at `console/provision/vantage-tak-provision.sh:OLLAMA_VER`.
 - **Node-RED** is pinned at `console/provision/vantage-tak-provision.sh:NODERED_IMAGE_DIGEST`.
 - **infra-TAK** is pinned at `console/provision/vantage-infratak-provision.sh:REF`.

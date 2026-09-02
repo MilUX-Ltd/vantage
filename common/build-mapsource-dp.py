@@ -19,7 +19,7 @@ source never claims detail it does not hold.
 
 Usage:
     python3 common/build-mapsource-dp.py \\
-        --server http://192.168.88.10:8080 \\
+        --server http://192.168.50.10:8080 \\
         --out maps/milux-mapsources-deployed-dp.zip \\
         --package-name "MilUX Map Sources (kit)"
 
@@ -83,7 +83,7 @@ def manifest(pkg_uid, name, files):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", required=True,
-                    help="base URL clients will use, e.g. http://192.168.88.10:8080")
+                    help="base URL clients will use, e.g. http://192.168.50.10:8080")
     ap.add_argument("--query-via", default=None,
                     help="URL to query if different from --server (e.g. via ssh tunnel)")
     ap.add_argument("--out", required=True)

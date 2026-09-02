@@ -69,7 +69,11 @@ tailscale)
             curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1 \
                 || deny "could not install tailscale"
         fi
-        tailscale up --authkey="$key" >/dev/null 2>&1 \
+        # --accept-dns=false deliberately. MagicDNS would take over the box's resolver and
+        # shadow a locally-served answer for its own FQDN - which is exactly the entry a
+        # split-horizon kit depends on, so the box stops resolving its own name the moment
+        # the WAN goes away. These are servers; they do not need MagicDNS to find peers.
+        tailscale up --authkey="$key" --accept-dns=false >/dev/null 2>&1 \
             || deny "tailscale rejected the key (expired, used, or not pre-authorised?)"
         addr=$(tailscale ip -4 2>/dev/null | head -1)
         echo "OK joined via Tailscale"

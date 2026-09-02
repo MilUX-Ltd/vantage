@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vantage Build Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+:root{
+  --ground:#F7F6EB; --surface:#FFFEF7; --surface-sunk:#EFEDDD;
+  --ink:#16210F; --ink-soft:#414D38; --meta:#586F7C;
+  --rule:#D8D5BE; --rule-strong:#B5B171;
+  --accent:#113308; --gold:#B5B171;
+  --flag:#8A4B22; --flag-fill:#F3E5D6;
+  --ok:#3F6B2E; --ok-fill:#E6EEDD;
+  --code-ground:#14200E; --code-ink:#E4E4D2; --code-dim:#9AA48C; --code-accent:#CFC98F;
+  --f-display:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
+  --f-body:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0D140A; --surface:#141C10; --surface-sunk:#1A2415;
+  --ink:#E9E7D6; --ink-soft:#B3BCA8; --meta:#8FA6B1;
+  --rule:#2C3A24; --rule-strong:#5C6640;
+  --accent:#C6C489; --gold:#B5B171;
+  --flag:#D79A6A; --flag-fill:#2B1D12;
+  --ok:#9CC183; --ok-fill:#1A2415;
+  --code-ground:#080D06; --code-ink:#DEDCCB; --code-dim:#7E8A72; --code-accent:#CFC98F;
+}}
+:root[data-theme="dark"]{
+  --ground:#0D140A; --surface:#141C10; --surface-sunk:#1A2415;
+  --ink:#E9E7D6; --ink-soft:#B3BCA8; --meta:#8FA6B1;
+  --rule:#2C3A24; --rule-strong:#5C6640;
+  --accent:#C6C489; --gold:#B5B171;
+  --flag:#D79A6A; --flag-fill:#2B1D12;
+  --ok:#9CC183; --ok-fill:#1A2415;
+  --code-ground:#080D06; --code-ink:#DEDCCB; --code-dim:#7E8A72; --code-accent:#CFC98F;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--ground);color:var(--ink);font-family:var(--f-body);
+  font-size:16.5px;line-height:1.6;padding:0 20px 80px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto}
+
+header.top{padding:44px 0 22px;border-bottom:2px solid var(--accent);margin-bottom:28px}
+.eyebrow{font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--meta);margin:0 0 12px}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(32px,5.5vw,50px);
+  line-height:1.04;letter-spacing:-.015em;margin:0;text-wrap:balance}
+.standfirst{font-size:18px;color:var(--ink-soft);margin:14px 0 0;max-width:64ch}
+
+.cols{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:40px;align-items:start}
+@media (max-width:900px){.cols{grid-template-columns:1fr;gap:32px}}
+
+/* ---- form ---- */
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:22px 22px 8px}
+@media (min-width:901px){.form-col{position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto}}
+h2{font-family:var(--f-display);font-weight:600;font-size:22px;margin:0 0 4px;text-wrap:balance}
+.panel h3{font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--meta);margin:24px 0 12px;padding-bottom:6px;
+  border-bottom:1px solid var(--rule)}
+.panel h3:first-of-type{margin-top:8px}
+.field{margin:0 0 16px}
+label{display:block;font-family:var(--f-display);font-weight:600;font-size:14.5px;margin:0 0 3px}
+.hint{display:block;font-size:13.5px;color:var(--meta);margin:0 0 6px;line-height:1.45}
+input[type=text],select{
+  width:100%;font-family:var(--f-mono);font-size:14px;padding:9px 10px;
+  background:var(--ground);color:var(--ink);border:1px solid var(--rule-strong);border-radius:3px}
+input[type=text]:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+select{font-family:var(--f-body);font-size:15px}
+.choice{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 0}
+.choice label{
+  font-family:var(--f-body);font-weight:400;font-size:14.5px;margin:0;cursor:pointer;
+  border:1px solid var(--rule-strong);border-radius:3px;padding:7px 12px;background:var(--ground);
+  display:flex;align-items:center;gap:7px}
+.choice input{margin:0;accent-color:var(--accent)}
+.choice label:has(input:checked){border-color:var(--accent);background:var(--ok-fill);font-weight:600}
+.choice label:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+
+.certcompare{margin:10px 0 0}
+.certcompare table{font-size:13.5px}
+.certcompare th,.certcompare td{padding:7px 9px}
+.certcompare tbody tr{opacity:.5}
+.certcompare[data-cert="none"] tr[data-c="none"],
+.certcompare[data-cert="laptop"] tr[data-c="laptop"],
+.certcompare[data-cert="token"] tr[data-c="token"]{opacity:1;background:var(--ok-fill)}
+.note{font-size:13.5px;border-radius:3px;padding:9px 12px;margin:6px 0 0}
+.note.warn{background:var(--flag-fill);border:1px solid var(--flag);color:var(--ink)}
+.note.warn b{color:var(--flag)}
+
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0 22px}
+button{
+  font-family:var(--f-display);font-weight:600;font-size:14.5px;letter-spacing:.02em;
+  padding:9px 16px;border-radius:3px;border:1px solid var(--accent);cursor:pointer;
+  background:var(--accent);color:var(--ground)}
+button.ghost{background:transparent;color:var(--accent)}
+button:hover{opacity:.88}
+button:focus-visible{outline:2px solid var(--rule-strong);outline-offset:2px}
+
+/* ---- output ---- */
+.out-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  border-bottom:2px solid var(--accent);padding-bottom:10px;margin-bottom:6px}
+.block{margin:28px 0 0;padding-top:22px;border-top:1px solid var(--rule)}
+.block:first-of-type{border-top:none;padding-top:8px}
+.block-head{display:flex;align-items:baseline;gap:12px;margin-bottom:8px}
+.step-tag{font-family:var(--f-mono);font-size:12px;color:var(--ground);background:var(--accent);
+  padding:2px 8px;border-radius:2px;flex:none}
+h4{font-family:var(--f-display);font-weight:600;font-size:19px;margin:0;text-wrap:balance}
+.block p{margin:0 0 12px;max-width:70ch;font-size:15.5px;color:var(--ink-soft)}
+.cmd{position:relative;margin:0 0 14px}
+.blocked{border:1px dashed var(--flag);background:var(--flag-fill);border-radius:3px;
+  padding:13px 16px;font-size:15px;color:var(--ink)}
+.blocked b{color:var(--flag)}
+.runon{font-family:var(--f-display);font-size:12px;font-weight:600;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--meta);padding:0 0 5px}
+.runon b{color:var(--ink);letter-spacing:.04em}
+pre{background:var(--code-ground);color:var(--code-ink);font-family:var(--f-mono);
+  font-size:13px;line-height:1.7;padding:15px 17px;border-radius:3px;overflow-x:auto;
+  margin:0;border-left:3px solid var(--rule-strong);white-space:pre}
+.copy{position:absolute;top:22px;right:8px;font-size:12px;padding:5px 10px;
+  background:var(--rule-strong);border-color:var(--rule-strong);color:var(--code-ground)}
+.copy.done{background:var(--ok);border-color:var(--ok);color:var(--ground)}
+ol.checks,ul.checks{margin:0 0 14px;padding-left:0;list-style:none}
+ol.checks li,ul.checks li{display:flex;gap:10px;padding:7px 0;border-bottom:1px dotted var(--rule);
+  font-size:15.5px;align-items:flex-start}
+ol.checks li:last-child,ul.checks li:last-child{border-bottom:none}
+.tick{flex:none;width:14px;height:14px;border:1.5px solid var(--rule-strong);border-radius:2px;margin-top:5px}
+.val{font-family:var(--f-mono);font-size:13.5px;background:var(--surface-sunk);padding:1px 5px;border-radius:2px}
+.tablewrap{overflow-x:auto;margin:0 0 14px;border:1px solid var(--rule);border-radius:3px}
+table{border-collapse:collapse;width:100%;font-size:15px;background:var(--surface)}
+th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-family:var(--f-display);font-size:11px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--meta);background:var(--surface-sunk);white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td.k{font-family:var(--f-mono);font-size:13px}
+.popout{margin:8px 0 2px;border:1px solid var(--rule);border-radius:3px;background:var(--surface)}
+.popout>summary{cursor:pointer;padding:8px 12px;font-family:var(--f-display);font-weight:600;
+  font-size:13.5px;color:var(--accent);list-style:none}
+.popout>summary::-webkit-details-marker{display:none}
+.popout>summary::before{content:"\25B8  ";color:var(--meta)}
+.popout[open]>summary::before{content:"\25BE  "}
+.popout>summary:focus-visible{outline:2px solid var(--rule-strong);outline-offset:-2px}
+.popout .inner{padding:2px 14px 12px;font-size:14.5px;border-top:1px solid var(--rule)}
+.popout ol{margin:10px 0 8px;padding-left:20px}
+.popout ol li{margin:0 0 6px;display:list-item;border:none;padding:0}
+.popout table{font-size:13.5px;margin:8px 0 0}
+.popout th,.popout td{padding:6px 9px}
+.screen{font-family:var(--f-mono);font-size:12.5px;background:var(--code-ground);color:var(--code-ink);
+  padding:11px 13px;border-radius:3px;margin:8px 0;white-space:pre;overflow-x:auto}
+.trap{background:var(--flag-fill);border:1px solid var(--flag);border-radius:3px;
+  padding:12px 15px;margin:0 0 14px;font-size:15px;color:var(--ink)}
+.trap b{color:var(--flag)}
+.trap p{margin:0;color:var(--ink)}
+.skipped{color:var(--meta);font-style:italic;font-size:15px}
+footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-size:13.5px;color:var(--meta)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@media print{
+  .form-col,.actions,.copy{display:none}
+  .cols{grid-template-columns:1fr}
+  body{padding:0;font-size:12px}
+  pre{white-space:pre-wrap}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <p class="eyebrow">MilUX Vantage · companion to the pre-install guide</p>
+  <h1>Vantage Build Planner</h1>
+  <p class="standfirst">Fill in the details of the box you are building. Every command in the pre-install guide appears below with your values already in it, ready to copy. Nothing leaves this page, and it works with no internet.</p>
+</header>
+
+<div class="cols">
+
+<!-- ================= FORM ================= -->
+<div class="form-col">
+<div class="panel">
+  <h2>Your box</h2>
+
+  <h3>What are you building</h3>
+  <div class="field">
+    <label>Is this your first Vantage console?</label>
+    <span class="hint">This decides more than anything else on the page. If you already run a console, you install nothing by hand: your existing one builds this box for you.</span>
+    <div class="choice">
+      <label><input type="radio" name="journey" value="first" checked> My first one</label>
+      <label><input type="radio" name="journey" value="estate"> Adding to an estate I run</label>
+    </div>
+    <div class="note" id="journeynote" style="background:var(--surface-sunk);margin-top:8px"></div>
+  </div>
+  <div class="field">
+    <label>Shape</label>
+    <span class="hint">A box at a hosting provider, or a kit behind your own router. This changes which steps you need.</span>
+    <div class="choice">
+      <label><input type="radio" name="shape" value="kit" checked> Private kit</label>
+      <label><input type="radio" name="shape" value="cloud"> Connected server</label>
+    </div>
+  </div>
+  <div class="field">
+    <label>Will it run as a kiosk?</label>
+    <span class="hint">A box with a screen that powers on straight into the console.</span>
+    <div class="choice">
+      <label><input type="radio" name="kiosk" value="yes" checked> Yes</label>
+      <label><input type="radio" name="kiosk" value="no"> No</label>
+    </div>
+  </div>
+
+  <h3>Names</h3>
+  <div class="field">
+    <label for="human">Box name</label>
+    <span class="hint">For people. Anything you like.</span>
+    <input type="text" id="human" placeholder="Edge Laptop">
+  </div>
+  <div class="field">
+    <label for="fqdn">Full name on the network</label>
+    <span class="hint">The name devices will connect to. It becomes the server's certificate.</span>
+    <input type="text" id="fqdn" placeholder="kit1.example.com">
+    <div id="w-fqdn"></div>
+  </div>
+  <div class="field">
+    <label for="host">Short name</label>
+    <span class="hint">The box's own hostname. Filled in from the name above; change it if you want something different.</span>
+    <input type="text" id="host" placeholder="kit1">
+  </div>
+  <div class="field">
+    <label for="user">Your username on the box</label>
+    <span class="hint">The account you create during the Ubuntu install. Vantage installs as this user.</span>
+    <input type="text" id="user" placeholder="matt">
+  </div>
+
+  <h3 id="net-head">Addresses</h3>
+  <div class="field kit-only">
+    <label for="router">Router address</label>
+    <span class="hint">Where you log in to the router. Move it off the vendor default before you start.</span>
+    <input type="text" id="router" placeholder="192.168.50.1">
+    <div id="w-router"></div>
+  </div>
+  <div class="field">
+    <label for="box"><span class="kit-only-inline">Box address on the kit LAN</span><span class="cloud-only-inline">The server's address</span></label>
+    <span class="hint kit-only">The address you will reserve for it on the router.</span>
+    <span class="hint cloud-only">The address your provider gave you.</span>
+    <input type="text" id="box" placeholder="192.168.50.10">
+    <div id="w-box"></div>
+  </div>
+  <div class="field kit-only">
+    <label for="mac">Box ethernet MAC</label>
+    <span class="hint">From the router's client list once the box has been plugged in and powered on. Take the wired entry, not wifi.</span>
+    <input type="text" id="mac" placeholder="AA:BB:CC:DD:EE:FF">
+    <div id="w-mac"></div>
+  </div>
+  <div class="field kit-only">
+    <label>Do you want a publicly-trusted certificate?</label>
+    <span class="hint">It makes no difference to whether the box works, or to enrolling devices by QR. It decides whether browsers and handsets warn the first time they connect, and how much you publish about this box.</span>
+    <div class="choice">
+      <label><input type="radio" name="cert" value="none"> No, keep it private</label>
+      <label><input type="radio" name="cert" value="laptop" checked> Yes, from my laptop</label>
+      <label><input type="radio" name="cert" value="token"> Yes, with a DNS token</label>
+    </div>
+    <div class="tablewrap certcompare" id="certcompare">
+      <table>
+        <thead><tr><th></th><th>Warns once</th><th>You publish</th><th>Renewal</th></tr></thead>
+        <tbody>
+          <tr data-c="none"><td><b>No</b></td><td>Yes</td><td>Nothing at all</td><td>None</td></tr>
+          <tr data-c="laptop"><td><b>Laptop</b></td><td>No</td><td>The name, permanently, in public certificate logs</td><td>By hand, ~60 days</td></tr>
+          <tr data-c="token"><td><b>Token</b></td><td>No</td><td>The same</td><td>Automatic</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <span class="hint" style="margin-top:6px">Either <b>Yes</b> has to be arranged <b>before</b> the build, because a kit behind a router cannot be reached by the certificate authority. <b>No</b> needs nothing doing.</span>
+  </div>
+  <div class="field kit-only cert-token">
+    <label for="certhost">Machine that holds your DNS token</label>
+    <span class="hint">Where the certificate gets issued. Not the box you are building, and not this laptop unless the token lives here. Give it as <code>user@address</code>.</span>
+    <input type="text" id="certhost" placeholder="you@console.example.com">
+  </div>
+  <div class="field publishes">
+    <label for="public">Address the public DNS record points at</label>
+    <span class="hint kit-only">For a kit, this is its VPN address, which does not exist until step 5. Leave blank for now.</span>
+    <span class="hint cloud-only">Usually the same as the server's address above.</span>
+    <input type="text" id="public" placeholder="leave blank until the box has joined">
+  </div>
+
+  <h3 id="vpnhead">Private network</h3>
+  <div class="field">
+    <label>Provider</label>
+    <span class="hint" id="vpnhint">Vantage joins the box to whichever you choose. It does not run the network, so you bring the account or the server.</span>
+    <div class="choice">
+      <label><input type="radio" name="vpn" value="tailscale" checked> Tailscale</label>
+      <label><input type="radio" name="vpn" value="wireguard"> WireGuard</label>
+      <label><input type="radio" name="vpn" value="openvpn"> OpenVPN</label>
+      <label><input type="radio" name="vpn" value="none"> None</label>
+    </div>
+  </div>
+
+  <h3>Vantage</h3>
+  <div class="field">
+    <label for="ver">Release you downloaded</label>
+    <span class="hint">From the Releases page. Copy the version out of the file name.</span>
+    <input type="text" id="ver" placeholder="0.9.13-beta">
+  </div>
+
+  <div class="actions">
+    <button type="button" id="print">Print or save as PDF</button>
+    <button type="button" class="ghost" id="reset">Start again</button>
+  </div>
+</div>
+</div>
+
+<!-- ================= OUTPUT ================= -->
+<div>
+  <div class="out-head">
+    <h2>Your commands</h2>
+    <span class="skipped" id="savednote">Saved in this browser as you type</span>
+  </div>
+  <div id="out"></div>
+</div>
+
+</div>
+
+<footer>
+  Companion to <b>PRE-INSTALL.md</b>. The guide explains why each of these steps exists and what
+  goes wrong without it; this page only fills in your details. Read the guide first.
+</footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var KEY = "vantage-build-planner";
+  var ids = ["human", "fqdn", "host", "user", "router", "box", "mac", "certhost", "public", "ver"];
+  var radios = ["shape", "kiosk", "vpn", "cert", "journey"];
+
+  function $(id) { return document.getElementById(id); }
+  function radio(name) {
+    var el = document.querySelector('input[name="' + name + '"]:checked');
+    return el ? el.value : "";
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  // A placeholder that still reads as a blank to fill in, so a half-finished
+  // page never produces a command that looks complete but is not.
+  function val(id, fallback) {
+    var v = ($(id).value || "").trim();
+    return v || fallback;
+  }
+
+  function normaliseMac(raw) {
+    var hex = String(raw).toUpperCase().replace(/[^0-9A-F]/g, "");
+    if (hex.length !== 12) return null;
+    return hex.match(/.{2}/g).join(":");
+  }
+
+  function isIPv4(s) {
+    var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(s).trim());
+    if (!m) return false;
+    for (var i = 1; i <= 4; i++) { if (+m[i] > 255) return false; }
+    return true;
+  }
+  function sameSubnet24(a, b) {
+    if (!isIPv4(a) || !isIPv4(b)) return true;   // do not nag on incomplete input
+    return a.split(".").slice(0, 3).join(".") === b.split(".").slice(0, 3).join(".");
+  }
+
+  function warn(where, html) {
+    $(where).innerHTML = html ? '<div class="note warn">' + html + "</div>" : "";
+  }
+
+  // ---- state ------------------------------------------------------------
+  function read() {
+    var s = { shape: radio("shape"), kiosk: radio("kiosk"), vpn: radio("vpn"),
+              cert: radio("cert"), journey: radio("journey") };
+    ids.forEach(function (i) { s[i] = ($(i).value || "").trim(); });
+    return s;
+  }
+
+  function save(s) {
+    try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* private window */ }
+  }
+
+  function restore() {
+    var raw;
+    try { raw = localStorage.getItem(KEY); } catch (e) { return; }
+    if (!raw) return;
+    var s;
+    try { s = JSON.parse(raw); } catch (e) { return; }
+    ids.forEach(function (i) { if (typeof s[i] === "string") $(i).value = s[i]; });
+    radios.forEach(function (n) {
+      if (!s[n]) return;
+      var el = document.querySelector('input[name="' + n + '"][value="' + s[n] + '"]');
+      if (el) el.checked = true;
+    });
+  }
+
+  // ---- validation, phrased as help rather than error --------------------
+  function validate(s) {
+    warn("w-fqdn", s.fqdn && s.fqdn.indexOf(".") === -1
+      ? "<b>That looks like a short name.</b> The full name needs a domain on the end, like <code>kit1.example.com</code>."
+      : "");
+
+    warn("w-router", s.router && /^192\.168\.8\./.test(s.router)
+      ? "<b>That is the GL.iNet factory range.</b> Move the router off it before you build, or the kit will clash with the next network it meets."
+      : "");
+
+    var b = "";
+    if (s.box && !isIPv4(s.box)) {
+      b = "<b>That is not an address.</b> Four numbers separated by dots, like <code>192.168.50.10</code>.";
+    } else if (s.shape === "kit" && s.box && s.router && s.box === s.router) {
+      b = "<b>That is the router's own address.</b> The box needs a different one.";
+    } else if (s.shape === "kit" && s.box && s.router && !sameSubnet24(s.box, s.router)) {
+      b = "<b>The box is not on the same network as the router.</b> The first three numbers should match.";
+    }
+    warn("w-box", b);
+
+    warn("w-mac", s.mac && !normaliseMac(s.mac)
+      ? "<b>That is not a MAC address.</b> Twelve characters, 0 to 9 and A to F, however it is punctuated."
+      : "");
+  }
+
+  // ---- output -----------------------------------------------------------
+  // Every block names the machine it belongs to. A bare command in front of an
+  // operator moving between four machines gets pasted into whichever terminal is
+  // on top - which is how the console's own placement command went wrong once.
+  // Anything still unfilled renders as one of these tokens. A command containing
+  // one is not a command, it is a trap: it looks runnable and copies cleanly, and
+  // on a live router it writes a broken entry. So a block holding one refuses to
+  // render as a command at all, and says which field is missing instead.
+  var BLANKS = {
+    "YOUR-FULL-NAME":  "Full name on the network",
+    "YOUR-SHORT-NAME": "Short name",
+    "YOUR-USERNAME":   "Your username on the box",
+    "ROUTER-ADDRESS":  "Router address",
+    "BOX-ADDRESS":     "Box address",
+    "BOX-MAC-ADDRESS": "Box ethernet MAC",
+    "VERSION":         "Release you downloaded"
+  };
+
+  function missingIn(text) {
+    var out = [];
+    for (var token in BLANKS) {
+      if (text.indexOf(token) !== -1 && out.indexOf(BLANKS[token]) === -1) {
+        out.push(BLANKS[token]);
+      }
+    }
+    return out;
+  }
+
+  function cmd(text, where) {
+    var missing = missingIn(text);
+    if (missing.length) {
+      return '<div class="cmd"><div class="blocked"><b>Not ready to run yet.</b> Fill in ' +
+        esc(missing.length === 1 ? missing[0]
+             : missing.slice(0, -1).join(", ") + " and " + missing[missing.length - 1]) +
+        ", on the left, and this command will appear with your details in it.</div></div>";
+    }
+    return '<div class="cmd">' +
+      (where ? '<div class="runon">Run this on <b>' + esc(where) + "</b></div>" : "") +
+      '<button type="button" class="copy">Copy</button><pre>' +
+      esc(text) + "</pre></div>";
+  }
+  function block(tag, title, body) {
+    return '<div class="block"><div class="block-head"><span class="step-tag">' + esc(tag) +
+      '</span><h4>' + esc(title) + "</h4></div>" + body + "</div>";
+  }
+  function check(items) {
+    return '<ul class="checks">' + items.map(function (t) {
+      return '<li><span class="tick"></span><span>' + t + "</span></li>";
+    }).join("") + "</ul>";
+  }
+
+  function render(s) {
+    var kit = s.shape === "kit";
+    var fqdn = s.fqdn || "YOUR-FULL-NAME";
+    var host = s.host || (s.fqdn ? s.fqdn.split(".")[0] : "YOUR-SHORT-NAME");
+    var user = s.user || "YOUR-USERNAME";
+    var box = s.box || "BOX-ADDRESS";
+    var router = s.router || "ROUTER-ADDRESS";
+    var mac = normaliseMac(s.mac) || "BOX-MAC-ADDRESS";
+    var ver = s.ver || "VERSION";
+    var human = s.human || "this box";
+    var certhost = s.certhost || "";
+    var MINE = "your own machine";
+    var BOX = human + " (" + box + ")";
+    var TOKEN = certhost || "the machine that holds your DNS token";
+    var out = [];
+
+    // ---- the record
+    var rows = [
+      ["Box name", human],
+      ["Full name", fqdn],
+      ["Short name", host],
+      ["Your username", user]
+    ];
+    if (kit) {
+      rows.push(["Router", router], ["Box address", box], ["Box MAC", mac]);
+    } else {
+      rows.push(["Server address", box]);
+    }
+    rows.push(["Public record points at",
+      (kit && s.cert === "none") ? "nothing published" : (s.public || "not decided yet")]);
+    rows.push(["Private network", s.vpn === "none" ? "none" : s.vpn]);
+    rows.push(["Kiosk", s.kiosk === "yes" ? "yes" : "no"]);
+    rows.push(["Vantage release", ver]);
+
+    out.push(block("Record", "Your build record", 
+      "<p>Keep this. Every step below uses it, and you will want it again the next time anyone asks how this box is set up.</p>" +
+      '<div class="tablewrap"><table><tbody>' +
+      rows.map(function (r) {
+        var blank = BLANKS.hasOwnProperty(r[1]);
+        return "<tr><td>" + esc(r[0]) + '</td><td class="' + (blank ? "fill" : "k") + '">' +
+          (blank ? "not filled in yet" : esc(r[1])) + "</td></tr>";
+      }).join("") + "</tbody></table></div>"));
+
+    // ---- step 1, router
+    if (kit) {
+      out.push(block("Step 1", "Reserve the box's address on the router",
+        "<p>Do this once the box has been plugged in and powered on, so the router has seen it and you can read its MAC off the client list.</p>" +
+        '<div class="trap"><p><b>Take the wired entry, not wifi.</b> A laptop with wifi on appears twice with two different MACs. Reserve the wrong one and the box only takes its address when it is on wifi, which is exactly when you do not want it.</p></div>' +
+        cmd('ssh root@' + router + ' "uci add dhcp host \\\n' +
+            "  && uci set dhcp.@host[-1].name='" + host + "' \\\n" +
+            "  && uci set dhcp.@host[-1].mac='" + mac + "' \\\n" +
+            "  && uci set dhcp.@host[-1].ip='" + box + "' \\\n" +
+            '  && uci commit dhcp && /etc/init.d/dnsmasq restart"', MINE) +
+        "<p>Check it took, then reboot the box so it asks for a new lease. An address already handed out does not change just because you wrote a reservation.</p>" +
+        cmd("dig @" + router + " " + fqdn + " +short", MINE + ", on the kit LAN") +
+        '<div class="trap"><p><b>An address back is the pass. Silence means the whole kit LAN is down.</b> A bad reservation makes dnsmasq refuse to start, and then nothing on this router gets DHCP or local DNS, including boxes you built months ago. Remove the entry by its own index, restart dnsmasq, and read <code>logread | grep -i dnsmasq</code> for what it objected to. Do not go looking for the process: OpenWrt often has no <code>pgrep</code>, and a missing command looks exactly like a stopped service.</p></div>'));
+
+      out.push(block("Step 1.5", "Make the name answer on the kit LAN",
+        "<p>So the box resolves its own name with the internet unplugged. This adds an entry; it does not replace any you already have.</p>" +
+        cmd('ssh root@' + router + ' "uci add_list dhcp.@dnsmasq[0].address=\'/' + fqdn + '/' + box + '\' \\\n' +
+            '  && uci commit dhcp && /etc/init.d/dnsmasq restart"', MINE) +
+        "<p>Then check it, with the internet still connected. That is the harder test: if the public record says something different and you still get the local answer, the override genuinely works.</p>" +
+        cmd("dig @" + router + " " + fqdn + " +short", MINE + ", on the kit LAN") +
+        '<div class="trap"><p><b>The router answers every DNS request from the kit.</b> So <code>dig @1.1.1.1</code> from inside the kit still gives you the local answer. To check the public side, ask from outside the kit.</p></div>'));
+    } else {
+      out.push(block("Step 1", "Router",
+        '<p class="skipped">Not needed. Your provider gives the box its address and its route to the internet.</p>'));
+    }
+
+    // ---- step 2, DNS
+    out.push(block("Step 2", "The public DNS record",
+      "<p>In your DNS provider, add an A record. This is a web page, not a command, so here is what to type into it.</p>" +
+      '<div class="tablewrap"><table><tbody>' +
+      "<tr><td>Type</td><td class=\"k\">A</td></tr>" +
+      "<tr><td>Name</td><td class=\"" + (BLANKS.hasOwnProperty(host) ? "fill" : "k") + "\">" +
+        (BLANKS.hasOwnProperty(host) ? "not filled in yet" : esc(host)) + "</td></tr>" +
+      "<tr><td>Points at</td><td class=\"k\">" + esc(s.public || (kit ? "the box's VPN address, once it has one (step 5)" : box)) + "</td></tr>" +
+      "<tr><td>Proxy</td><td class=\"k\">OFF. DNS only</td></tr>" +
+      "</tbody></table></div>" +
+      '<div class="trap"><p><b>The proxy must be off.</b> On Cloudflare that is the grey cloud, not the orange one. Leaving it on breaks TAK\'s ports and the certificate check, and the symptom will not tell you that is why.</p></div>'));
+
+    // ---- step 3, certificate
+    if (kit && s.cert === "none") {
+      out.push(block("Step 3", "Certificate",
+        "<p>You have chosen not to have a public one, which is a real answer on a closed network.</p>" +
+        '<div class="trap"><p><b>Enrolling devices still works, QR included.</b> The build gives TAK its own certificate authority either way, and it is used on all three ports: 8089, 8443 and 8446. What you give up is a browser that does not warn on first connect, so everyone who uses the console learns to click through a security warning. Choose that on purpose.</p></div>' +
+        "<p>Pass <code>--no-letsencrypt</code> to the build to make the choice explicit, and skip the A record in step 2 as well.</p>" +
+        "<p>You can get rid of the warning without a public certificate: install your own CA into the trust store of the browsers and devices that will use the box. That is a step per device, and it leaves the warning in place for everyone else.</p>" +
+        '<div class="trap"><p><b>A local DNS server does not help here.</b> Running your own DNS solves names resolving offline, which step 1 already does on the router. It cannot get you a public certificate, because the certificate authority checks the record from its own resolvers out on the internet, where your local answer is invisible.</p></div>'));
+    } else if (kit && s.cert === "laptop") {
+      out.push(block("Step 3", "Get the certificate, from your laptop",
+        "<p>Install certbot first: <code>brew install certbot</code> on macOS, or <code>sudo apt install certbot</code> on Ubuntu. Everything below stays in your home folder, so it needs no administrator rights.</p>" +
+        cmd("certbot certonly --manual --preferred-challenges dns \\\n" +
+            "  --config-dir ~/certbot/config --work-dir ~/certbot/work --logs-dir ~/certbot/logs \\\n" +
+            "  -d " + fqdn, MINE) +
+        "<p>It stops and prints a record for you to add at your DNS provider, as a <b>TXT</b> record named:</p>" +
+        cmd("_acme-challenge." + fqdn) +
+        '<div class="trap"><p><b>Do not press Enter until the record is really there.</b> Pressing too early fails the whole run and you start again. Check it from another terminal first.</p></div>' +
+        cmd("dig _acme-challenge." + fqdn + " TXT +short", MINE) +
+        "<p>When that shows your value, press Enter. Then carry the certificate to the box, keeping the links between the folders intact.</p>" +
+        cmd("tar -C ~/certbot/config -cf - live/" + fqdn + " archive/" + fqdn + " \\\n" +
+            "  | ssh " + user + "@" + box + " 'sudo tar -C /etc/letsencrypt -xf -'", MINE) +
+        "<p>Delete the TXT record afterwards; it has done its job. Then write the expiry date on your build record, because this route does not renew itself and nothing will remind you.</p>"));
+    } else if (kit) {
+      out.push(block("Step 3", "Get the certificate before you build",
+
+        "<p>Run this on a machine that has internet and holds your DNS provider's API token. Not on the box: a kit behind a router cannot be reached by the certificate authority, and the token should never travel to a field box.</p>" +
+        cmd(certhost
+              ? "ssh -t " + certhost + " 'sudo certbot certonly --dns-cloudflare \\\n" +
+                "  --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \\\n" +
+                "  -d " + fqdn + "'"
+              : "sudo certbot certonly --dns-cloudflare \\\n" +
+                "  --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \\\n" +
+                "  -d " + fqdn,
+            certhost ? MINE : TOKEN) +
+        "<p>Then carry it to the box, keeping the links between the two folders intact. Copying the files individually breaks it.</p>" +
+        cmd("sudo tar -C /etc/letsencrypt -cf - live/" + fqdn + " archive/" + fqdn + " \\\n" +
+            "  | ssh " + user + "@" + box + " 'sudo tar -C /etc/letsencrypt -xf -'", TOKEN) +
+        "<p>Write the expiry date on your build record. It cannot renew itself on a box the internet cannot reach.</p>"));
+    } else {
+      out.push(block("Step 3", "Certificate",
+        '<p class="skipped">Not needed in advance. The Vantage build earns the certificate itself during the install.</p>'));
+    }
+
+    // ---- step 4, ubuntu
+    out.push(block("Step 4", "The Ubuntu installer",
+      "<p>Ubuntu Server, not Desktop. Take the defaults except for these.</p>" +
+      check([
+        "Keyboard: <b>English (UK)</b>",
+        "Type of install: <b>Ubuntu Server</b>, not the minimized one",
+        (kit ? "Network: it should already show <span class=\"val\">" + esc(box) + "</span>. If it shows anything else, stop and fix the reservation" : "Network: confirm it matches <span class=\"val\">" + esc(box) + "</span>"),
+        "Storage: <b>use an entire disk, with LVM</b>, then edit <span class=\"val\">ubuntu-lv</span> to leave about a fifth of the group free for snapshots" +
+          '<details class="popout"><summary>How to change the size, screen by screen</summary><div class="inner">' +
+          "<p>The installer does not offer the size on the guided screen. You accept the guided layout first, then edit the volume it made.</p>" +
+          "<ol>" +
+          "<li>On <b>Guided storage configuration</b>, choose <b>Use an entire disk</b>, then tick <b>Set up this disk as an LVM group</b>. Leave encryption unticked. <b>Done</b>.</li>" +
+          "<li>You land on <b>Storage configuration</b>, a summary. Under <b>USED DEVICES</b> you will see the group and the volume inside it:</li>" +
+          "</ol>" +
+          '<div class="screen">USED DEVICES\n\n  ubuntu-vg (LVM volume group)\n    ubuntu-lv   new, to be formatted as ext4, mounted at /</div>' +
+          "<ol start=\"3\">" +
+          "<li>Move to the <b>ubuntu-lv</b> line and press <b>Enter</b>. A small menu appears: choose <b>Edit</b>.</li>" +
+          "<li>The <b>Size</b> field shows the default, and its label shows the maximum, which is the whole group. Type the size you want, with the unit, for example <span class=\"val\">380G</span>.</li>" +
+          "<li><b>Save</b>, then <b>Done</b>, then confirm the destructive write.</li>" +
+          "</ol>" +
+          "<p><b>What to type.</b> Leave roughly a fifth of the group free. The group is a little smaller than the disk, because of the boot partition:</p>" +
+          '<div class="tablewrap"><table><thead><tr><th>Disk</th><th>Group is about</th><th>Set ubuntu-lv to</th><th>Leaves</th></tr></thead><tbody>' +
+          "<tr><td>256 GB</td><td>236G</td><td><b>190G</b></td><td>~46G</td></tr>" +
+          "<tr><td>512 GB</td><td>474G</td><td><b>380G</b></td><td>~94G</td></tr>" +
+          "<tr><td>1 TB</td><td>950G</td><td><b>760G</b></td><td>~190G</td></tr>" +
+          "</tbody></table></div>" +
+          "<p>The free space is not waste. It is where LVM snapshots live, and a snapshot taken before a risky install is what lets you undo one.</p>" +
+          "<p><b>Missed it? Do not reinstall.</b> This is fixable on a running box, mounted, with no reboot. Check what you have with <code>sudo vgs</code> and <code>sudo lvs</code>, then grow it, taking the total from the table above:</p>" +
+          '<div class="screen">sudo lvextend -L 380G /dev/ubuntu-vg/ubuntu-lv \\\n  && sudo resize2fs /dev/ubuntu-vg/ubuntu-lv</div>' +
+          "<p><code>-L</code> is the new total, not the amount to add.</p>" +
+          "</div></details>",
+        (s.kiosk === "yes" ? "Encryption: <b>off</b>. It asks for a passphrase at every boot, which stops a kiosk starting on its own" : "Encryption: your choice"),
+        "<b>Profile setup</b>, all four fields on one screen" +
+          '<details class="popout" open><summary>What the installer asks for, in order</summary><div class="inner">' +
+          '<div class="tablewrap"><table><thead><tr><th>The installer asks</th><th>What to put</th></tr></thead><tbody>' +
+          "<tr><td>Your name</td><td>Your own name. It is only a display name and nothing depends on it</td></tr>" +
+          "<tr><td>Your server\u2019s name</td><td><span class=\"val\">" + esc(host) + "</span> \u2014 this one matters, it is the hostname</td></tr>" +
+          "<tr><td>Pick a username</td><td><span class=\"val\">" + esc(user) + "</span> \u2014 the account Vantage installs as</td></tr>" +
+          "<tr><td>Choose a password</td><td>Your own. You will type it at every <code>sudo</code>, so make it typeable</td></tr>" +
+          "<tr><td>Confirm your password</td><td>The same again</td></tr>" +
+          "</tbody></table></div>" +
+          "<p>Only the middle two are decided for you. The name and the password are yours.</p>" +
+          "</div></details>",
+        "<b>Tick Install OpenSSH server.</b> This is your way in for everything after this screen",
+        "Featured snaps: none"
+      ]) +
+      '<div class="trap"><p><b>Guided LVM does not use the whole disk.</b> The default leaves most of it unallocated, and taking all of it leaves no room for the snapshots you will want as a rollback point. Set the size by hand.</p></div>'));
+
+    // ---- step 5, after ubuntu
+    var after = "<p>Once the box has rebooted into the installed system, from your own machine.</p>" +
+      cmd("ssh-keygen -R " + box, MINE) +
+      '<div class="why"><span class="why-label">Both answers are fine</span>' +
+      "<p><b>not found in known_hosts</b> means there was nothing to clear, because you never " +
+      "connected to the box over SSH while the installer was running. That is the usual case. " +
+      "If it says a key was removed, that is also fine. Carry on either way.</p></div>" +
+      "<p>Pin the name on the box itself, so its services survive a cold boot with no router.</p>" +
+      cmd('echo "' + box + "  " + fqdn + " " + host + '" | sudo tee -a /etc/hosts', BOX);
+
+    if (s.vpn === "tailscale") {
+      after += (s.journey === "estate"
+        ? "<p><b>Do this now, and by hand.</b> Your existing console cannot reach a box on a private LAN behind its own router, so the VPN is the route in, and it has to exist before you open Deploy. The console's own join is not available to you yet: there is no console on this box.</p>" +
+          cmd("curl -fsSL https://tailscale.com/install.sh | sh", BOX) +
+          cmd("sudo tailscale up --accept-dns=false", BOX) +
+          "<p>It prints a URL. Approve the machine, then read the address the estate will use:</p>" +
+          cmd("tailscale ip -4", BOX)
+        : "<p>Join the private network. You can also do this from the console once Vantage is installed, which is the tidier route because it is gated and audited. By hand, install it first:</p>" +
+          cmd("curl -fsSL https://tailscale.com/install.sh | sh", BOX) +
+          cmd("sudo tailscale up --accept-dns=false", BOX)) +
+        '<div class="trap"><p><b>The flag is not optional on a kit.</b> Without it the VPN takes over the box\'s name lookups and hides the answer your router gives for its own name, so the box stops finding itself the moment the internet goes away.</p></div>';
+    } else if (s.vpn === "wireguard") {
+      after += "<p>Join the private network with the config from your own WireGuard server. The console can also do this for you after Vantage is installed, which is the tidier route.</p>" +
+        cmd("sudo apt install -y wireguard\n" +
+            "sudo nano /etc/wireguard/wg0.conf       # paste your wg-quick config\n" +
+            "sudo chmod 600 /etc/wireguard/wg0.conf\n" +
+            "sudo systemctl enable --now wg-quick@wg0", BOX);
+    } else if (s.vpn === "openvpn") {
+      after += "<p>Join with your client profile. The console can also do this for you after Vantage is installed.</p>" +
+        cmd("sudo apt install -y openvpn\n" +
+            "sudo cp your-profile.ovpn /etc/openvpn/client/vantage.conf\n" +
+            "sudo systemctl enable --now openvpn-client@vantage", BOX);
+    }
+
+    if (s.kiosk === "yes") {
+      after += "<p>Stop it going to sleep. An appliance that suspends is a dead appliance, and on a laptop the lid is the usual cause.</p>" +
+        cmd("sudo sed -i 's/^#*HandleLidSwitch=.*/HandleLidSwitch=ignore/;\n" +
+            "             s/^#*HandleLidSwitchDocked=.*/HandleLidSwitchDocked=ignore/;\n" +
+            "             s/^#*HandleLidSwitchExternalPower=.*/HandleLidSwitchExternalPower=ignore/' \\\n" +
+            "  /etc/systemd/logind.conf\n" +
+            "sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target", BOX);
+    }
+
+    after += "<p>Update and reboot.</p>" + cmd("sudo apt update && sudo apt full-upgrade -y\nsudo reboot", BOX);
+    out.push(block("Step 5", "After Ubuntu, before Vantage", after));
+
+    // ---- step 6 forks entirely on the journey
+    if (s.journey === "estate") {
+      out.push(block("Step 6", "Build it from the console you already run",
+        "<p><b>Install nothing on this box.</b> Everything below happens in the browser, on your existing console.</p>" +
+        '<div class="trap"><p><b>Use the address the console can reach, not this one.</b> ' +
+        (s.vpn === "none"
+          ? "You have chosen no private network, so the console and this box must already be on one network. If they are not, go back: there is no route in."
+          : "That is the VPN address from <code>tailscale ip -4</code> in step 5, not <span class=\"val\">" + esc(box) + "</span>. The kit LAN address only exists behind your router.") +
+        "</p></div>" +
+        "<p>On your estate console, open <b>Deploy</b> and stay on <b>Build a new server</b>. Then, step by step:</p>" +
+        check([
+          "<b>1 · The box.</b> Estate name <span class=\"val\">" + esc(host) + "</span>, a label, the <b>VPN address</b>, admin user <span class=\"val\">" + esc(user) + "</span>",
+          "<b>Health profile.</b> " + (s.shape === "kit"
+            ? "<b>Deployable kit</b> if this box carries the full stack into the field; <b>Private network server</b> if it simply lives on your VPN. Both are right for a laptop on a kit LAN, so pick by what it is <i>for</i>. It sets what the health checks expect, and it can be changed later"
+            : "<b>Public cloud server</b>"),
+          "<b>Bootstrap access.</b> The deciding question is whether anything already has SSH into this box. Nothing does, so press <b>Generate a key</b>: the console keeps the private half and shows you a one-line command to place the public half. Run that on this box, then press <b>Test the connection</b>",
+          "<b>2 · The package.</b> Pick the TAK release off the shelf. You do not download it again",
+          "<b>3 · The server.</b> FQDN <span class=\"val\">" + esc(fqdn) + "</span>, and the certificate identity",
+          "<b>5 · Run.</b> Leave <b>Install a console on this box</b> ticked" + (s.kiosk === "yes" ? " \u2014 this is what the kiosk will point at, so it is not optional for you" : "") + ". Then <b>Set up the server</b>"
+        ]) +
+        (s.cert === "none"
+          ? '<div class="trap"><p><b>Expect it to stop at stage 7 of 9.</b> You chose no public certificate, and the wizard has no way to say so: it collects a health profile that already declares this box is not internet-facing, then ignores it and runs Let\u2019s Encrypt anyway. Against a box behind a router that cannot succeed. The rest of the build is done by then; the certificate stage is the last one.</p></div>'
+          : "")));
+    } else {
+      out.push(block("Step 6", "Install Vantage",
+        "<p>Download the release and its checksum from the Releases page first. Then, from your own machine:</p>" +
+        cmd("shasum -a 256 -c vantage-" + ver + ".tgz.sha256\n" +
+            "scp vantage-" + ver + ".tgz " + user + "@" + box + ":~/", MINE) +
+        "<p>Then on the box:</p>" +
+        cmd("ssh " + user + "@" + box + "\n" +
+            "tar -xzf vantage-" + ver + ".tgz\n" +
+            "cd vantage/console\n" +
+            "sudo ./install-vantage.sh --bind " + box, MINE) +
+        "<p>It finishes by telling you where to go:</p>" +
+        cmd("Vantage is running on http://" + box + ":8090") +
+        (s.kiosk === "yes"
+          ? '<div class="trap"><p><b>That address is what the kiosk will point at.</b> It is fixed at install time, so if the box ever takes a different address the kiosk shows an error page. That is why step 1 reserved it.</p></div>'
+          : "")));
+    }
+
+    document.getElementById("out").innerHTML = out.join("");
+  }
+
+  // ---- copy, with the fallback a plain-http or file:// page needs -------
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest ? e.target.closest(".copy") : null;
+    if (!btn) return;
+    var pre = btn.parentNode.querySelector("pre");
+    if (!pre) return;
+    var text = pre.textContent;
+    var done = function () {
+      btn.textContent = "Copied";
+      btn.classList.add("done");
+      setTimeout(function () { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1600);
+    };
+    // navigator.clipboard needs a secure context, which a page opened from a
+    // stick does not have. Fall back rather than fail silently.
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, function () { legacy(text, done); });
+    } else {
+      legacy(text, done);
+    }
+  });
+
+  function legacy(text, done) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); } catch (err) { /* nothing else to try */ }
+    document.body.removeChild(ta);
+  }
+
+  // ---- wiring -----------------------------------------------------------
+  function applyShape(s) {
+    var kit = s.shape === "kit";
+    document.querySelectorAll(".kit-only, .kit-only-inline").forEach(function (el) {
+      el.style.display = kit ? "" : "none";
+    });
+    document.querySelectorAll(".cloud-only, .cloud-only-inline").forEach(function (el) {
+      el.style.display = kit ? "none" : "";
+    });
+    $("net-head").textContent = kit ? "Addresses" : "Address";
+
+    document.querySelectorAll(".cert-token").forEach(function (el) {
+      el.style.display = (kit && s.cert === "token") ? "" : "none";
+    });
+    // A kit that publishes no certificate publishes nothing at all, so asking
+    // where its public record points is a question with no answer.
+    document.querySelectorAll(".publishes").forEach(function (el) {
+      el.style.display = (kit && s.cert === "none") ? "none" : "";
+    });
+    // Mark the chosen row so the comparison reads as "this is what you picked,
+    // and here is what the others would have cost" rather than three loose facts.
+    var cc = $("certcompare");
+    if (cc) { cc.setAttribute("data-cert", s.cert); }
+
+    var estate = s.journey === "estate";
+    $("journeynote").innerHTML = estate
+      ? "Your existing console builds this box from its <b>Deploy</b> page. You will not run the installer here, and the TAK package comes off that console's shelf rather than being downloaded again. <b>The console has to be able to reach this box over SSH</b>, which is what the private network question below is really deciding."
+      : "You install the console on this box yourself, then build TAK through it in the browser.";
+    // On the estate journey the VPN is not a preference. If the console and the box are not
+    // on one network, it is the only route in, and it has to exist before Deploy is opened.
+    var vh = $("vpnhead");
+    if (vh) {
+      vh.textContent = estate ? "How the console reaches this box" : "Private network";
+    }
+  }
+
+  function update() {
+    var s = read();
+    applyShape(s);
+    validate(s);
+    render(s);
+    save(s);
+  }
+
+  // short name follows the full name until the user types their own
+  var hostTouched = false;
+  $("host").addEventListener("input", function () { hostTouched = true; });
+  $("fqdn").addEventListener("input", function () {
+    if (!hostTouched) $("host").value = ($("fqdn").value || "").split(".")[0].toLowerCase();
+  });
+  // Hostnames are conventionally lower case, and a capitalised one is a quiet source
+  // of mismatches later between the router entry, /etc/hosts and the box itself.
+  $("host").addEventListener("blur", function () {
+    $("host").value = ($("host").value || "").trim().toLowerCase();
+    update();
+  });
+
+  ids.forEach(function (i) { $(i).addEventListener("input", update); });
+  radios.forEach(function (n) {
+    document.querySelectorAll('input[name="' + n + '"]').forEach(function (el) {
+      el.addEventListener("change", update);
+    });
+  });
+
+  $("print").addEventListener("click", function () { window.print(); });
+  $("reset").addEventListener("click", function () {
+    ids.forEach(function (i) { $(i).value = ""; });
+    document.querySelector('input[name="shape"][value="kit"]').checked = true;
+    document.querySelector('input[name="kiosk"][value="yes"]').checked = true;
+    document.querySelector('input[name="vpn"][value="tailscale"]').checked = true;
+    hostTouched = false;
+    try { localStorage.removeItem(KEY); } catch (e) { /* nothing to clear */ }
+    update();
+  });
+
+  restore();
+  if ($("host").value) hostTouched = true;
+  update();
+})();
+</script>
+</body>
+</html>
