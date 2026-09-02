@@ -175,12 +175,14 @@ shasum -a 256 -c "vantage-${TAG#v}.tgz.sha256"   # must print one line reading O
 scp "vantage-${TAG#v}.tgz" you@your-server:~/
 ```
 
-If the checksum line does not read `OK`, stop. Then on the server, where the wildcard
-matches whichever archive you just copied:
+If the checksum line does not read `OK`, stop. Then on the server. `$TAG` is not set in
+that session, so the version is written out in full: a wildcard would match every release
+already sitting there and tar would treat the extras as members to extract, which fails
+with `Not found in archive`.
 
 ```bash
 ssh you@your-server
-tar -xzf vantage-*.tgz
+tar -xzf vantage-<version>.tgz          # the file you just copied, named in full
 cd vantage/console
 sudo ./install-vantage.sh --bind YOUR.SERVER.IP.ADDRESS
 ```

@@ -792,9 +792,11 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
             'shasum -a 256 -c "vantage-${TAG#v}.tgz.sha256"\n' +
             'scp "vantage-${TAG#v}.tgz" ' + user + "@" + box + ":~/", MINE) +
         '<div class="trap"><p><b>The checksum line must say <code>OK</code>.</b> If it does not, stop: the download is damaged or tampered with, and installing it anyway puts something you did not verify on the box.</p></div>' +
-        "<p>Then on the box. It matches whichever tarball you just copied, so there is still no version to type:</p>" +
+        "<p>Then on the box. The command above printed the version it fetched; type that " +
+        "same name here. A wildcard would match every release already on the box and tar " +
+        "would try to extract the extras as members, which fails.</p>" +
         cmd("ssh " + user + "@" + box + "\n" +
-            "tar -xzf vantage-*.tgz\n" +
+            "tar -xzf vantage-<version>.tgz\n" +
             "cd vantage/console\n" +
             "sudo ./install-vantage.sh --bind " + box, MINE) +
         "<p>It finishes by telling you where to go:</p>" +
