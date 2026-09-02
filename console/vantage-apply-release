@@ -142,6 +142,14 @@ fi
     install -m 0755 "$ROOT/console/console-self-enrol.sh" "$LIB/console-self-enrol.sh"
 [[ -f "$ROOT/console/console-enrol-server.sh" ]] && \
     install -m 0755 "$ROOT/console/console-enrol-server.sh" "$BIN/console-enrol-server"
+# ITSELF. Without this an updater can never ship a fix to the update path: the old copy
+# runs, installs everything except itself, and the next update runs the old copy again.
+# 0.9.35 fixed provisioner delivery here and could not deliver that fix, because the
+# broken updater was the thing doing the delivering. A release that cannot repair its own
+# delivery mechanism needs a person to re-run the installer by hand, which is exactly what
+# this line exists to avoid.
+[[ -f "$ROOT/console/vantage-apply-release" ]] && \
+    install -m 0755 "$ROOT/console/vantage-apply-release" "$BIN/vantage-apply-release"
 
 # ---- 4. restart and wait for it to actually answer ---------------------------------------
 say "restarting $UNIT"

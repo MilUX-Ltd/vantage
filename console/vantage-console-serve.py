@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.35-beta"
+VANTAGE_RELEASE = "0.9.36-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -14513,13 +14513,42 @@ SETUP_JS = """
     if(j.dry)return ['ok','Dry run finished cleanly. Read the log, untick dry run, run again - the key is held for the live run.'];
     return ['ok','Finished. The box is enrolled; credentials below.'];
   }
+  // Say what is happening, in the operator's words. The wizard replaced an older deploy
+  // panel that narrated the build and did not carry this across, so a 25 minute run
+  // showed the single word "Running" over a scrolling log. The log answers "what
+  // exactly"; this answers "where am I, and is it stuck". test-console-modes.py keeps
+  // this wording identical to the older panel's copy.
+  var WZ_STAGES={
+    harden:'securing and updating the operating system (the slowest stage on a fresh box)',
+    deps:'installing the foundations - Java, the PostgreSQL database, the nginx web server',
+    install:'installing TAK Server itself',
+    database:'creating TAK Server\u2019s database',
+    certs:'creating the certificate authority that will identify your server and devices',
+    coreconfig:'writing TAK Server\u2019s configuration',
+    letsencrypt:'getting a trusted TLS certificate for your public name',
+    start:'starting TAK Server for the first time - it sets up its own tables, and can be quiet for up to 15 minutes; this is normal',
+    components:'installing the extra components you chose'};
+  var WZ_PHASES={'1':'enrolling the box into the estate',
+    '2':'sending the TAK Server package to the box',
+    '3':'provisioning TAK Server (much the longest part)',
+    '4':'minting the first enrolment credentials',
+    '5':'destroying the bootstrap key'};
+  function wzNarrate(txt){
+    var m, re, last, phase='', stage='';
+    re=/-- phase (\\d)\\/5:/g; last=null; while((m=re.exec(txt))) last=m;
+    if(last) phase='Step '+last[1]+' of 5'+(WZ_PHASES[last[1]]?': '+WZ_PHASES[last[1]]:'');
+    re=/== STAGE (\\d)\\/(\\d) ([a-z-]+)/g; last=null; while((m=re.exec(txt))) last=m;
+    if(last) stage='stage '+last[1]+' of '+last[2]+', '+(WZ_STAGES[last[3]]||last[3]);
+    if(phase&&stage) return phase+' \u2014 '+stage;
+    return phase||stage||'Working\u2026';
+  }
   function watchJob(job){
     var r=$('#wz-runres'), log=$('#wz-log');
     $('#wz-go').disabled=true;
     var poll=setInterval(function(){
       fetch('/api/job/'+job).then(function(rr){return rr.json();}).then(function(j){
         log.textContent=j.log||'';log.scrollTop=log.scrollHeight;
-        if(j.status==='running'){msg(r,'','Running\\u2026');return;}
+        if(j.status==='running'){msg(r,'',wzNarrate(j.log||''));return;}
         clearInterval(poll);$('#wz-go').disabled=false;
         var v=jobVerdict(j); msg(r,v[0],v[1]);
         showCreds(j);
