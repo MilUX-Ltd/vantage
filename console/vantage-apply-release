@@ -112,6 +112,16 @@ install -m 0644 "$NEW_SERVE" "$LIB/vantage-console-serve.py" || die "could not i
     install -m 0644 "$ROOT/console/vantage-console-collect.py" "$LIB/vantage-console-collect.py"
 mkdir -p "$ARTIFACTS"
 install -m 0755 "$NEW_CHECK" "$ARTIFACTS/tak-health.sh"
+# The PROVISIONERS. A fresh install writes three artifacts here; this path wrote one, so
+# every box updated rather than reinstalled kept the provisioner it was first built with,
+# for ever. Two releases of provisioning fixes could not reach edge-laptop1 that way: it
+# ran a months-old stage 7 on a console reporting 0.9.34, and the build failed the same
+# way twice while the release notes said it was fixed. Same fault as console-setup-priv
+# above, one file over.
+for _a in vantage-tak-provision.sh vantage-infratak-provision.sh; do
+    [[ -f "$ROOT/console/provision/$_a" ]] \
+        && install -m 0755 "$ROOT/console/provision/$_a" "$ARTIFACTS/$_a"
+done
 # the box's own checker, so its next poll reports against the new one
 install -m 0755 "$NEW_CHECK" "$BIN/tak-health" 2>/dev/null || true
 # action scripts: the console's own copies, used when it acts on this box and when it

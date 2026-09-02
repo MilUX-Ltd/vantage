@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.34-beta"
+VANTAGE_RELEASE = "0.9.35-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -11765,21 +11765,32 @@ function el(t,c,x){var e=document.createElement(t); if(c)e.className=c; if(x!=nu
 // release reports the same version, so answering again after having been unreachable
 // counts too.
 function reloadWhenBack(where, was){
-  note(where,'The console is restarting on the new version. This page reloads itself when '+
-             'it is back, so there is nothing to do.');
+  // Waiting silently is indistinguishable from doing nothing, which is how this read on
+  // 3 Sep 2026 when a console updated and the page just sat there. Show the wait, and put
+  // a button next to it so the operator is never stuck behind a poll that is not working.
+  var line=el('div','meta','The console is restarting on the new version. This page reloads '+
+                           'itself when it is back.');
+  where.appendChild(line);
+  var now_btn=el('button','a-go small','Reload now'); now_btn.type='button';
+  now_btn.addEventListener('click',function(){ location.reload(); });
+  where.appendChild(now_btn);
   var tries=0, wasDown=false;
   var t=setInterval(function(){
     tries++;
+    line.textContent='Waiting for the console to come back\u2026 ('+(tries*2)+'s)'+
+                     (wasDown?' it went away, so it is restarting':'');
     if(tries>150){ clearInterval(t);
-      note(where,'Still not back after five minutes. Reload the page yourself. If the new '+
-                 'version did not come up, the old one is put back on its own.'); return; }
+      line.textContent='Still not back after five minutes. Use Reload now, and if the new '+
+                       'version did not come up the old one is put back on its own.'; return; }
     fetch('/healthz',{cache:'no-store'})
       .then(function(r){ return r.text(); })
       .then(function(txt){
-        var now=(txt||'').trim().split(/\s+/)[1]||'';
-        if((now && was && now!==was) || wasDown){ clearInterval(t); location.reload(); }
+        var v=(txt||'').trim().split(/\s+/)[1]||'';
+        // reload when it reports a DIFFERENT release, or when it answers again after
+        // having been unreachable (a reinstall of the same release reports the same one)
+        if((v && was && v!==was) || wasDown){ clearInterval(t); location.reload(); }
       })
-      .catch(function(){ wasDown=true; });   // gone: now wait for it to answer again
+      .catch(function(){ wasDown=true; });
   },2000);
 }
 
@@ -14435,8 +14446,18 @@ SETUP_JS = """
   function wzGoLabel(){var d=$('#wz-dry'),g=$('#wz-go');
     if(d&&g)g.textContent=d.checked?'Preview the build (dry run)':'Build the server for real';}
   var wzd=$('#wz-dry'); if(wzd){wzd.addEventListener('change',wzGoLabel);wzGoLabel();}
-  $('#wz-go').onclick=function(){
+  $('#wz-go').onclick=function(ev){
     var r=$('#wz-runres'), log=$('#wz-log');
+    // A build rebuilds a server, so it must be a deliberate act by a person. On 3 Sep 2026
+    // filling the step-4 password from a password manager started one before the operator
+    // had reached step 5: an extension that fills a field and then presses the page's main
+    // button produces a click that is NOT user-initiated. isTrusted is false for those and
+    // true for a real one. Say so rather than ignore it, or the button looks broken.
+    if (ev && ev.isTrusted === false) {
+      msg(r,'error','That press did not come from you - something on the page clicked it. '+
+                    'Click the button yourself to start the build.');
+      return;
+    }
     var creds=[].map.call(wiz.querySelectorAll('.wz-credrow'),function(row){
       var pw=row.querySelector('.wzc-pass');
       return {user:row.querySelector('.wzc-user').value.trim(),
@@ -14461,6 +14482,16 @@ SETUP_JS = """
       creds:creds,passphrase:$('#wz-pass').value,confirm:true,
       with_console:($('#wz-console')&&$('#wz-console').checked)?'1':'0'};
     var eo=$('#wz-enrolonly'); if(eo&&eo.checked){body.enrol_only='1';body.creds=[];}
+    // Name what is about to be rebuilt. This button is the last thing between here and a
+    // machine being wiped, and it had no confirmation at all. A dry run and an enrol-only
+    // change nothing on the box, so neither asks.
+    if (!$('#wz-dry').checked && !(eo && eo.checked)) {
+      var who=(body.estate_name||body.name||'this box')+' at '+(S.dest||'its address');
+      if(!confirm('Build '+who+' for real?\\n\\n'+
+                  'It installs TAK Server and its database, replaces what is already there, '+
+                  'and destroys the bootstrap key at the end.\\n\\nThis cannot be undone.')){
+        msg(r,'','Not started.'); return; }
+    }
     $('#wz-go').disabled=true; msg(r,'','Starting\\u2026'); log.textContent='';
     J('/api/setup/run',body).then(function(x){
       if(x.code!==200){$('#wz-go').disabled=false;msg(r,'error',x.j.error||'did not start');return;}
