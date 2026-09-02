@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.42.0"
+VERSION = "2.43.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.19-beta"
+VANTAGE_RELEASE = "0.9.20-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -4020,7 +4020,7 @@ def setup_api(path, data, client):
         new = str(data.get("new", ""))
         if len(new) < 12:
             return 400, {"error": "use at least 12 characters"}
-        if auth_configured() and not verify_operator_password(str(data.get("current", ""))):
+        if auth_configured() and not session_valid(self) and not verify_operator_password(str(data.get("current", ""))):
             audit({"action": "set-password", "result": "DENIED", "client": client})
             return 403, {"error": "current password is wrong"}
         blob = base64.b64encode(json.dumps(hash_password(new)).encode()).decode()
@@ -4263,7 +4263,8 @@ def save_instance(data, client):
         # would leave the estate with no controller. When an operator password exists,
         # re-check it before applying any change; an open console has no password to ask.
         if new_mode != inst.get("console_mode", "admin") and auth_configured():
-            if not verify_operator_password(data.get("mode_passphrase", "")):
+            if not data.get("_session_ok") and not verify_operator_password(
+                    data.get("mode_passphrase", "")):
                 return 403, {"error": "changing console mode needs your operator password"}
         inst["console_mode"] = new_mode
     blob = base64.b64encode(json.dumps(inst).encode()).decode()
@@ -6834,9 +6835,15 @@ form.action.flash{outline:2px solid var(--gold);outline-offset:3px}
 .eud-qr{width:110px;height:110px;background:#fff;padding:6px;border-radius:6px;flex:0 0 auto}
 .wz-comp-t{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;
  color:var(--mute);margin-bottom:7px}
-.wz-comps{display:flex;flex-direction:column;gap:8px}
+/* Two columns from 560px. Eight options in one tall column made the step scroll for no
+   reason, and it sits in a .fl column that uppercases its children, so the labels came out
+   shouting - reset here rather than relying on each element opting out. */
+.wz-comps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;
+ text-transform:none;letter-spacing:0}
 .wz-comp{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;background:var(--card);
- border:1px solid var(--line);border-radius:var(--r-sm);cursor:pointer;font-size:13.5px}
+ border:1px solid var(--line);border-radius:var(--r-sm);cursor:pointer;font-size:13.5px;
+ text-transform:none;letter-spacing:0;font-family:var(--font-sans);color:var(--ink)}
+.wz-comp b{font-weight:600}
 .wz-comp:has(input:checked){border-color:var(--gold);background:var(--bh)}
 .wz-comp small{display:block;color:var(--mute);font-size:12px;margin-top:2px}
 .wz-deps{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 14px}
@@ -10168,7 +10175,7 @@ def set_console_mode_api(data, client):
                      "its own Vantage console, enrolled for the console-mode action"}
     # operator-password re-entry, exactly like the local mode gate; skipped only when this
     # console runs open (there is no password to ask for)
-    if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+    if auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
         return 403, {"error": "your operator password is required to change a box's console role"}
     key = os.path.join(ACTION_KEYS, ACTIONS["console-mode"]["key"])
     dest = cfg["targets"][target]
@@ -10210,8 +10217,8 @@ def set_kiosk_api(data, client):
     if "kiosk" not in enabled_actions(cfg):
         return 400, {"error": "this box does not accept remote kiosk control yet - re-enrol it "
                      "for the kiosk action"}
-    if op != "status" and auth_configured() and not verify_operator_password(
-            data.get("passphrase", "")):
+    if (op != "status" and auth_configured() and not data.get("_session_ok")
+            and not verify_operator_password(data.get("passphrase", ""))):
         return 403, {"error": "your operator password is required to change a box's kiosk"}
     key = os.path.join(ACTION_KEYS, ACTIONS["kiosk"]["key"])
     dest = cfg["targets"][target]
@@ -16814,6 +16821,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self._send(400, json.dumps({"error": "bad json"}), "application/json")
             return
+        # Signed in already? Then the operator-password gates below are satisfied. Carried
+        # on the parsed body because two of them live in helper functions that never see
+        # the handler. Safe here: action arguments are built only from an action's DECLARED
+        # inputs, so an extra key is never forwarded to a box.
+        if isinstance(data, dict):
+            data["_session_ok"] = session_valid(self)
         client = self.address_string()
         if path == "/api/propose":
             # tasking the agent queue is for co-located agents (Sam), never the wider
@@ -16915,7 +16928,7 @@ class Handler(BaseHTTPRequestHandler):
             sub = str(data.get("folder", "updates"))
             if sub not in ("updates", "tak-server", "software", "map-packs", "mission-packs"):
                 code, res = 400, {"error": "unknown shelf"}
-            elif auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+            elif auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to copy files "
                                   "onto a stick"}
             else:
@@ -16926,7 +16939,7 @@ class Handler(BaseHTTPRequestHandler):
                              (500, {"error": (txt or "copy failed").strip()[:200]}))
         elif path == "/api/updates/estate":
             # push the current checker to every box. Gated: it writes to every box at once.
-            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+            if auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to update the estate"}
             else:
                 code, res = update_estate(client, str(data.get("passphrase", "")),
@@ -16939,7 +16952,7 @@ class Handler(BaseHTTPRequestHandler):
             # nothing outside the shelf can be named.
             code, res = remove_staged_release(data.get("file", ""), client)
         elif path == "/api/updates/apply":
-            if auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+            if auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to install a release"}
             else:
                 code, res = apply_release(data, client)
@@ -16958,7 +16971,7 @@ class Handler(BaseHTTPRequestHandler):
             op = str(data.get("op", ""))
             if op not in ("promote", "demote"):
                 code, res = 400, {"error": "op must be promote or demote"}
-            elif auth_configured() and not verify_operator_password(data.get("passphrase", "")):
+            elif auth_configured() and not session_valid(self) and not verify_operator_password(data.get("passphrase", "")):
                 code, res = 403, {"error": "your operator password is required to change "
                                   "which consoles can run this estate"}
             else:

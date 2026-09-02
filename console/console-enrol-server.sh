@@ -253,13 +253,29 @@ $SSH "$RSUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q qrencode >
 
 # ---------------------------------------------------------------- remote: keys
 echo "[4/6] authorized_keys (idempotent)"
+# Each side creates the directory it writes into before writing. Step 2 makes these too,
+# but a step that appends into a path it has not ensured is a step that fails silently:
+# on 2 Sep 2026 a box came out of enrolment with no /home/USER/.ssh at all, every
+# append discarded, and this script printed "keys OK" underneath it because the echo was
+# unconditional. The build then died three phases later on "Permission denied", pointing
+# at sshd instead of here.
 {
   echo "$HEALTH_LINE"
-} | $SSH "$RSUDO bash -c 'while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takwatch:takwatch /home/USER/.ssh/authorized_keys'"
+} | $SSH "$RSUDO bash -c 'install -d -m 700 -o takwatch -g takwatch /home/USER/.ssh; touch /home/USER/.ssh/authorized_keys; while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takwatch:takwatch /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys'" \
+  || die "could not write takwatch's authorized_keys"
 for k in "${!ACTION_SCRIPTS[@]}"; do
   printf 'command="/usr/local/bin/%s",restrict %s\n' "${ACTION_SCRIPTS[$k]}" "$(cat "$KEYDIR/$k.pub")"
-done | $SSH "$RSUDO bash -c 'while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takadmin:takadmin /home/USER/.ssh/authorized_keys'"
-echo "keys OK"
+done | $SSH "$RSUDO bash -c 'install -d -m 700 -o takadmin -g takadmin /home/USER/.ssh; touch /home/USER/.ssh/authorized_keys; while IFS= read -r line; do grep -qF \"\$line\" /home/USER/.ssh/authorized_keys || echo \"\$line\" >> /home/USER/.ssh/authorized_keys; done; chown takadmin:takadmin /home/USER/.ssh/authorized_keys; chmod 600 /home/USER/.ssh/authorized_keys'" \
+  || die "could not write takadmin's authorized_keys"
+
+# Earned, not announced. Ask the box what it actually has, and refuse to continue if the
+# keys are not there - the next three phases all authenticate as these users, and a build
+# that stops here with the reason is worth more than one that stops later without it.
+KEYCOUNT=$($SSH "$RSUDO bash -c 'w=0; a=0; [ -s /home/USER/.ssh/authorized_keys ] && w=\$(grep -c . /home/USER/.ssh/authorized_keys); [ -s /home/USER/.ssh/authorized_keys ] && a=\$(grep -c . /home/USER/.ssh/authorized_keys); echo \"\$w \$a\"'" 2>/dev/null || echo "0 0")
+read -r WKEYS AKEYS <<<"$KEYCOUNT"
+[[ "${WKEYS:-0}" -ge 1 ]] || die "takwatch has no authorized_keys on the box - enrolment cannot have worked"
+[[ "${AKEYS:-0}" -ge 1 ]] || die "takadmin has no authorized_keys on the box - enrolment cannot have worked"
+echo "keys OK (takwatch $WKEYS, takadmin $AKEYS)"
 
 # ---------------------------------------------------------------- local: configs
 echo "[5/6] console configs (locked)"
