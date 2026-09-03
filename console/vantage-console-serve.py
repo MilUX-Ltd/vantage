@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.37-beta"
+VANTAGE_RELEASE = "0.9.38-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -14492,6 +14492,12 @@ SETUP_JS = """
                   'and destroys the bootstrap key at the end.\\n\\nThis cannot be undone.')){
         msg(r,'','Not started.'); return; }
     }
+    // The credentials from the LAST build stay on the page otherwise, QR and all, right
+    // through the new run. They look current and they are not: they are signed by a CA
+    // this build is about to replace, so scanning one enrols a device against a server
+    // that no longer exists. Clear them at the moment of starting, not when the new ones
+    // arrive twenty-five minutes later.
+    var co=$('#wz-credout'); if(co) co.innerHTML='';
     $('#wz-go').disabled=true; msg(r,'','Starting\\u2026'); log.textContent='';
     J('/api/setup/run',body).then(function(x){
       if(x.code!==200){$('#wz-go').disabled=false;msg(r,'error',x.j.error||'did not start');return;}
@@ -16209,10 +16215,16 @@ def render_deploy(state):
                " &middot; <a href='/planner?download=1' download='vantage-planner.html'>"
                "download it</a> to use on a machine with no console.</p>"
                "<div id=wz-planres class=a-res role=status></div></div>"
-               "<div class=wz-selfrow><button type=button id=wz-selfbox class='a-go confirm'>"
-               "Deploy on this box</button><span class=hint>the console's own server "
-               "becomes the first TAK server - no keys to paste, no addresses. Everything "
-               "below fills itself; carry on at step 2.</span></div>"
+               # This was a RED button sitting directly above the fields the operator types
+               # into, in the same column, and the only other red control on the page besides
+               # "Build the server for real". A mis-click while tabbing between fields targets
+               # a different server entirely. It is a shortcut, not an action: it fills the
+               # form in. So it reads as one now, out of the input column and in the plan
+               # strip where the other "fill this in for me" control already lives.
+               "<div class=wz-selfrow><button type=button id=wz-selfbox class='cred-dl'>"
+               "Use this box as the server</button><span class=hint>fills the form in for "
+               "the console's own box - no keys to paste, no addresses. Nothing is built "
+               "until you press the button at step 5.</span></div>"
                "<label class=fl>Estate name<input id=wz-name maxlength=24 placeholder='dev-cloud'>"
                "<span class=hint>short, [a-z0-9-] - how the console will know the box</span></label>"
                "<label class=fl>Label<input id=wz-label maxlength=40 placeholder='Dev TAK'>"
