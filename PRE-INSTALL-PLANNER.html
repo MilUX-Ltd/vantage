@@ -187,6 +187,19 @@ td.k{font-family:var(--f-mono);font-size:13px}
 .popout th,.popout td{padding:6px 9px}
 .screen{font-family:var(--f-mono);font-size:12.5px;background:var(--code-ground);color:var(--code-ink);
   padding:11px 13px;border-radius:3px;margin:8px 0;white-space:pre;overflow-x:auto}
+/* The plan is the artefact this whole page exists to produce. It was set in the same
+   tone as its surroundings, so it read as one more paragraph and had to be searched
+   for. Give it the strongest contrast on the page. */
+.planwrap{background:var(--accent);color:var(--code-accent);border-radius:4px;
+  padding:14px 16px 6px;margin:0 0 4px;border:2px solid var(--rule-strong)}
+.planwrap pre{border:1px solid var(--code-accent)}
+.planwrap .why{background:transparent;border-color:var(--code-accent)}
+.planwrap .why,.planwrap .why p,.planwrap .why-label,.planwrap p,
+.planwrap .cmd-label{color:var(--code-accent)}
+.planfoot-h{font-family:var(--f-display);font-size:15px;margin:0 0 4px;
+  color:var(--code-accent)}
+.planfoot-p{margin:0 0 10px;font-size:13px;color:var(--code-accent)}
+#planfoot{margin:0 0 14px}
 .trap{background:var(--flag-fill);border:1px solid var(--flag);border-radius:3px;
   padding:12px 15px;margin:0 0 14px;font-size:15px;color:var(--ink)}
 .trap b{color:var(--flag)}
@@ -196,6 +209,11 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 @media print{
   .form-col,.actions,.copy{display:none}
+  /* The plan is the reason to print this at all. Browsers drop background colour on
+     paper by default, which would leave the one block that matters as pale text on
+     white - so ask for it explicitly and keep a border in case the ask is refused. */
+  .planwrap{-webkit-print-color-adjust:exact;print-color-adjust:exact;
+    border:2px solid var(--accent)}
   .cols{grid-template-columns:1fr}
   body{padding:0;font-size:12px}
   pre{white-space:pre-wrap}
@@ -353,6 +371,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     </div>
   </div>
 
+  <div id="planfoot" hidden></div>
   <div class="actions">
     <button type="button" id="print">Print or save as PDF</button>
     <button type="button" class="ghost" id="reset">Start again</button>
@@ -526,6 +545,10 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
   }
 
   function render(s) {
+    // Cleared at the top of every render: a stale plan for settings you have since
+    // changed is worse than no plan, and this one sits where it will be trusted.
+    var pf0 = document.getElementById("planfoot");
+    if (pf0) { pf0.innerHTML = ""; pf0.hidden = true; }
     var kit = s.shape === "kit";
     var fqdn = s.fqdn || "YOUR-FULL-NAME";
     var host = s.host || (s.fqdn ? s.fqdn.split(".")[0] : "YOUR-SHORT-NAME");
@@ -729,16 +752,48 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
           cmd("sudo tailscale up --accept-dns=false", BOX)) +
         '<div class="trap"><p><b>The flag is not optional on a kit.</b> Without it the VPN takes over the box\'s name lookups and hides the answer your router gives for its own name, so the box stops finding itself the moment the internet goes away.</p></div>';
     } else if (s.vpn === "wireguard") {
-      after += "<p>Join the private network with the config from your own WireGuard server. The console can also do this for you after Vantage is installed, which is the tidier route.</p>" +
-        cmd("sudo apt install -y wireguard\n" +
-            "sudo nano /etc/wireguard/wg0.conf       # paste your wg-quick config\n" +
+      // Same shape as the Tailscale branch, and for the same reason: on the estate
+      // journey the VPN is the only route in, so it has to exist before Deploy is
+      // opened. Saying that only under Tailscale left the other two looking optional.
+      after += (s.journey === "estate"
+        ? "<p><b>Do this now, and by hand.</b> Your existing console cannot reach a box " +
+          "on a private LAN behind its own router, so the VPN is the route in and it has " +
+          "to exist before you open Deploy.</p>"
+        : "<p>Join the private network. You can also do this from the console once " +
+          "Vantage is installed, which is the tidier route because it is gated and " +
+          "audited. By hand:</p>") +
+        "<p>You need a peer config from your own WireGuard server: the <code>[Interface]</code> " +
+        "block with this box's address and private key, and a <code>[Peer]</code> block for " +
+        "the server. Generate it wherever you administer WireGuard, before you start here.</p>" +
+        cmd("sudo apt install -y wireguard-tools\n" +
+            "sudo nano /etc/wireguard/wg0.conf       # paste the peer config for this box\n" +
             "sudo chmod 600 /etc/wireguard/wg0.conf\n" +
-            "sudo systemctl enable --now wg-quick@wg0", BOX);
+            "sudo systemctl enable --now wg-quick@wg0", BOX) +
+        "<p>Then read the address the console will use. It is the <code>Address</code> from " +
+        "that config, and this confirms the tunnel is actually up:</p>" +
+        cmd("ip -4 -brief addr show wg0\nsudo wg show", BOX) +
+        '<div class="trap"><p><b>Set <code>PersistentKeepalive = 25</code> on the peer if this ' +
+        "box sits behind NAT.</b> Without it the tunnel goes quiet when idle and the console " +
+        "cannot start a connection to the box, which looks exactly like the box being off.</p></div>";
     } else if (s.vpn === "openvpn") {
-      after += "<p>Join with your client profile. The console can also do this for you after Vantage is installed.</p>" +
+      after += (s.journey === "estate"
+        ? "<p><b>Do this now, and by hand.</b> Your existing console cannot reach a box " +
+          "on a private LAN behind its own router, so the VPN is the route in and it has " +
+          "to exist before you open Deploy.</p>"
+        : "<p>Join the private network. You can also do this from the console once " +
+          "Vantage is installed, which is the tidier route. By hand:</p>") +
+        "<p>You need a client profile (<code>.ovpn</code>) from your own OpenVPN server, with " +
+        "its certificates and key inline. Copy it onto the box however suits you.</p>" +
         cmd("sudo apt install -y openvpn\n" +
             "sudo cp your-profile.ovpn /etc/openvpn/client/vantage.conf\n" +
-            "sudo systemctl enable --now openvpn-client@vantage", BOX);
+            "sudo chmod 600 /etc/openvpn/client/vantage.conf\n" +
+            "sudo systemctl enable --now openvpn-client@vantage", BOX) +
+        "<p>Then read the address the console will use, and confirm the tunnel came up:</p>" +
+        cmd("ip -4 -brief addr show tun0\nsystemctl status openvpn-client@vantage --no-pager", BOX) +
+        '<div class="trap"><p><b>The profile must not ask for anything.</b> A profile with ' +
+        "<code>auth-user-pass</code> and no credentials file waits forever for a password " +
+        "nobody is there to type, and the service simply never comes up. Put the credentials " +
+        "in a file and reference it, or use a certificate-only profile.</p></div>";
     }
 
     if (s.kiosk === "yes") {
@@ -760,7 +815,11 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
         '<div class="trap"><p><b>Use the address the console can reach, not this one.</b> ' +
         (s.vpn === "none"
           ? "You have chosen no private network, so the console and this box must already be on one network. If they are not, go back: there is no route in."
-          : "That is the VPN address from <code>tailscale ip -4</code> in step 5, not <span class=\"val\">" + esc(box) + "</span>. The kit LAN address only exists behind your router.") +
+          : "That is the VPN address you read in step 5" +
+            (s.vpn === "tailscale" ? " with <code>tailscale ip -4</code>"
+             : s.vpn === "wireguard" ? " from <code>ip -4 -brief addr show wg0</code>"
+             : s.vpn === "openvpn" ? " from <code>ip -4 -brief addr show tun0</code>" : "") +
+            ", not <span class=\"val\">" + esc(box) + "</span>. The kit LAN address only exists behind your router.") +
         "</p></div>" +
         '<div class="trap"><p><b>Two things must be true before you open Deploy, and the wizard cannot tell you either.</b> It will let you fill the whole form in and fail at phase 1 of 5.</p></div>' +
         check([
@@ -845,6 +904,18 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
         var bin = ""; bytes.forEach(function (b) { bin += String.fromCharCode(b); });
         var b64 = btoa(bin)
           .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        // And again at the foot of the form, beside the buttons. This is the one
+        // thing the whole page exists to produce, and it sat in the right-hand column
+        // in the same tone as everything around it, so it had to be hunted for.
+        var foot = document.getElementById("planfoot");
+        if (foot) {
+          foot.innerHTML = '<div class="planwrap">' +
+            '<div class="planfoot-h">Your build plan</div>' +
+            '<p class="planfoot-p">Paste this into the console, step 1. Settings ' +
+            'only: no password, no key.</p>' +
+            cmd("VANTAGE-PLAN-1." + b64, "paste into the console, step 1") + "</div>";
+          foot.hidden = false;
+        }
         planBody += cmd("VANTAGE-PLAN-1." + b64, "paste into the console, step 1") +
           '<div class="why"><span class="why-label">One field it cannot fill</span>' +
           "<p>The address the console reaches this box on is left blank, because on this " +
@@ -852,7 +923,8 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
           "that in yourself, and the console will show you everything it decoded before " +
           "anything is saved.</p></div>";
       }
-      out.push(block("Plan", "Your build plan, as one line", planBody));
+      out.push(block("Plan", "Your build plan, as one line",
+        '<div class="planwrap">' + planBody + "</div>"));
     }
 
     document.getElementById("out").innerHTML = out.join("");
