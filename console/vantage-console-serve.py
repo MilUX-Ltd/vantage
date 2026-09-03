@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.54.0"
+VERSION = "2.55.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.55-beta"
+VANTAGE_RELEASE = "0.9.56-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -1403,6 +1403,10 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         out["url"] = parsed.get("URL", "")
         out["itak"] = parsed.get("ITAK", "")
         out["png"] = parsed.get("PNG", "")
+        # Whether a stock device accepts this server's certificate on sight, measured on
+        # the box against the live connector. It decides which join route the page leads
+        # with, and it is the difference between one scan and moving a file by hand.
+        out["trusted"] = parsed.get("TRUSTED", "")
         # The data package, present only when this box signs its own certificates and
         # could build one. A device cannot verify a private CA it has never seen, so
         # without this the QR fails with "the TAK server's identity could not be
@@ -4615,6 +4619,7 @@ def start_setup_job(data, client, authed=False):
                                          "password": res.get("password", ""),
                                          "url": res.get("url", ""), "itak": res.get("itak", ""),
                                          "png": res.get("png", ""),
+                                         "trusted": res.get("trusted", ""),
                                          "pkg": res.get("pkg", ""),
                                          "pkg_kind": res.get("pkg_kind", "")})
                     else:
@@ -6409,6 +6414,14 @@ a.sw-up:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
    with sections nobody can find. */
 .topnav{position:relative;display:flex;flex-wrap:wrap;gap:2px 0;max-width:1180px;
  margin:0 auto;padding:0 22px}
+/* The way into a server, on the card face. It reads as the action it is rather than
+   as one more link in a row of small ones, because it is the thing the tile exists for. */
+.tile-open-face{display:inline-block;margin:10px 0 2px;padding:7px 14px;
+  font:600 11.5px var(--font-display);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--gold-light);background:var(--forest);border-radius:var(--r-sm);
+  text-decoration:none;border:1px solid transparent}
+.tile-open-face:hover{background:var(--forest-soft);border-color:var(--gold)}
+.tile-open-face:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .topnav a{font:600 11.5px var(--font-display);letter-spacing:.08em;text-transform:uppercase;
  color:var(--hdr-mute);padding:9px 12px 10px;text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
 .topnav a:hover{color:var(--hdr-fg)}
@@ -6591,6 +6604,23 @@ form.action{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;
 .fl input:focus,.fl select:focus{outline:2px solid var(--focus);outline-offset:1px}
 .fl input::placeholder{color:var(--mute);opacity:1}
 .hint{font-family:var(--font-mono);font-size:10.5px;color:var(--mute);text-transform:none;letter-spacing:0;margin-top:1px}
+/* A question, and a way to ask about the question. The wizard asked eighteen things and
+   explained four; the rest an operator either knew or guessed, and a guess here is a
+   build that fails twenty minutes in. The detail is held behind the mark rather than put
+   on the screen, because a form that explains every field is a form nobody reads. */
+.fl-t{display:flex;align-items:center;gap:6px}
+/* --rule2 is a hairline for separating text, and it drew this control's edge at 1.92:1
+   on a card. A boundary that says "this is a control you can press" has to reach 3:1,
+   the same bar the planner's --edge token exists to meet. */
+.qi{flex:none;width:15px;height:15px;padding:0;border-radius:50%;cursor:pointer;
+ border:1px solid var(--acc);background:var(--bg);color:var(--fg2);
+ font:700 10px/1 var(--font-display);text-transform:none;letter-spacing:0}
+.qi:hover,.qi[aria-expanded="true"]{background:var(--forest);color:var(--gold-light);
+ border-color:var(--forest)}
+.qi:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.fl-tip{font:400 12.5px/1.5 var(--font-sans);text-transform:none;letter-spacing:0;
+ color:var(--fg);background:var(--bh);border-left:2px solid var(--acc);
+ padding:8px 11px;border-radius:var(--r-sm);margin:1px 0 2px}
 .a-go{align-self:flex-start;font-family:var(--font-display);font-weight:700;font-size:12px;letter-spacing:.04em;
  text-transform:uppercase;color:var(--paper);background:var(--forest);border:0;border-radius:var(--r-sm);padding:9px 18px;cursor:pointer}
 .a-go:hover{background:var(--forest-soft)}.a-go.confirm{background:var(--fail);color:var(--chip-fg)}
@@ -6849,6 +6879,15 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:var(--r-sm);
   border-left:3px solid var(--flag,#8A4B22);border-radius:4px;font-size:13px;line-height:1.5}
 .cred-pkg-why b{color:var(--flag,#8A4B22)}
 .cred-qr{width:220px;height:220px;image-rendering:pixelated;background:#fff;padding:8px;border-radius:var(--r-sm)}
+/* The route that did not lead. Present on every credential, folded away so it does not
+   compete with the one that should work, and open to one click when it does not. */
+.cred-fallback{margin:12px 0 2px;border-top:1px solid var(--line);padding-top:10px}
+.cred-fallback>summary{cursor:pointer;font-size:13px;color:var(--fg2);
+ font-family:var(--font-mono);list-style:none;padding:2px 0}
+.cred-fallback>summary::-webkit-details-marker{display:none}
+.cred-fallback>summary::before{content:'+ ';color:var(--acc)}
+.cred-fallback[open]>summary::before{content:'- '}
+.cred-fallback>summary:hover{color:var(--fg)}
 /* The enrolment import code is the one a camera has to read at arm's length, and a QR
    is the one image on the page that must not be resampled: forcing a 282px code into a
    220px box with pixelated rendering drops whole modules and greys the rest. Let it
@@ -6882,6 +6921,16 @@ a.cred-refresh{display:inline-block;text-decoration:none}
 #wizard .wz-step>*{grid-column:1/-1}
 #wizard .wz-step>label{grid-column:auto}
 .depdry{font-size:13.5px;color:var(--fg2);display:flex;gap:8px;align-items:center}
+/* The run options are four sentences, not four form fields. As bare .depdry labels they
+   inherited flex, which made the <b> and its explanation separate items, and the card's
+   auto-fit grid then gave each one its own column: four narrow shreds of prose across one
+   row. They live in their own two-by-two grid instead, one option per cell. */
+#wizard .wz-step>.wz-runopts{grid-column:1/-1;display:grid;gap:14px 24px;
+ grid-template-columns:repeat(2,minmax(0,1fr));margin:2px 0 4px}
+.wz-runopts .runopt{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;
+ line-height:1.5;grid-column:auto}
+.wz-runopts .runopt input{margin-top:3px}
+@media (max-width:760px){#wizard .wz-step>.wz-runopts{grid-template-columns:1fr}}
 .depstatus{margin:12px 0 0;font-family:var(--font-mono);font-size:13px;min-height:20px}
 .depstatus.run{color:var(--fg2)}
 .depstatus.ok{color:var(--ok)}
@@ -7946,33 +7995,70 @@ root.querySelectorAll('form.action').forEach(function(f){
           // works every time. See the lessons log 39.
           if(j.pkg || j.png){
             var oneScan = j.pkg && j.pkg_kind==='cert';
-            var why=document.createElement('div'); why.className='cred-pkg-why';
-            why.innerHTML = j.pkg
-              ? (oneScan
+            // Same rule as the build screen: the box measures whether a handset trusts
+            // this server on sight, and that decides which route leads. Both artefacts
+            // stay on the page either way - hiding the code whenever a package existed
+            // was the defect, and it left a public-certificate box with no one-scan join
+            // anywhere on the screen.
+            var trusted = j.trusted === 'yes';
+            function qrImg(){
+              var im=document.createElement('img'); im.className='cred-qr';
+              im.alt='Join code for '+(j.name||'device');
+              im.src='data:image/png;base64,'+j.png; return im;
+            }
+            function pkgLink(){
+              var dl=document.createElement('a'); dl.className='a-go primary';
+              dl.href='data:application/zip;base64,'+j.pkg;
+              dl.download=(j.name||'device')+(oneScan?'-join.zip':'-trust.zip');
+              dl.textContent='Download the join package'; return dl;
+            }
+            function note(cls,html){
+              var d=document.createElement('div'); d.className=cls; d.innerHTML=html; return d;
+            }
+
+            if(trusted && j.png){
+              res.appendChild(note('cred-pkg-why',
+                '<b>Scan this once, with the camera in ATAK.</b> That is the whole join. '+
+                'This server has a certificate the device already trusts, so there is no '+
+                'file to move and nothing to type.'));
+              res.appendChild(qrImg());
+              if(j.pkg){
+                var fb=document.createElement('details'); fb.className='cred-fallback';
+                var fs=document.createElement('summary'); fs.textContent='If the scan does nothing';
+                fb.appendChild(fs);
+                fb.appendChild(note('cred-pkg-why','Then use the file instead. It carries '+
+                  'the same join and does not depend on the camera reaching the server.'));
+                fb.appendChild(pkgLink());
+                fb.appendChild(note('cred-pkg-why','Get it onto the handset however suits '+
+                  'you - a cable, a memory stick, or your file store - and open it there.'));
+                res.appendChild(fb);
+              }
+            }else if(j.pkg){
+              res.appendChild(note('cred-pkg-why', oneScan
                  ? '<b>Download this and open it on the device. That is the whole join.</b> '+
                    'It carries the authority that lets the device trust this server, the '+
                    'server itself, and the certificate identifying this device.'
                  : '<b>Download this and open it on the device.</b> It gives the device the '+
-                   'authority to trust this server; the device then asks you to sign in.')
-              : '<b>Scan this once, with the camera in ATAK.</b> This server has a '+
-                'certificate the device already trusts, so the code is the whole join.';
-            res.appendChild(why);
-
-            if(j.pkg){
-              var dl=document.createElement('a'); dl.className='a-go primary';
-              dl.href='data:application/zip;base64,'+j.pkg;
-              dl.download=(j.name||'device')+(oneScan?'-join.zip':'-trust.zip');
-              dl.textContent='Download the join package';
-              res.appendChild(dl);
-              var how=document.createElement('div'); how.className='cred-pkg-why';
-              how.textContent='Get it onto the handset however suits you - a cable, a '
-                +'memory stick, or your file store - and open it there.';
-              res.appendChild(how);
-            }else{
-              var im=document.createElement('img'); im.className='cred-qr';
-              im.alt='Join code for '+(j.name||'device');
-              im.src='data:image/png;base64,'+j.png;
-              res.appendChild(im);
+                   'authority to trust this server; the device then asks you to sign in.'));
+              res.appendChild(pkgLink());
+              res.appendChild(note('cred-pkg-why','Get it onto the handset however suits '+
+                'you - a cable, a memory stick, or your file store - and open it there.'));
+              if(j.png){
+                var cb=document.createElement('details'); cb.className='cred-fallback';
+                var cs=document.createElement('summary'); cs.textContent='Join by code instead';
+                cb.appendChild(cs);
+                cb.appendChild(note('cred-pkg-why','This server signs its own certificates, '+
+                  'so the code only works on a device that already holds this estate '+
+                  'authority - imported once, from Credentials. On a device that does not, '+
+                  'the scan fails with the server identity not verified.'));
+                cb.appendChild(qrImg());
+                res.appendChild(cb);
+              }
+            }else if(j.png){
+              res.appendChild(note('cred-pkg-why',
+                '<b>Scan this once, with the camera in ATAK.</b> This server has a '+
+                'certificate the device already trusts, so the code is the whole join.'));
+              res.appendChild(qrImg());
             }
 
             var willAsk = j.pkg && !oneScan;
@@ -9422,11 +9508,16 @@ def server_board_html(state, history=None, desired=None, cfg=None, quick=False):
             out.append(uptime_strip(history, name, 48, mini=True))
         if quick:
             out.append(_tile_quick(name, acts, act_targets))
+        # The way into a box, on the face of the card. It used to live at the bottom of
+        # the collapsed section, so reaching a server meant opening "what's installed",
+        # scrolling past an inventory nobody wanted, and finding a link. The one thing
+        # every tile is for should not be the hardest thing on it.
+        # stopPropagation because the whole summary toggles the fold on click.
+        out.append(f"<a class=tile-open-face href='/server/{e(name)}' "
+                   "onclick='event.stopPropagation()'>Open server &rsaquo;</a>")
         out.append("<div class=tile-toggle><span class=chev></span>"
                    "What's installed &amp; baseline</div></summary>")
-        out.append("<div class=tile-body>" + _tile_inventory(t, desired)
-                   + f"<a class=tile-open href='/server/{e(name)}'>"
-                     "Open server page &rsaquo;</a></div></details>")
+        out.append("<div class=tile-body>" + _tile_inventory(t, desired) + "</div></details>")
     out.append("</div>")
     return "".join(out)
 
@@ -14507,6 +14598,37 @@ SETUP_JS = """
   function J(url,body){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){return{code:r.status,j:j};});});}
   function msg(el,cls,text){el.className='a-res '+cls;el.textContent=text;}
+
+  // ---- the info marks -----------------------------------------------------------
+  // Hover to read it, click to keep it open, Escape to close. A real button rather than a
+  // hover-only tooltip: hover does not exist on a handset, and it does not exist for
+  // anyone driving this from the keyboard. preventDefault matters because the mark sits
+  // inside a label, and a click on a label otherwise activates the field beneath it.
+  // Bound to the document, not the wizard, so a mark added to any other form works the
+  // same day it is added rather than looking live and doing nothing.
+  (function(){
+    var pinned=null;
+    function tipOf(b){var t=b.parentNode.nextElementSibling;
+      return (t && t.className==='fl-tip') ? t : null;}
+    function set(b,on){var t=tipOf(b); if(!t) return;
+      t.hidden=!on; b.setAttribute('aria-expanded', on?'true':'false');}
+    function from(e){return (e.target && e.target.closest) ? e.target.closest('.qi') : null;}
+    document.addEventListener('mouseover',function(e){var b=from(e); if(b&&b!==pinned) set(b,true);});
+    document.addEventListener('mouseout', function(e){var b=from(e); if(b&&b!==pinned) set(b,false);});
+    document.addEventListener('focusin',  function(e){var b=from(e); if(b) set(b,true);});
+    document.addEventListener('focusout', function(e){var b=from(e); if(b&&b!==pinned) set(b,false);});
+    document.addEventListener('click',function(e){
+      var b=from(e); if(!b) return;
+      e.preventDefault(); e.stopPropagation();
+      if(pinned && pinned!==b) set(pinned,false);
+      pinned = (pinned===b) ? null : b;
+      set(b, pinned===b);
+    });
+    document.addEventListener('keydown',function(e){
+      if(e.key!=='Escape' || !pinned) return;
+      var b=pinned; pinned=null; set(b,false); b.focus();
+    });
+  })();
   var S={key:null,dest:null,tested:false,pkg:null,debOnBox:false};
   function keyname(){return ($('#wz-name').value.trim()||'x').toLowerCase().replace(/[^a-z0-9-]/g,'-').slice(0,20)+'-boot';}
   // the push lands in the admin user's home - /root only exists for root, and a
@@ -14869,27 +14991,63 @@ SETUP_JS = """
     var out=j.creds.map(function(c){
       var h='<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>';
       var oneScan = c.pkg && c.pkg_kind==='cert';
+      // Whether the server's certificate is one a handset accepts on sight decides which
+      // route leads. The box measures it and says so; nothing here guesses from how the
+      // build was configured.
+      var trusted = c.trusted === 'yes';
 
-      if(c.pkg){
+      var qr = c.png
+        ? '<img class=cred-qr alt="Join code for '+esc(c.user)+'" '
+          +'src="data:image/png;base64,'+c.png+'">'
+        : '';
+      var pkgDl = c.pkg
+        ? '<div class=cred-lines><a class="a-go primary" download="'+esc(c.user)
+          +(oneScan?'-join.zip':'-trust.zip')+'" href="data:application/zip;base64,'
+          +c.pkg+'">Download the join package</a></div>'
+        : '';
+
+      if(trusted && qr){
+        // One scan, nothing to move. The package stays on the page underneath, because a
+        // scan that does nothing leaves an operator with no error and nowhere to go: the
+        // file is the route that does not depend on the camera, the network or the token
+        // surviving the trip.
+        h+='<div class=cred-pkg-why><b>Scan this once, with the camera in ATAK.</b> '
+          +'That is the whole join. This server has a certificate the device already '
+          +'trusts, so there is no file to move and nothing to type.</div>'+qr;
+        if(c.pkg){
+          h+='<details class=cred-fallback><summary>If the scan does nothing</summary>'
+            +'<div class=cred-pkg-why>Then use the file instead. It carries the same join '
+            +(oneScan?'including this device certificate, ':'')
+            +'and does not depend on the camera reaching the server.</div>'+pkgDl
+            +'<div class=cred-pkg-why>Get it onto the handset however suits you - a cable, '
+            +'a memory stick, or your file store - and open it there.</div></details>';
+        }
+      }else if(c.pkg){
         h+='<div class=cred-pkg-why>'+(oneScan
           ? '<b>Download this and open it on the device. That is the whole join.</b> It '
             +'carries the authority that lets the device trust this server, the server '
             +'itself, and the certificate identifying this device. Nothing to type.'
           : '<b>Download this and open it on the device.</b> It gives the device the '
             +'authority it needs to trust this server. The device then asks you to sign '
-            +'in, with the account below.')+'</div>'
-          +'<div class=cred-lines><a class="a-go primary" download="'+esc(c.user)
-          +(oneScan?'-join.zip':'-trust.zip')+'" href="data:application/zip;base64,'
-          +c.pkg+'">Download the join package</a></div>'
+            +'in, with the account below.')+'</div>'+pkgDl
           +'<div class=cred-pkg-why>Get it onto the handset however suits you - a cable, '
           +'a memory stick, or your file store - and open it there. ATAK imports it and '
           +'the server appears in its list.</div>';
-      }else if(c.png){
+        // The code exists on every credential, and hiding it was the defect: a build that
+        // produced a package showed no code at all, so an operator whose device already
+        // holds this estate's authority had no way to use the quick route. Shown, and
+        // labelled with the condition it depends on rather than promised.
+        if(qr){
+          h+='<details class=cred-fallback><summary>Join by code instead</summary>'
+            +'<div class=cred-pkg-why>This server signs its own certificates, so the code '
+            +'only works on a device that already holds this estate authority - imported '
+            +'once, from Credentials. On a device that does not, the scan fails with the '
+            +'server identity not verified.</div>'+qr+'</details>';
+        }
+      }else if(qr){
         h+='<div class=cred-pkg-why><b>Scan this once, with the camera in ATAK.</b> '
           +'This server has a certificate the device already trusts, so the code is the '
-          +'whole join and there is no file to move.</div>'
-          +'<img class=cred-qr alt="Join code for '+esc(c.user)+'" '
-          +'src="data:image/png;base64,'+c.png+'">';
+          +'whole join and there is no file to move.</div>'+qr;
       }
 
       var willAsk = c.pkg && !oneScan;
@@ -16627,7 +16785,9 @@ def render_deploy(state):
                "<p class=wz-target-note>Choosing here only fills the form in. Nothing is "
                "built until you press the button at step 5.</p></div>"
                "<div class=wz-plan>"
-               "<label class=fl>Paste your build plan, if you made one"
+               "<label class=fl><span class=fl-t>Paste your build plan, if you made one"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The planner ends with a one-line code holding every answer you gave it. Paste it here and steps 1 to 4 fill themselves in. It carries configuration only: no password, no key, no certificate, so it is safe to send down a phone or paste into a chat.</div>"
+               ""
                "<input id=wz-plan placeholder='VANTAGE-PLAN-1...' autocomplete=off></label>"
                "<div class=wz-acc-row><button type=button id=wz-planapply class=cred-refresh>"
                "Fill the form from this plan</button><span class=meta>from the pre-install "
@@ -16651,13 +16811,21 @@ def render_deploy(state):
                # form in. So it reads as one now, out of the input column and in the plan
                # strip where the other "fill this in for me" control already lives.
                # (the old mid-form "use this box" button lived here; it is the chooser above now)
-               "<label class=fl>Estate name<input id=wz-name maxlength=24 placeholder='dev-cloud'>"
+               "<label class=fl><span class=fl-t>Estate name"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The short name this box is known by inside the console: its page, its actions, its history. Lower case, no spaces. It never leaves this estate and devices never see it.</div>"
+               "<input id=wz-name maxlength=24 placeholder='dev-cloud'>"
                "<span class=hint>short, [a-z0-9-] - how the console will know the box</span></label>"
-               "<label class=fl>Label<input id=wz-label maxlength=40 placeholder='Dev TAK'>"
+               "<label class=fl><span class=fl-t>Label"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The name a person reads on the board. Say what the box is for, not where it sits, because that is what tells two similar boxes apart at a glance.</div>"
+               "<input id=wz-label maxlength=40 placeholder='Dev TAK'>"
                "<span class=hint>the human name shown on the console</span></label>"
-               "<label class=fl>Address<input id=wz-addr placeholder='203.0.113.7 or host.example'>"
+               "<label class=fl><span class=fl-t>Address"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>Where this console reaches the box from where the console is running. If they meet over a VPN, that is the VPN address, not the one on the box's own LAN. Get this wrong and the build fails at phase 1 of 5, before anything is installed.</div>"
+               "<input id=wz-addr placeholder='203.0.113.7 or host.example'>"
                "<span class=hint>IP or hostname the console can reach over SSH</span></label>"
-               "<label class=fl>Admin user<input id=wz-user value='root'>"
+               "<label class=fl><span class=fl-t>Admin user"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The account enrolment logs in as. It must be root or hold passwordless sudo: an ordinary account that prompts for a password is refused, because nothing is watching to type it. On a provider's cloud box this is usually root.</div>"
+               "<input id=wz-user value='root'>"
                "<span class=hint>root, or a passwordless-sudo user</span></label>"
                # The three labels used to describe where a box LIVES, while the profiles
                # actually assert what a box RUNS - twelve services and six tilesets separate
@@ -16680,7 +16848,9 @@ def render_deploy(state):
                # stand in for a kit. Step 3 now offers all eight, so it does not.
                # The checker keeps 'deployed' for boxes already declaring it, exactly as it
                # keeps 'nuc'. It is simply no longer offered for a new build.
-               "<label class=fl>Health profile<select id=wz-profile>"
+               "<label class=fl><span class=fl-t>Health profile"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>What this box is expected to be running, which is what the checker judges it against. Pick by the job it does, not where it lives. Choosing a kit profile for a box that carries only TAK Server reports a dozen absent services as faults.</div>"
+               "<select id=wz-profile>"
                "<option value=cloud>Public server - anyone can reach it over the "
                "internet</option>"
                "<option value=firmbase selected>Private server - only your own people can "
@@ -16724,9 +16894,13 @@ def render_deploy(state):
                "<label class=depdry><input type=checkbox id=wz-onbox> The .deb is already on "
                "the box - skip the push and use the path in step 3</label></fieldset>")
     doc.append("<fieldset class='wz-step depcard locked'><legend>3 · The server</legend>"
-               "<label class=fl>Server FQDN<input id=wz-fqdn placeholder='tak.example.org' required>"
+               "<label class=fl><span class=fl-t>Server FQDN"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The name devices connect to, and the name written into the server's certificate. They have to match or every handset refuses it. On a box with a public address this must already resolve to it, or the certificate stage cannot prove the name.</div>"
+               "<input id=wz-fqdn placeholder='tak.example.org' required>"
                "<span class=hint>must already resolve to the box for Let's Encrypt</span></label>"
-               "<label class=fl>Publicly trusted certificate"
+               "<label class=fl><span class=fl-t>Publicly trusted certificate"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>This decides whether joining a device is one scan. Get one automatically when the box answers on the public internet on port 80. Supply your own when you obtained one some other way, which is the only route for a box behind a router. Choose none and the box signs its own, and every device must be given this estate's authority first.</div>"
+               ""
                "<select id=wz-pubcert>"
                "<option value=none>Make its own certificate</option>"
                "<option value=http>Get one automatically</option>"
@@ -16734,31 +16908,51 @@ def render_deploy(state):
                "</select></label>"
                "<div class=fedpop-note id=wz-pubcert-note></div>"
                "<div id=wz-certwrap hidden>"
-               "<label class=fl>Certificate"
+               "<label class=fl><span class=fl-t>Certificate"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The full chain in PEM, server certificate first and the issuing authority under it. A chain missing its middle verifies here and fails on a handset, which is the hardest version of this to diagnose.</div>"
+               ""
                "<textarea id=wz-certpem rows=4 spellcheck=false "
                "placeholder='-----BEGIN CERTIFICATE-----'></textarea>"
                "<span class=hint>The certificate and any intermediates, as text. Get one "
                "however suits you; this box does not mind who issued it.</span></label>"
-               "<label class=fl>Private key"
+               "<label class=fl><span class=fl-t>Private key"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The key that goes with that certificate, unencrypted PEM. The build checks the two match before it installs either; it never leaves the box.</div>"
+               ""
                "<textarea id=wz-keypem rows=4 spellcheck=false autocomplete=off "
                "placeholder='-----BEGIN PRIVATE KEY-----'></textarea>"
                "<span class=hint>The key that goes with it. Written to the box and "
                "readable only by root. Renewing it stays with you.</span></label></div>"
-               "<label class=fl id=wz-emailwrap>Email for expiry warnings"
+               "<label class=fl id=wz-emailwrap><span class=fl-t>Email for expiry warnings"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>Where the certificate authority writes when a certificate is close to expiring and renewal has not happened. It goes to them, not to us.</div>"
+               ""
                "<input id=wz-email placeholder='ops@example.org'>"
                "<span class=hint>where the certificate authority sends renewal "
                "reminders</span></label>"
-               f"<label class=fl>Organisation<input id=wz-org value='{e(_di['org'])}' placeholder='e.g. Acme Defence' required></label>"
-               f"<label class=fl>Org unit<input id=wz-orgunit value='{e(_di['org_unit'])}' placeholder='e.g. Operations' required></label>"
-               f"<label class=fl>Country<input id=wz-country value='{e(_di['country'])}' maxlength=2 placeholder='e.g. GB' required></label>"
-               f"<label class=fl>State/county<input id=wz-state value='{e(_di['state'])}' placeholder='e.g. Hampshire' required></label>"
-               f"<label class=fl>City<input id=wz-city value='{e(_di['city'])}' placeholder='e.g. Andover' required></label>"
-               "<label class=fl>Certificate password (optional)<input id=wz-capass "
+               f"<label class=fl><span class=fl-t>Organisation"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>Written into the certificates this box issues, and shown when anyone inspects one. Your organisation's name, not the box's.</div>"
+               "<input id=wz-org value='{e(_di['org'])}' placeholder='e.g. Acme Defence' required></label>"
+               f"<label class=fl><span class=fl-t>Org unit"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The part of the organisation this estate belongs to. It shows up in the certificate subject and in TAK's own logs, so make it something you would recognise there.</div>"
+               "<input id=wz-orgunit value='{e(_di['org_unit'])}' placeholder='e.g. Operations' required></label>"
+               f"<label class=fl><span class=fl-t>Country"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>Two letters, the ISO code. GB for the United Kingdom, not UK: a wrong code is accepted here and looks wrong for the life of every certificate this box signs.</div>"
+               "<input id=wz-country value='{e(_di['country'])}' maxlength=2 placeholder='e.g. GB' required></label>"
+               f"<label class=fl><span class=fl-t>State/county"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The county or state in the certificate subject. Anything readable; it is not checked against anything.</div>"
+               "<input id=wz-state value='{e(_di['state'])}' placeholder='e.g. Hampshire' required></label>"
+               f"<label class=fl><span class=fl-t>City"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>The town in the certificate subject. Anything readable; it is not checked either.</div>"
+               "<input id=wz-city value='{e(_di['city'])}' placeholder='e.g. Andover' required></label>"
+               "<label class=fl><span class=fl-t>Certificate password (optional)"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>Locks the certificate authority this box creates. Leave it blank and one is generated and kept on the box. A device asks for it when importing a certificate, and Credentials will show it to you again.</div>"
+               "<input id=wz-capass "
                "type=password maxlength=64 autocomplete=off "
                "placeholder='blank = strong generated one'>"
                "<span class=hint>typed into devices when importing certificates; simple "
                "is fine for an experimental build</span></label>"
-               "<label class=fl>.deb path on the box<input id=wz-deb placeholder='/root/takserver.deb'>"
+               "<label class=fl><span class=fl-t>.deb path on the box"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span><div class='fl-tip' hidden>Use this only when the TAK Server package is already sitting on the box and you do not want it sent again. Leave it empty and the package chosen in step 2 is pushed.</div>"
+               "<input id=wz-deb placeholder='/root/takserver.deb'>"
                "<span class=hint>filled from the library selection; edit only for an "
                "already-on-box package</span></label>"
                # All EIGHT the provisioner can install, not the two that were offered.
@@ -16791,7 +16985,9 @@ def render_deploy(state):
                # nothing saying what it was for. It is its own block now, below the rows it
                # belongs to, and it says why it is being asked.
                "<div class=wz-mintgate id=wz-passwrap hidden>"
-               "<label class=fl for=wz-pass>Operator password <b class=req>required</b></label>"
+               "<label class=fl for=wz-pass><span class=fl-t>Operator password <b class=req>required</b>"
+               "<button type='button' class='qi' aria-expanded='false' aria-label='Why this is asked'>i</button></span>"
+               "<div class='fl-tip' hidden>This is your console password, and it is asked for here because minting a credential means signing a certificate with this box's own authority. Nothing is signed without it. Add no users above and you are not asked at all.</div></label>"
                "<input type=password id=wz-pass autocomplete=current-password "
                "placeholder='your operator password'>"
                "<p class=meta>Needed to mint the certificates. Each user above gets an "
@@ -16799,23 +16995,30 @@ def render_deploy(state):
                "certificate authority, and signing is what your password releases. Add no "
                "users and you are not asked for it.</p></div></fieldset>")
     doc.append("<fieldset class='wz-step depcard locked'><legend>5 · Run</legend>"
-               "<label class=depdry><input type=checkbox id=wz-kiosk> "
-               "<b>Boot this box into its console</b> - for a box with a screen. It "
+               # Four options, two by two. Each option's text is one <span>: the label and
+               # its explanation are a single run of prose, and any layout that treats them
+               # as two boxes tears the sentence in half.
+               "<div class=wz-runopts>"
+               "<label class='depdry runopt'><input type=checkbox id=wz-kiosk> "
+               "<span><b>Boot this box into its console</b> - for a box with a screen. It "
                "powers on into a full-screen browser showing its own console, instead "
                "of a text login. The plan ticks this for you if you said the box has a "
-               "screen.</label>"
-               "<label class=depdry><input type=checkbox id=wz-console checked> "
-               "<b>Install a console on this box</b> - a self-manage Vantage console (the "
-               "same version this one runs), so whoever logs into the box can manage it "
+               "screen.</span></label>"
+               "<label class='depdry runopt'><input type=checkbox id=wz-console checked> "
+               "<span><b>Install a console on this box</b> - a self-manage Vantage console "
+               "(the same version this one runs), so whoever logs into the box can manage it "
                "locally: certificates, software, its own health. Recommended for every "
-               "box.</label>"
-               "<label class=depdry><input type=checkbox id=wz-dry> <b>Dry run</b> - "
-               "prints every step, changes nothing on the box beyond enrolment. Tick it to "
-               "preview a build before running one for real.</label>"
-               "<label class=depdry><input type=checkbox id=wz-enrolonly> <b>Enrol only</b> - "
-               "the server already runs (yours, or a build you inherited). Adds it to the "
-               "estate for monitoring and gated management; installs no software. Steps 2 "
-               "and 3 are ignored beyond the FQDN.</label>"
+               "box.</span></label>"
+               "<label class='depdry runopt'><input type=checkbox id=wz-dry> "
+               "<span><b>Dry run</b> - prints every step, changes nothing on the box beyond "
+               "enrolment. Tick it to preview a build before running one for "
+               "real.</span></label>"
+               "<label class='depdry runopt'><input type=checkbox id=wz-enrolonly> "
+               "<span><b>Enrol only</b> - the server already runs (yours, or a build you "
+               "inherited). Adds it to the estate for monitoring and gated management; "
+               "installs no software. Steps 2 and 3 are ignored beyond the FQDN.</span>"
+               "</label>"
+               "</div>"
                "<div class=fedpop-note>Enrols the box to the estate, pushes the package, "
                "provisions TAK Server, mints the first users, then destroys the bootstrap "
                "key.</div>"

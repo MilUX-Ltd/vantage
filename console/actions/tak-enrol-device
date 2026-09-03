@@ -19,6 +19,7 @@
 #     URL tak://com.atakmap.app/enroll?host=...&username=...&token=...
 #     ITAK <name>,<host>,8089,ssl
 #     PNG <base64 of a PNG QR of the URL line>
+#     TRUSTED yes|no - whether a stock device already trusts this server's certificate
 set -euo pipefail
 
 deny() { echo "ERR $*" >&2; exit 2; }
@@ -56,8 +57,28 @@ png=$(qrencode -t PNG -o - -m 3 -s 6 "$url" | base64 | tr -d '\n') || deny "QR r
 name=$(printf '%s' "$host" | cut -d. -f1)
 [[ -n "$name" ]] || name="$host"
 
+# Would a stock handset accept this server's certificate on sight? That single fact
+# decides whether the code alone is the whole join or whether a file has to reach the
+# device first, and the page has to say which - an operator who scans a code that cannot
+# work gets no error anywhere, on the handset or here.
+#
+# Asked of the server, not inferred from how the box was built: a certificate can be
+# replaced after provisioning, renewed, or fail to renew, and the only thing that decides
+# what a device does is what the server presents on the wire today. 8446 is the connector
+# devices enrol against. -verify_return_error turns a chain that does not reach a root in
+# the system store into a non-zero exit, which is the same judgement the handset makes.
+trusted=no
+if command -v openssl >/dev/null 2>&1; then
+    if </dev/null timeout 8 openssl s_client -connect 127.0.0.1:8446 \
+            -servername "$host" -verify_return_error -verify_hostname "$host" \
+            >/dev/null 2>&1; then
+        trusted=yes
+    fi
+fi
+
 echo "OK $user"
 echo "PASS $pass"
+echo "TRUSTED $trusted"
 echo "URL $url"
 echo "ITAK ${name},${host},8089,ssl"
 echo "PNG $png"

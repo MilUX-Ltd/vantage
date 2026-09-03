@@ -35,7 +35,11 @@ d = json.load(sys.stdin)
 allowed = ["ref", "dry_run"]
 for k in d:
     if k not in allowed: raise SystemExit(f"unknown parameter {k}")
-for k in allowed: print(f"{k}={d.get(k, \"\")}")' ) || deny "infratak parameters do not decode"
+for k in allowed:
+    v = d.get(k)
+    if v is None:
+        v = str()
+    print(f"{k}={v}")' ) || deny "infratak parameters do not decode"
     declare -A IP
     for line in "${ikv[@]}"; do IP["${line%%=*}"]="${line#*=}"; done
     [[ -z "${IP[ref]}" || "${IP[ref]}" =~ ^[A-Za-z0-9._/-]{1,60}$ ]] || deny "bad ref"
@@ -48,6 +52,14 @@ fi
 
 # Decode and validate the parameters. python3 does the JSON; every value is then re-matched
 # in bash so nothing depends on a single parser's opinion.
+#
+# NO QUOTE CHARACTERS IN THIS PYTHON. It sits inside a single-quoted shell string, so a
+# pair of them closes and reopens that string and Python never sees them: d.get(k, '')
+# arrived as d.get(k), a missing key came through as the literal text "None", and every
+# check against it then compared against a four-letter word instead of an empty string.
+# It has never bitten because the console sends every key on every call, so the default
+# never fires - an accidental defence, and the one that "no email needed on a private
+# build" quietly depends on. Found by handing the wrapper a partial payload, 3 Sep 2026.
 mapfile -t kv < <(printf '%s' "$argsb64" | base64 -d 2>/dev/null \
     | python3 -c '
 import json, sys
@@ -59,7 +71,10 @@ for k in d:
     if k not in allowed:
         raise SystemExit(f"unknown parameter {k}")
 for k in allowed:
-    print(f"{k}={d.get(k, '')}")' ) || deny "parameters do not decode"
+    v = d.get(k)
+    if v is None:
+        v = str()
+    print(f"{k}={v}")' ) || deny "parameters do not decode"
 
 declare -A P
 for line in "${kv[@]}"; do P["${line%%=*}"]="${line#*=}"; done

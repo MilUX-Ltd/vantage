@@ -89,7 +89,11 @@ h1{font-family:var(--f-display);font-weight:700;font-size:clamp(32px,5.5vw,50px)
 
 /* ---- form ---- */
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:22px 22px 8px}
-@media (min-width:901px){.form-col{position:sticky;top:20px;max-height:calc(100vh - 40px);overflow-y:auto}}
+/* The form column was pinned to the viewport with its own scrollbar. The form is 2894px
+   of questions and the box was capped at one screen, so 2000-odd pixels lived behind a
+   second scrollbar: two scrollbars on one page, the wheel doing different things either
+   side of a line down the middle, and the form jumping under the hand each time an answer
+   revealed a field above. One page, one scroll. */
 h2{font-family:var(--f-display);font-weight:600;font-size:22px;margin:0 0 4px;text-wrap:balance}
 .panel h3{font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.14em;
   text-transform:uppercase;color:var(--meta);margin:24px 0 12px;padding-bottom:6px;
@@ -97,6 +101,20 @@ h2{font-family:var(--f-display);font-weight:600;font-size:22px;margin:0 0 4px;te
 .panel h3:first-of-type{margin-top:8px}
 .field{margin:0 0 16px}
 label{display:block;font-family:var(--f-display);font-weight:600;font-size:14.5px;margin:0 0 3px}
+/* A question, and a way to ask about the question. The page answers the operator who
+   already knows in the label, and holds the rest behind the mark for the one who pauses:
+   a full set of instructions on screen is what nobody reads. */
+.qrow{display:flex;align-items:center;gap:7px;margin:0 0 3px}
+.qrow label{margin:0}
+.qi{flex:none;width:18px;height:18px;padding:0;border-radius:50%;cursor:pointer;
+  border:1px solid var(--edge);background:var(--surface);color:var(--ink-soft);
+  font:700 11px/1 var(--f-display)}
+.qi:hover,.qi[aria-expanded="true"]{background:var(--accent);color:var(--ground);
+  border-color:var(--accent)}
+.qi:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.tip{font-family:var(--f-body);font-size:14px;line-height:1.5;color:var(--ink);
+  background:var(--surface-sunk);border-left:3px solid var(--rule-strong);
+  padding:9px 12px;margin:0 0 7px;border-radius:3px}
 .hint{display:block;font-size:13.5px;color:var(--meta);margin:0 0 6px;line-height:1.45}
 input[type=text],select{
   width:100%;font-family:var(--f-mono);font-size:14px;padding:9px 10px;
@@ -259,7 +277,8 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 
   <h3>What are you building</h3>
   <div class="field">
-    <label>Is this your first Vantage console?</label>
+    <div class="qrow"><label>Is this your first Vantage console?</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>First console means this box installs Vantage itself and becomes the thing you manage the estate from. If you already run one, this box installs nothing: your existing console builds it over the network and the work happens in a browser. Answer this wrong and every step below is the wrong set.</div>
     <span class="hint">This decides more than anything else on the page. If you already run a console, you install nothing by hand: your existing one builds this box for you.</span>
     <div class="choice">
       <label><input type="radio" name="journey" value="first" checked> My first one</label>
@@ -268,7 +287,8 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     <div class="note note-quiet" id="journeynote"></div>
   </div>
   <div class="field">
-    <label>Shape</label>
+    <div class="qrow"><label>Shape</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>A box with a public address can be reached by a certificate authority, so it can hold a publicly trusted certificate and a handset joins it by scanning one code. A box behind your own router cannot, so it signs its own certificates and each device has to be given the estate authority as a file first. This changes the address you use, the certificate you end up with, and how anyone joins.</div>
     <span class="hint">A box at a hosting provider, or a kit behind your own router. This changes which steps you need.</span>
     <div class="choice">
       <label><input type="radio" name="shape" value="kit" checked> Private kit</label>
@@ -276,7 +296,8 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     </div>
   </div>
   <div class="field">
-    <label>Will it run as a kiosk?</label>
+    <div class="qrow"><label>Will it run as a kiosk?</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>A kiosk powers on into a full-screen browser showing its own console, with no text login. That suits a box with a screen that someone stands in front of. It fixes the console address at install time, so the box has to keep the address it is given.</div>
     <span class="hint">A box with a screen that powers on straight into the console.</span>
     <div class="choice">
       <label><input type="radio" name="kiosk" value="yes" checked> Yes</label>
@@ -286,49 +307,57 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 
   <h3>Names</h3>
   <div class="field">
-    <label for="human">Box name</label>
+    <div class="qrow"><label for="human">Box name</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>For people: this page, your notes, and the conversation when someone asks which box. Nothing on the network ever sees it, so write what you would say out loud.</div>
     <span class="hint">For people. Anything you like.</span>
     <input type="text" id="human" placeholder="Edge Laptop">
   </div>
   <div class="field">
-    <label for="fqdn">Full name on the network</label>
+    <div class="qrow"><label for="fqdn">Full name on the network</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The name devices connect to, and the name written into the server's certificate. The two have to match: a certificate naming anything else is refused by every handset. On a box with a public address this must be a real DNS name already pointing at it when the build runs.</div>
     <span class="hint">The name devices will connect to. It becomes the server's certificate.</span>
     <input type="text" id="fqdn" placeholder="kit1.example.com">
     <div id="w-fqdn"></div>
   </div>
   <div class="field">
-    <label for="host">Short name</label>
+    <div class="qrow"><label for="host">Short name</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The box's own hostname, which is the first part of the full name. Filled in from the name above. Change it only if the box already answers to a hostname you want to keep.</div>
     <span class="hint">The box's own hostname. Filled in from the name above; change it if you want something different.</span>
     <input type="text" id="host" placeholder="kit1">
   </div>
   <div class="field">
-    <label for="user">Your username on the box</label>
+    <div class="qrow"><label for="user">Your username on the box</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The account you create during the Ubuntu install. Vantage installs as this user, and enrolment logs in as this user, so it has to be able to elevate. Nothing to do with callsigns or who uses ATAK.</div>
     <span class="hint">The account you create during the Ubuntu install. Vantage installs as this user.</span>
     <input type="text" id="user" placeholder="matt">
   </div>
 
   <h3 id="net-head">Addresses</h3>
   <div class="field kit-only">
-    <label for="router">Router address</label>
+    <div class="qrow"><label for="router">Router address</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The address you type into a browser to reach the router's own admin pages, usually printed on a label underneath it. Needed only to reserve this box an address so it keeps the same one after a reboot.</div>
     <span class="hint">Where you log in to the router. Move it off the vendor default before you start.</span>
     <input type="text" id="router" placeholder="192.168.50.1">
     <div id="w-router"></div>
   </div>
   <div class="field">
-    <label for="box"><span class="kit-only-inline">Box address on the kit LAN</span><span class="cloud-only-inline">The server's address</span></label>
+    <div class="qrow"><label for="box"><span class="kit-only-inline">Box address on the kit LAN</span><span class="cloud-only-inline">The server's address</span></label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The address the console uses to reach this box. Read it from the router's client list once the box is plugged in and powered on. If the console will reach it over a VPN, the VPN address is the one that counts and this one is reachable from nowhere else.</div>
     <span class="hint kit-only">The address you will reserve for it on the router.</span>
     <span class="hint cloud-only">The address your provider gave you.</span>
     <input type="text" id="box" placeholder="192.168.50.10">
     <div id="w-box"></div>
   </div>
   <div class="field kit-only">
-    <label for="mac">Box ethernet MAC</label>
+    <div class="qrow"><label for="mac">Box ethernet MAC</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The wired network card's own identifier, and how the router recognises this box to hand it the same address every time. Take the wired entry, not the wifi one: they are different, and reserving the wrong one leaves the box on an address that moves.</div>
     <span class="hint">From the router's client list once the box has been plugged in and powered on. Take the wired entry, not wifi.</span>
     <input type="text" id="mac" placeholder="AA:BB:CC:DD:EE:FF">
     <div id="w-mac"></div>
   </div>
   <div class="field kit-only">
-    <label>Do you want a publicly-trusted certificate?</label>
+    <div class="qrow"><label>Do you want a publicly-trusted certificate?</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>This decides whether joining is one scan. A publicly trusted certificate is one every device already accepts, so nothing has to be carried to the handset by hand. Without one the box signs its own, and every device needs this estate's authority imported as a file before any code will work.</div>
     <span class="hint">It makes no difference to whether the box works. It decides two things: how much you publish about this box, and what a device has to do before it can join. With a public certificate, a handset joins from the QR alone. Without one, each handset takes this estate&rsquo;s certificate authority once &mdash; from a memory stick or your file store &mdash; and every box in the estate is a plain QR after that. Neither is worse; they publish different amounts.</span>
     <div class="choice">
       <label><input type="radio" name="cert" value="none"> No, keep it private</label>
@@ -348,12 +377,14 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     <span class="hint hint-spaced">Either <b>Yes</b> has to be arranged <b>before</b> the build, because a kit behind a router cannot be reached by the certificate authority. <b>No</b> needs nothing doing.</span>
   </div>
   <div class="field kit-only cert-token">
-    <label for="certhost">Machine that holds your DNS token</label>
+    <div class="qrow"><label for="certhost">Machine that holds your DNS token</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The DNS route proves you own the name by writing a record, which needs your DNS provider's API token. This is the machine that holds it. Use this route when the box cannot be reached from the internet on port 80, which is every box behind a router.</div>
     <span class="hint">Where the certificate gets issued. Not the box you are building, and not this laptop unless the token lives here. Give it as <code>user@address</code>.</span>
     <input type="text" id="certhost" placeholder="you@console.example.com">
   </div>
   <div class="field publishes">
-    <label for="public">Address the public DNS record points at</label>
+    <div class="qrow"><label for="public">Address the public DNS record points at</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>The address in the A record for the name above, as the internet sees it. If it does not point at this box, the certificate authority checks the name and finds somebody else's machine.</div>
     <span class="hint kit-only">For a kit, this is its VPN address, which does not exist until step 5. Leave blank for now.</span>
     <span class="hint cloud-only">Usually the same as the server's address above.</span>
     <input type="text" id="public" placeholder="leave blank until the box has joined">
@@ -361,7 +392,8 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 
   <h3>Getting in the first time</h3>
   <div class="field">
-    <label>How you reach the box before Vantage exists</label>
+    <div class="qrow"><label>How you reach the box before Vantage exists</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>How you get a shell on it the very first time, before anything is installed. A machine you installed yourself has the user and password you chose. A machine a provider handed you usually has a key on it already, often on root rather than on your user. It changes the ssh and scp lines below.</div>
     <span class="hint">The whole build hangs off this, and it is different for a machine
       you installed yourself and one a provider handed you. It changes the commands
       below, not just the wording.</span>
@@ -373,7 +405,8 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 
   <h3 id="vpnhead">Private network</h3>
   <div class="field">
-    <label>Provider</label>
+    <div class="qrow"><label>Provider</label><button type="button" class="qi" aria-expanded="false" aria-label="Why this is asked">i</button></div>
+    <div class="tip" hidden>Vantage joins the box to whichever private network you choose, so the console can reach it from somewhere else. It does not run that network: you bring the account or the server. Choose none only when the console and the box already sit on one network.</div>
     <span class="hint" id="vpnhint">Vantage joins the box to whichever you choose. It does not run the network, so you bring the account or the server.</span>
     <div class="choice">
       <label><input type="radio" name="vpn" value="tailscale" checked> Tailscale</label>
@@ -454,6 +487,49 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
   function warn(where, html) {
     $(where).innerHTML = html ? '<div class="note warn">' + html + "</div>" : "";
   }
+
+  // ---- the info marks ---------------------------------------------------
+  // Hover to read it, click to keep it open, Escape to close. A real button rather than a
+  // hover-only tooltip, because hover does not exist on a handset and does not exist for
+  // anyone driving this from the keyboard.
+  (function () {
+    var pinned = null;
+    function tipOf(btn) {
+      var t = btn.parentNode.nextElementSibling;
+      return (t && t.className === "tip") ? t : null;
+    }
+    function set(btn, on) {
+      var t = tipOf(btn);
+      if (t) { t.hidden = !on; btn.setAttribute("aria-expanded", on ? "true" : "false"); }
+    }
+    function btnFrom(e) {
+      var n = e.target;
+      return (n && n.closest) ? n.closest(".qi") : null;
+    }
+    document.addEventListener("mouseover", function (e) {
+      var b = btnFrom(e); if (b && b !== pinned) set(b, true);
+    });
+    document.addEventListener("mouseout", function (e) {
+      var b = btnFrom(e); if (b && b !== pinned) set(b, false);
+    });
+    document.addEventListener("focusin", function (e) {
+      var b = btnFrom(e); if (b) set(b, true);
+    });
+    document.addEventListener("focusout", function (e) {
+      var b = btnFrom(e); if (b && b !== pinned) set(b, false);
+    });
+    document.addEventListener("click", function (e) {
+      var b = btnFrom(e); if (!b) return;
+      e.preventDefault();
+      if (pinned && pinned !== b) set(pinned, false);
+      pinned = (pinned === b) ? null : b;
+      set(b, pinned === b);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || !pinned) return;
+      var b = pinned; pinned = null; set(b, false); b.focus();
+    });
+  })();
 
   // ---- state ------------------------------------------------------------
   function read() {
@@ -560,6 +636,8 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
   }
 
   function render(s) {
+    // "-i <key> " or nothing. One place, so every command that reaches the box agrees.
+    var sshFlag = (s.login === "key") ? "-i ~/.ssh/id_box " : "";
     // Cleared at the top of every render: a stale plan for settings you have since
     // changed is worse than no plan, and this one sits where it will be trusted.
     var pf0 = document.getElementById("planfoot");
@@ -869,7 +947,18 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
           ? '<div class="trap"><p><b>Expect it to stop at stage 7 of 9.</b> You chose no public certificate, and the wizard has no way to say so: it collects a health profile that already declares this box is not internet-facing, then ignores it and runs Let\u2019s Encrypt anyway. Against a box behind a router that cannot succeed. The rest of the build is done by then; the certificate stage is the last one.</p></div>'
           : "")));
     } else {
+      // The login answer was collected on every journey and acted on in only one: on the
+      // first-console path the page asked how you reach the box and then printed a bare
+      // ssh line regardless, while its own hint promised "it changes the commands below,
+      // not just the wording". A question that is asked and ignored is worse than one
+      // that is not asked.
       out.push(block("Step 6", "Install Vantage",
+        (s.login === "key"
+          ? "<p>You said the box already carries a key, so the lines below use it. Put your "
+            + "private key's path in place of <code>~/.ssh/id_box</code>. If the provider "
+            + "put the key on <b>root</b> rather than on <span class=\"val\">" + esc(user)
+            + "</span>, use <code>root@</code> instead and drop the <code>sudo</code>.</p>"
+          : "") +
         "<p>This fetches the latest release, checks it against its published checksum, and copies it over. You do not need to know the version number: it prints the one it found.</p>" +
         cmd("cd ~/Downloads\n" +
             "TAG=$(curl -fsSL https://api.github.com/repos/MilUX-Ltd/vantage/releases \\\n" +
@@ -878,12 +967,12 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
             'curl -fsSLO "https://github.com/MilUX-Ltd/vantage/releases/download/$TAG/vantage-${TAG#v}.tgz"\n' +
             'curl -fsSLO "https://github.com/MilUX-Ltd/vantage/releases/download/$TAG/vantage-${TAG#v}.tgz.sha256"\n' +
             'shasum -a 256 -c "vantage-${TAG#v}.tgz.sha256"\n' +
-            'scp "vantage-${TAG#v}.tgz" ' + user + "@" + box + ":~/", MINE) +
+            "scp " + sshFlag + '"vantage-${TAG#v}.tgz" ' + user + "@" + box + ":~/", MINE) +
         '<div class="trap"><p><b>The checksum line must say <code>OK</code>.</b> If it does not, stop: the download is damaged or tampered with, and installing it anyway puts something you did not verify on the box.</p></div>' +
         "<p>Then on the box. The command above printed the version it fetched; type that " +
         "same name here. A wildcard would match every release already on the box and tar " +
         "would try to extract the extras as members, which fails.</p>" +
-        cmd("ssh " + user + "@" + box + "\n" +
+        cmd("ssh " + sshFlag + user + "@" + box + "\n" +
             "tar -xzf vantage-<version>.tgz\n" +
             "cd vantage/console\n" +
             "sudo ./install-vantage.sh --bind " + box, MINE) +
