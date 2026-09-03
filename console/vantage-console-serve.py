@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.45.0"
+VERSION = "2.45.1"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.43-beta"
+VANTAGE_RELEASE = "0.9.44-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -208,7 +208,10 @@ def login_failed(ip):
 # which it permits (usesCleartextTraffic=true in the shipping APK, no network security
 # config), and which it has to here: the box's own TLS is signed by the very CA the
 # device has not got yet.
-ENROL_PKG_TTL = 900          # seconds; long enough to walk to the phone, not to a shift
+ENROL_PKG_TTL = 3600         # seconds. A build runs ~25 minutes and mints its credential
+                             # near the end, so the operator meets this code already tired
+                             # and may not have the phone in hand. An hour covers that; it
+                             # is still a window, not a standing URL.
 ENROL_PKG_MAX_FETCH = 3      # a retried download is normal, a harvested one is not
 _ENROL_LOCK = threading.Lock()
 _ENROL_PKGS = {}
@@ -4575,10 +4578,18 @@ def start_setup_job(data, client, authed=False):
                                            passphrase_ok=authed)
                     if code == 200:
                         say(log, f"credential ready: {c['user']} ({c['group']})")
+                        # The package and its collection token come out with everything
+                        # else. Dropping them here was the whole defect: the action builds
+                        # the package, the wizard kept the bare QR, and on a box signing
+                        # its own certificates the bare QR is the one artefact that cannot
+                        # work. The operator finishes a build on THIS screen, not on the
+                        # actions page, so this is the screen that has to carry it.
                         cred_out.append({"user": c["user"], "group": c["group"],
                                          "password": res.get("password", ""),
                                          "url": res.get("url", ""), "itak": res.get("itak", ""),
-                                         "png": res.get("png", "")})
+                                         "png": res.get("png", ""),
+                                         "pkg": res.get("pkg", ""),
+                                         "pkg_token": res.get("pkg_token", "")})
                     else:
                         say(log, f"credential FAILED: {c['user']}: {res.get('error') or res.get('message')}")
                 if with_console:
@@ -6801,6 +6812,18 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:var(--r-sm);
   border-left:3px solid var(--flag,#8A4B22);border-radius:4px;font-size:13px;line-height:1.5}
 .cred-pkg-why b{color:var(--flag,#8A4B22)}
 .cred-qr{width:220px;height:220px;image-rendering:pixelated;background:#fff;padding:8px;border-radius:var(--r-sm)}
+/* The enrolment import code is the one a camera has to read at arm's length, and a QR
+   is the one image on the page that must not be resampled: forcing a 282px code into a
+   220px box with pixelated rendering drops whole modules and greys the rest. Let it
+   render 1:1, and only shrink if the column is genuinely narrower. Rendering is smooth,
+   not pixelated: this image is never scaled UP, so the only resampling possible is a
+   downscale in a narrow window, and there a smooth average keeps the module centres a
+   camera needs while pixelated throws whole rows away. Seen on a 280px viewport, where
+   the pixelated version came out grey mush. */
+.cred-qr.import{width:auto;height:auto;max-width:min(100%,320px);image-rendering:auto}
+/* An anchor styled as a button has to be a box, or the padding paints a pill the text
+   then falls out of. */
+a.cred-refresh{display:inline-block;text-decoration:none}
 .cred-lines code{font-family:var(--font-mono);font-size:12px;color:var(--fg2);word-break:break-all}
 .cred-btns{display:flex;gap:10px}
 .cred-btns button{background:var(--bh);color:var(--fg);border:1px solid var(--rule2);
@@ -7900,7 +7923,7 @@ root.querySelectorAll('form.action').forEach(function(f){
                 res.appendChild(why);
                 if(j.pkg_token){
                   var qi=document.createElement('img');
-                  qi.className='cred-qr';qi.alt='Enrolment import code';
+                  qi.className='cred-qr import';qi.alt='Enrolment import code';
                   qi.src='/enrol/'+j.pkg_token+'.png';
                   // qrencode is best-effort on a console box. If it is not there the
                   // code cannot render, and the download below is the way through.
@@ -7911,7 +7934,7 @@ root.querySelectorAll('form.action').forEach(function(f){
                       'import it, then scan the QR above.';};
                   res.appendChild(qi);
                   var ex=document.createElement('div');ex.className='cred-pkg-why';
-                  ex.textContent='The code is good for 15 minutes. The device must be on '+
+                  ex.textContent='The code is good for an hour. The device must be on '+
                     'the same network as this console.';
                   res.appendChild(ex);}
                 var sp=document.createElement('button');sp.type='button';
@@ -14718,9 +14741,37 @@ SETUP_JS = """
   function showCreds(j){
     if(j.creds&&j.creds.length){
       var out=j.creds.map(function(c){
-        return '<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>'
-          +(c.png?'<img class=cred-qr alt="QR for '+esc(c.user)+'" src="data:image/png;base64,'+c.png+'">':'')
-          +'<div class=cred-lines><code>'+esc(c.itak||'')+'</code></div></div>';
+        // A box that signs its own certificates presents a CA no device has seen, so the
+        // enrolment QR alone cannot complete and the device says the server's identity
+        // could not be verified. Where the build produced a package, IT is the join: it
+        // carries the authority, the server and the credential together. Lead with it and
+        // say plainly which of the two codes to point the camera at.
+        var h='<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>';
+        if(c.pkg_token){
+          h+='<div class=cred-pkg-why><b>Scan this code.</b> This server signs its own '
+            +'certificates, so a device cannot verify it until it has the certificate '
+            +'authority. This code carries the authority, the server and the credential '
+            +'together; the device fetches them itself.</div>'
+            +'<img class="cred-qr import" alt="Enrolment import code for '+esc(c.user)+'" '
+            +'src="/enrol/'+esc(c.pkg_token)+'.png" '
+            +'onerror="this.remove()">'
+            +'<div class=cred-pkg-why>Good for an hour, and the device must be on the '
+            +'same network as this console. If the code did not render, use the download '
+            +'below and import the file on the device.</div>';
+          if(c.pkg){
+            h+='<div class=cred-lines><a class=cred-refresh download="'+esc(c.user)
+              +'-enrolment.zip" href="data:application/zip;base64,'+c.pkg
+              +'">Download the data package (.zip)</a></div>';
+          }
+          h+='<details class=cred-lines><summary>The plain enrolment QR (needs a publicly '
+            +'trusted certificate)</summary>'
+            +(c.png?'<img class=cred-qr alt="QR for '+esc(c.user)+'" src="data:image/png;base64,'+c.png+'">':'')
+            +'</details>';
+        } else if(c.png){
+          h+='<img class=cred-qr alt="QR for '+esc(c.user)+'" src="data:image/png;base64,'+c.png+'">';
+        }
+        h+='<div class=cred-lines><code>'+esc(c.itak||'')+'</code></div></div>';
+        return h;
       }).join('');
       $('#wz-credout').innerHTML=out;
     }

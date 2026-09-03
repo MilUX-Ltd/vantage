@@ -23,3 +23,8 @@ installed by Vantage, never linked into it, and every cut bundle carries its
 upstream licence texts and patch set (see
 common/install-files/meshtastic-gateway/). The Vantage Community Licence does
 not apply to that bundle.
+
+The same bundle carries the two zstd dictionaries from meshtastic/TAKPacket-SDK
+(GPL-3.0-or-later, Meshtastic LLC and contributors), pinned by commit and sha256 in
+common/install-files/meshtastic-gateway/dicts/, so that the gateway can decode TAK V2
+packets from firmware 2.8 radios and the Meshtastic apps' built-in TAK servers.
