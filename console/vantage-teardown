@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+# vantage-teardown - return a box to the state a fresh build expects, so a rebuild test
+# tests the build rather than the leftovers.
+#
+#     sudo vantage-teardown --i-am <this box's short hostname>              # says what it would do
+#     sudo vantage-teardown --i-am <this box's short hostname> --for-real   # does it
+#
+# WHY THIS EXISTS, and why tak-destroy was not enough. tak-destroy erases the estate
+# footprint: TAK Server, CloudTAK, the vault, the enrol host. It deliberately leaves
+# PostgreSQL, the local console, the kiosk, the checker, the action scripts and the
+# enrolment identity in place, because on a live box those are not TAK's to remove. For a
+# REBUILD TEST that is the wrong shape: the next build runs on top of them, and anything
+# that still works because a leftover was doing the work is a pass you cannot trust.
+#
+# THE HALF-TEARDOWN IS THE DANGEROUS ONE. Removing PostgreSQL's data directory while
+# leaving its package installed produces a box where apt is silent (already installed),
+# TAK's own setup says "Cannot find PostgreSQL data directory", the .deb fails to
+# configure, and every stage after it reports OK over a server that cannot start. That
+# happened on edge-laptop1 on 3 September 2026 and cost a build. So PostgreSQL is either
+# fully purged here or left entirely alone, never left in between, and the verification
+# pass at the end refuses to call the box clean if it is.
+#
+# WHAT IS DELIBERATELY KEPT, because a teardown that strands the box is not a teardown:
+#   the operating system, your login account and its keys, sshd, networking, and the VPN
+#   (Tailscale, WireGuard, OpenVPN). Those are how you reach the box to rebuild it. The
+#   build installs its own VPN membership over the top when it needs to.
+#
+# Everything removed is named in a list below. There is no wildcard, no rm -rf on a
+# variable that could be empty, and nothing outside the list is touched.
+set -uo pipefail
+
+FOR_REAL=0
+CLAIM=""
+while [[ $# -gt 0 ]]; do
+    case "${1:-}" in
+        --for-real) FOR_REAL=1; shift ;;
+        --i-am)     CLAIM="${2:-}"; shift 2 ;;
+        -h|--help)  sed -n '2,30p' "$0"; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+HOST=$(hostname -s)
+# The guard. Two boxes with similar names is exactly how the wrong one gets wiped, and
+# this is irreversible, so the operator has to name the box they think they are on and be
+# right. A failed match stops here, before anything is read let alone removed.
+if [[ -z "$CLAIM" ]]; then
+    echo "refusing: name the box you think you are on, with --i-am $HOST" >&2
+    exit 2
+fi
+if [[ "$CLAIM" != "$HOST" ]]; then
+    echo "refusing: you said --i-am '$CLAIM' but this box is '$HOST'" >&2
+    exit 2
+fi
+# Root is needed to ACT, not to look. Requiring it for the dry run too would mean the
+# first time you see the list is the moment you are already root and one flag away from
+# using it. A non-root dry run cannot stat everything, so it says which parts it could not
+# see rather than reporting them as absent.
+BLIND=0
+if [[ $EUID -ne 0 ]]; then
+    if (( FOR_REAL )); then
+        echo "refusing: --for-real needs root. Run it with sudo." >&2
+        exit 2
+    fi
+    BLIND=1
+fi
+
+if (( FOR_REAL )); then
+    echo "== TEARDOWN on $HOST =="
+else
+    echo "== DRY RUN on $HOST - nothing will be changed. Add --for-real to act. =="
+    (( BLIND )) && echo "   (not root: paths under /etc that only root can read are not"
+    (( BLIND )) && echo "    listed below, so this list is a floor, not the whole of it)"
+fi
+echo
+
+FAILED=0
+do_() {   # do_ <description> <command...>
+    local what="$1"; shift
+    if (( FOR_REAL )); then
+        if "$@" >/dev/null 2>&1; then echo "  done    $what"; else echo "  skipped $what"; fi
+    else
+        echo "  would   $what"
+    fi
+}
+
+# --------------------------------------------------------------- 1. stop what is running
+# Stopped before anything is removed, so nothing is holding a file or writing to a path
+# that is about to go. A unit that does not exist is not an error here.
+UNITS=(takserver vantage-console vantage-console-collect.timer vantage-console-collect
+       vantage-console-deployed vantage-console-deployed-collect.service
+       vantage-kiosk vantage-mesh-gateway mesh-manager-bridge
+       mediamtx mbtileserver node-red takbot ollama)
+echo "-- services"
+for u in "${UNITS[@]}"; do
+    if systemctl list-unit-files "$u"* >/dev/null 2>&1 && systemctl cat "$u" >/dev/null 2>&1; then
+        do_ "stop and disable $u" systemctl disable --now "$u"
+    fi
+done
+
+# takserver's postrm deletes the tak user, and userdel refuses point blank while any
+# process owned by it is still alive. A TAK process that outlived its unit leaves the
+# package HALF-REMOVED, and from that moment every apt call on the box fails on the pending
+# removal - so the next build cannot install anything at all. That is what edge-laptop1 hit
+# on 3 September 2026: "userdel: user tak is currently used by process 2005", four times,
+# through two stages that carried on regardless. Stopping the unit is not enough on its own.
+if id tak >/dev/null 2>&1 && pgrep -u tak >/dev/null 2>&1; then
+    do_ "stop processes still owned by the tak user" pkill -u tak
+    if (( FOR_REAL )); then
+        sleep 3
+        pgrep -u tak >/dev/null 2>&1 && do_ "force-stop what is left of tak" pkill -9 -u tak
+        sleep 1
+    fi
+fi
+
+# CloudTAK is a compose stack, and its volumes hold the database it would otherwise
+# reuse. Its directory is discovered rather than assumed, the same way tak-destroy does it.
+ctak=""
+for d in /opt/CloudTAK /root/CloudTAK /srv/CloudTAK; do
+    [[ -f "$d/docker-compose.yml" ]] && { ctak="$d"; break; }
+done
+if [[ -n "$ctak" ]] && command -v docker >/dev/null 2>&1; then
+    if (( FOR_REAL )); then
+        ( cd "$ctak" && docker compose down -v --remove-orphans >/dev/null 2>&1 ) \
+            && echo "  done    CloudTAK stack down, volumes removed" \
+            || echo "  skipped CloudTAK stack"
+    else
+        echo "  would   bring down the CloudTAK stack and remove its volumes ($ctak)"
+    fi
+fi
+
+# --------------------------------------------------------------- 2. named paths, no wildcards
+echo
+echo "-- paths"
+PATHS=(
+  # the estate footprint
+  /opt/tak /opt/tak-maps /opt/takbot /opt/node-red /srv/vault
+  /etc/tak-cloudtak-version /etc/tak-enrol-host
+  # the console on this box, its state and its unit files
+  /usr/local/lib/vantage-console /var/lib/vantage-console /etc/vantage-console
+  /etc/systemd/system/vantage-console.service
+  /etc/systemd/system/vantage-console-collect.service
+  /etc/systemd/system/vantage-console-collect.timer
+  /etc/systemd/system/vantage-console-deployed.service
+  /etc/systemd/system/vantage-console-deployed-collect.service
+  /etc/systemd/system/vantage-kiosk.service
+  # the certificates this box was given or obtained
+  /etc/vantage-tls
+  # the mesh gateway
+  /opt/vantage-mesh /etc/vantage-mesh.conf
+  # the checker, the helpers and every action script the console pushed here
+  /usr/local/bin/tak-health /usr/local/bin/console-enrol-server
+  /usr/local/bin/console-setup-priv /usr/local/bin/vantage-apply-release
+  /usr/local/bin/vantage-baseline /usr/local/bin/vantage-build-offline-bundle
+  /usr/local/bin/build-enrollment-dp.py
+  # the sudoers rules that let the console act here
+  /etc/sudoers.d/milux-actions /etc/sudoers.d/vantage-console-setup
+)
+[[ -n "$ctak" ]] && PATHS+=("$ctak")
+
+for p in "${PATHS[@]}"; do
+    [[ -e "$p" ]] || continue
+    do_ "erase $p" rm -rf -- "$p"
+done
+
+# The action scripts arrive as a set and are named by the catalogue, not by a pattern, so
+# they are removed by name. A glob over /usr/local/bin would take things this box owns.
+echo
+echo "-- action scripts"
+for a in tak-health tak-tail-logs tak-list-certs tak-le-renew tak-restart-service \
+         tak-push-checker tak-update-cloudtak tak-issue-cert tak-enrol-device \
+         tak-estate-ca tak-set-group tak-revoke-cert tak-view-coreconfig \
+         tak-backup-coreconfig tak-federation-ca tak-federation-enable \
+         tak-federation-connect tak-federation-groups tak-provision \
+         tak-list-credentials tak-fetch-credential tak-push-package tak-destroy; do
+    for f in "/usr/local/bin/$a" "/usr/local/bin/$a-priv"; do
+        [[ -e "$f" ]] && do_ "erase $f" rm -f -- "$f"
+    done
+done
+
+# --------------------------------------------------------------- 3. the enrolment identity
+# The console reaches this box as takadmin, holding a key in that account. Leaving the
+# account and its authorized_keys behind means the next enrolment writes a second key into
+# an account that already trusts the old one, and a "fresh" build inherits an access path
+# nobody chose. Your own account is untouched.
+echo
+echo "-- enrolment identity"
+for u in takadmin takwatch; do
+    if id "$u" >/dev/null 2>&1; then
+        do_ "remove the $u account and its home" userdel -r "$u"
+    fi
+done
+
+# --------------------------------------------------------------- 4. packages
+echo
+echo "-- packages"
+if dpkg-query -W -f '${Status}' takserver 2>/dev/null | grep -qE "install ok installed|half"; then
+    do_ "purge the takserver package" env DEBIAN_FRONTEND=noninteractive apt-get purge -y takserver
+    # A package already wedged half-removed will not come out through apt, because apt
+    # re-runs the same postrm that failed. dpkg with the reinstreq override does, and by
+    # this point nothing owned by tak is running to block it.
+    if (( FOR_REAL )) && dpkg-query -W -f '${Status}' takserver 2>/dev/null | grep -q "half"; then
+        do_ "force out a half-removed takserver" dpkg --purge --force-remove-reinstreq takserver
+        # Forcing a package out can leave others pending configuration, and the PostgreSQL
+        # purge below is an apt call like any other: it would fail on that backlog and the
+        # teardown would stop half way, which is the whole thing this script exists to
+        # prevent. Settle dpkg before asking apt to do anything else.
+        do_ "settle dpkg after the forced removal" dpkg --configure -a
+    fi
+fi
+
+# PostgreSQL: all of it or none of it. See the header. The cluster is dropped first,
+# because purging the package leaves the data directory behind and that is precisely the
+# half-state that breaks the next build.
+if dpkg-query -W -f '${Status}' postgresql-18 2>/dev/null | grep -q "install ok installed"; then
+    if command -v pg_dropcluster >/dev/null 2>&1 && pg_lsclusters 2>/dev/null | tail -n +2 | grep -q .; then
+        while read -r ver name _; do
+            [[ -n "$ver" ]] && do_ "drop the PostgreSQL cluster $ver/$name" pg_dropcluster --stop "$ver" "$name"
+        done < <(pg_lsclusters 2>/dev/null | tail -n +2)
+    fi
+    do_ "purge postgresql-18 and postgis" env DEBIAN_FRONTEND=noninteractive apt-get purge -y postgresql-18 postgresql-18-postgis-3
+    do_ "remove what the purge leaves" env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y
+    do_ "erase /var/lib/postgresql" rm -rf -- /var/lib/postgresql
+    do_ "erase /etc/postgresql" rm -rf -- /etc/postgresql
+fi
+
+if (( FOR_REAL )); then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl reset-failed >/dev/null 2>&1 || true
+fi
+
+# --------------------------------------------------------------- 5. prove it, do not announce it
+# A teardown that says "done" is worth nothing; what matters is what is actually left. This
+# re-reads the box and reports the state rather than the intention. Anything still present
+# is a FAIL and the exit code says so, because a rebuild started on a dirty box is the
+# failure this script exists to prevent.
+echo
+echo "-- verification (what is actually on the box now)"
+if (( ! FOR_REAL )); then
+    echo "  (dry run: nothing was changed, so nothing is verified)"
+    exit 0
+fi
+
+check_gone() {
+    if [[ -e "$1" ]]; then echo "  FAIL  still present: $1"; FAILED=1
+    else echo "  ok    gone: $1"; fi
+}
+for p in /opt/tak /usr/local/lib/vantage-console /var/lib/vantage-console \
+         /etc/vantage-console /usr/local/bin/tak-health /etc/sudoers.d/milux-actions \
+         /etc/vantage-tls; do
+    check_gone "$p"
+done
+for u in takadmin takwatch; do
+    if id "$u" >/dev/null 2>&1; then echo "  FAIL  account still exists: $u"; FAILED=1
+    else echo "  ok    account gone: $u"; fi
+done
+if systemctl cat takserver >/dev/null 2>&1; then
+    echo "  FAIL  takserver unit still present"; FAILED=1
+else
+    echo "  ok    takserver unit gone"
+fi
+
+# apt is the thing every later stage depends on, so its health is what actually decides
+# whether this box can be rebuilt. dpkg --audit is silent on a clean box.
+audit=$(dpkg --audit 2>/dev/null | head -12)
+if [[ -n "$audit" ]]; then
+    echo "  FAIL  dpkg reports packages in a broken state - every apt call will fail on them:"
+    printf '        %s\n' "$audit"
+    FAILED=1
+else
+    echo "  ok    dpkg is clean, so apt works for the next build"
+fi
+
+# The one that has actually bitten: package present, cluster missing. Either state on its
+# own is fine; the combination is the one that reports OK all the way to a dead server.
+pg_pkg=no; pg_cluster=no
+dpkg-query -W -f '${Status}' postgresql-18 2>/dev/null | grep -q "install ok installed" && pg_pkg=yes
+pg_lsclusters 2>/dev/null | tail -n +2 | grep -q . && pg_cluster=yes
+if [[ "$pg_pkg" == "no" ]]; then
+    echo "  ok    PostgreSQL fully removed - the build installs it"
+elif [[ "$pg_pkg" == "yes" && "$pg_cluster" == "yes" ]]; then
+    echo "  ok    PostgreSQL left installed WITH a cluster - the build can use it"
+else
+    echo "  FAIL  postgresql-18 is installed but has NO cluster. This is the half-state that"
+    echo "        makes TAK say 'Cannot find PostgreSQL data directory' while every build"
+    echo "        stage reports OK. Fix before rebuilding:"
+    echo "          sudo pg_createcluster 18 main --start"
+    echo "        or finish removing it:"
+    echo "          sudo apt-get purge -y postgresql-18 && sudo rm -rf /var/lib/postgresql"
+    FAILED=1
+fi
+
+# What is deliberately still here, said out loud so nobody goes looking for it as a bug.
+echo
+echo "-- kept on purpose"
+for keep in /home /etc/ssh /etc/netplan; do
+    [[ -e "$keep" ]] && echo "  kept  $keep"
+done
+command -v tailscale >/dev/null 2>&1 && echo "  kept  tailscale (this is how you reach the box)"
+[[ -e /etc/wireguard ]] && echo "  kept  /etc/wireguard"
+
+echo
+if (( FAILED )); then
+    echo "TEARDOWN INCOMPLETE on $HOST - read the FAIL lines above before rebuilding."
+    exit 1
+fi
+echo "$HOST is clean. Remove it from the console (its server page, Remove from the estate),"
+echo "then build it again from Deploy as a new box."

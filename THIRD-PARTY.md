@@ -20,7 +20,6 @@ nothing: it reports, and moving a pin stays a deliberate edit with a changelog n
 | [Ollama](https://github.com/ollama/ollama) | `v0.33.2` | the local model runtime on a box that carries one | MIT | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [Node-RED](https://nodered.org/) | `nodered/node-red@sha256:7d8a2bc628f80d2efc9a21832eac7c579a2c9ea4cda9040d3b0d4d68a1e36bc4` | the automation flows, in docker | Apache-2.0 | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [infra-TAK](https://github.com/takwerx/infra-TAK) | `v10.1.55-alpha` | an alternative stack, offered as a choice: its marketplace deploys the TAK ecosystem and Vantage manages the box underneath | see the upstream repository | no |
-| [TAK Meshtastic Gateway](https://github.com/brian7704/TAK-Meshtastic-Gateway) | `vendored as a MilUX bundle; the version travels with the bundle on the console's shelf, checked by its SHA at install (ADR-002)` | the mesh bridge on the Networks page | GPL-3.0-or-later, shipped as a separate aggregated work (see NOTICE) | yes, it is carried as a bundle |
 | [ufw, unattended-upgrades, qrencode](https://ubuntu.com/) | `whatever the distribution archive carries` | the hardening set and the QR encoder device enrolment needs | various, all distribution packages | yes, in the offline bundle |
 
 ## Notes
@@ -41,7 +40,6 @@ nothing: it reports, and moving a pin stays a deliberate edit with a changelog n
 - **Ollama** is pinned at `console/provision/vantage-tak-provision.sh:OLLAMA_VER`.
 - **Node-RED** is pinned at `console/provision/vantage-tak-provision.sh:NODERED_IMAGE_DIGEST`.
 - **infra-TAK** is pinned at `console/provision/vantage-infratak-provision.sh:REF`.
-- **TAK Meshtastic Gateway** is not pinned by a constant: vendored as a MilUX bundle; the version travels with the bundle on the console's shelf, checked by its SHA at install (ADR-002).
 - **ufw, unattended-upgrades, qrencode** is not pinned by a constant: whatever the distribution archive carries.
 
 ## What is never downloaded

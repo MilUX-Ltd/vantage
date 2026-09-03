@@ -57,7 +57,12 @@ CERT_RUNTIME_PATH = "cert/caCert.p12"
 CLIENT_ENTRY = "clientCert.p12"
 CLIENT_RUNTIME_PATH = "cert/clientCert.p12"
 
-# The manifest sits at the TOP LEVEL as MANIFEST.xml, not at MANIFEST/manifest.xml.
+# The manifest sits at the TOP LEVEL as lowercase manifest.xml, not at MANIFEST/manifest.xml.
+#
+# The case matters and this comment used to get it wrong, saying MANIFEST.xml while the code
+# below writes manifest.xml. Nobody caught it because this was proven on WinTAK, and Windows
+# filenames are case-insensitive: the two spellings are the same file there. Android reads
+# zip entries case-sensitively, so on ATAK they are not.
 #
 # MANIFEST/manifest.xml is the general mission-package convention and ATAK accepts
 # it, but TAK Server's own enrolment packages use the top-level form and WinTAK

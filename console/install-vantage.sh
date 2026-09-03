@@ -110,6 +110,10 @@ install -m 0755 "$SRC/actions/console-setup-priv" /usr/local/bin/console-setup-p
 # the update helper runs DETACHED from the console (it restarts it), so it lives in
 # /usr/local/bin rather than the console library
 install -m 0755 "$SRC/vantage-apply-release" /usr/local/bin/vantage-apply-release
+# Returns a box to the state a fresh build expects. It lives here rather than in the
+# action catalogue because it is run BY A PERSON, on the box, with the box named on the
+# command line: tearing a box down over the estate channel is how the wrong one goes.
+install -m 0755 "$SRC/vantage-teardown" /usr/local/bin/vantage-teardown
 # Builds the enrolment data package. It lives in /usr/local/bin because console-enrol-server
 # tars this directory to push the action scripts to a box, and tak-enrol-device-priv shells
 # out to it there. Without it a private box hands out a QR no device can act on.

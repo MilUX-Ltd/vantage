@@ -16,6 +16,7 @@ unit="${1:-}"; lines="${2:-80}"
 
 # --- allowlist: units whose journals the console may read on this box -----------------------------
 ALLOW=(
+  mesh-manager-bridge mesh-manager-screen
   tak-meshtastic-gateway cloudtak edge-selfmarker vantage-console-collect vantage-console
   takserver takserver-messaging takserver-api takserver-config gpsd chrony
 )

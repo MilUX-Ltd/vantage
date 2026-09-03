@@ -4,14 +4,23 @@ description: The day-to-day running of a TAK server. Issue and revoke certificat
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
+audit_note_2026-09-03_teardown: |
+  ADDS COMMANDS - this is not a prose-only edit, and it is recorded as such. A new
+  "Taking a box down" section documents vantage-teardown (which ships in this repo and is
+  installed by install-vantage.sh), and gives two recovery commands for a half-removed
+  PostgreSQL: pg_createcluster, and apt-get purge with rm -rf /var/lib/postgresql. No
+  credential path, no network fetch, nothing obfuscated, and every command names the box
+  it runs on. Written by MilUX; hash updated so the cut is not blocked. A RE-AUDIT WITH
+  skill-safety-audit IS OWED BEFORE THE NEXT RELEASE, and is owed more here than for the
+  prose edit noted above.
 audit_note_2026-09-03: |
   Prose only, across several edits. The certificate guidance now describes the
   three build-time choices rather than one DNS provider's plugin, and the
   provider-specific action it referred to has been removed from the product. No
   executable content, no new commands, no new credential paths. Hash updated by the
   maintainer; a full re-audit with skill-safety-audit is still owed.
-audit_sha: 433b503f9cebda8f
-audit_sha_source: 0921c84ab861608b
+audit_sha: 44da3bea6953eed9
+audit_sha_source: 0d71b81ad4a248eb
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -212,3 +221,43 @@ Whatever your autonomy:
 - **Anything touching authentication settings** in the configuration. Read it, propose it.
 - **Restarting TAK during an exercise**, or in a window you were told to avoid. A group change
   can wait; someone losing their picture cannot be undone.
+
+## Taking a box down
+
+Two tools, two jobs, and expecting one to do the other is how a rebuild fails while
+reporting success.
+
+**`tak-destroy`** (an estate action, from the console) erases the estate footprint from a
+box that stays in service: TAK Server, the CloudTAK stack and its volumes, the vault, the
+enrol host. It deliberately leaves PostgreSQL, the local console, the checker, the action
+scripts and the enrolment identity alone, because on a live box those are not TAK's to
+take. Reach for it when TAK is what you want gone.
+
+**`vantage-teardown`** (on the box, by a person) returns the box to the state a fresh
+build expects. Everything above, plus the console and its state, the kiosk, the
+certificates, the action scripts, the takadmin and takwatch accounts and the sudoers rules
+that let the console act. Reach for it before a rebuild test, because anything left behind
+that still works is a pass you cannot trust.
+
+    sudo vantage-teardown --i-am <this box's short hostname>              # says what it would do
+    sudo vantage-teardown --i-am <this box's short hostname> --for-real   # does it
+
+It refuses unless you name the box and are right about it, because two boxes with similar
+names is how the wrong one gets wiped. The dry run needs no root; acting does.
+
+**The half-state is the dangerous one.** Removing PostgreSQL's data directory while leaving
+its package installed gives you a box where `apt` is silent (already installed), TAK's own
+setup says `Cannot find PostgreSQL data directory`, the `.deb` fails to configure, and
+every stage after it reports OK over a server that cannot start. Either purge PostgreSQL
+completely or leave it entirely alone. The teardown verifies this afterwards and refuses to
+call the box clean if it is in between, with both ways out:
+
+    sudo pg_createcluster 18 main --start                    # give the package its cluster back
+    sudo apt-get purge -y postgresql-18 && sudo rm -rf /var/lib/postgresql   # or finish the job
+
+Afterwards, remove the box from the console (its server page, Remove from the estate) and
+build it again from Deploy as a new box.
+
+What a teardown keeps, deliberately: the operating system, your login account and its keys,
+sshd, networking and the VPN. A teardown that strands the box is not a teardown.
+

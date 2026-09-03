@@ -162,17 +162,6 @@ COMPONENTS = [
                 "pin records what we have stood up rather than what is blessed",
     },
     {
-        "id": "meshgateway",
-        "name": "TAK Meshtastic Gateway",
-        "what": "the mesh bridge on the Networks page",
-        "fixed": "vendored as a MilUX bundle; the version travels with the bundle on the "
-                 "console's shelf, checked by its SHA at install (ADR-002)",
-        "project": "https://github.com/brian7704/TAK-Meshtastic-Gateway",
-        "releases": None,
-        "licence": "GPL-3.0-or-later, shipped as a separate aggregated work (see NOTICE)",
-        "offline": "yes, it is carried as a bundle",
-    },
-    {
         "id": "hardening",
         "name": "ufw, unattended-upgrades, qrencode",
         "what": "the hardening set and the QR encoder device enrolment needs",

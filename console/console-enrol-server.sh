@@ -71,8 +71,6 @@ declare -A ACTION_SCRIPTS=(
   [id_action_conadmin]=tak-console-admin
   [id_action_loadout]=tak-set-loadout
   [id_action_kiosk]=tak-kiosk
-  [id_action_meshdeploy]=tak-mesh-deploy
-  [id_action_meshchan]=tak-mesh-channel
 )
 
 # Scripts that deliberately have NO -priv half: they touch nothing beyond their own
@@ -288,7 +286,24 @@ GOT_SUDO=$($SSH "$RSUDO grep -c '^takadmin ALL=' /etc/sudoers.d/milux-actions 2>
 [[ "${GOT_SUDO:-0}" -ge "$WANT_SUDO" ]] \
   || die "/etc/sudoers.d/milux-actions holds ${GOT_SUDO:-0} rules on the box, expected $WANT_SUDO. It reported success over a file that grants nothing."
 echo "sudoers OK ($GOT_SUDO rules)"
-$SSH "$RSUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -q qrencode >/dev/null 2>&1 && echo 'qrencode OK' || echo 'qrencode NOT installed (offline box?) - enrol-device will refuse politely'"
+# qrencode is what turns an enrolment into something a handset can scan, so when it does
+# not install, say WHY rather than guessing. "offline box?" sent an operator looking at the
+# network on a box whose apt was wedged by a half-removed package - the real reason, and one
+# dpkg --audit states plainly. Without this the box builds and then cannot produce a code.
+$SSH "$RSUDO bash -s" <<'QRENC' || true
+if env DEBIAN_FRONTEND=noninteractive apt-get install -y -q qrencode >/dev/null 2>&1; then
+    echo "qrencode OK"
+else
+    broken=$(dpkg --audit 2>/dev/null | head -3)
+    if [ -n "$broken" ]; then
+        echo "qrencode NOT installed - apt is wedged on a package stuck mid-removal, so"
+        echo "  NOTHING can be installed on this box until that is cleared:"
+        echo "$broken" | sed 's/^/    /'
+    else
+        echo "qrencode NOT installed (no route to a package mirror?) - enrol-device will refuse politely"
+    fi
+fi
+QRENC
 if [[ -n "$ENROL_HOST" ]]; then
   # Same class as the key write: this was data on stdin through ssh + sudo, into tee. tee
   # with no input writes an empty file and still reports success, so the box would carry an

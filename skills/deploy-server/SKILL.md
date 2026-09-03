@@ -4,8 +4,14 @@ description: Take a bare machine to a working, managed TAK server. Covers provis
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: f6294049cac69972
-audit_sha_source: 4c3a5a3228157880
+audit_note_2026-09-03_join: |
+  Prose only. A new "Getting the first device on" section explains which join route leads
+  on a publicly trusted certificate versus a box signing its own, how the console measures
+  which case it is in, and the two failures that say nothing useful on the handset. No
+  commands, no executable content, no credential paths. Written by MilUX; hash updated,
+  and a re-audit with skill-safety-audit is still owed.
+audit_sha: 1c95cef7b53c7c73
+audit_sha_source: 47d758b8b44b292b
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -199,3 +205,37 @@ Do not report a box as built because the provisioner exited zero. Check what it 
 
 That last one is the only test that means anything for an estate. A server can accept a
 connection, archive an event, climb every counter, and deliver to nobody.
+
+## Getting the first device on
+
+The build ends with credentials, and how a device joins depends entirely on one fact: does
+this server present a certificate the handset already trusts?
+
+**It does** (a publicly trusted certificate, obtained or supplied). Then the code is the
+whole join. Scan it with the camera in ATAK and nothing is moved and nothing is typed. The
+join package is still offered underneath, because a scan that does nothing leaves the
+operator with no error on the handset and no error on the console.
+
+**It does not** (the box signed its own). Then the code alone cannot work: the device
+cannot verify an authority it has never seen, and the scan fails with the server's identity
+not verified. The join package leads instead. It carries the authority, the server, and
+when the box can mint one, the device's own certificate, so a single import is the whole
+join with no login. The code is still there, one click down, and works on any device that
+has already taken this estate's authority.
+
+The console decides which of these to lead with by **asking the server**, not by inferring
+it from how the box was built: `tak-enrol-device` connects to 8446 and checks whether the
+certificate verifies against the system trust store with the name checked. A certificate
+can be replaced, renewed, or fail to renew long after the build, and the only thing that
+decides what a handset does is what the server presents today.
+
+Two failures worth recognising, because neither says anything useful on the handset:
+
+- **"Remote host certificate not trusted. Check truststore."** The device was given a
+  truststore that cannot build a path to the server's certificate. Enrolment signs device
+  certificates with the *issuing* CA, so a package holding only the root is imported
+  without complaint and then fails at connect time.
+- **A scan that does nothing at all.** No error anywhere. The host in the code has to be
+  one the handset can reach, and the token has to survive to the end of the line. The
+  credential panel shows the code's contents for exactly this, under "What is in the code".
+

@@ -121,18 +121,6 @@
       "pinned_by": "console/provision/vantage-infratak-provision.sh:REF"
     },
     {
-      "id": "meshgateway",
-      "name": "TAK Meshtastic Gateway",
-      "what": "the mesh bridge on the Networks page",
-      "project": "https://github.com/brian7704/TAK-Meshtastic-Gateway",
-      "releases": null,
-      "licence": "GPL-3.0-or-later, shipped as a separate aggregated work (see NOTICE)",
-      "offline": "yes, it is carried as a bundle",
-      "note": null,
-      "version": "vendored as a MilUX bundle; the version travels with the bundle on the console's shelf, checked by its SHA at install (ADR-002)",
-      "pinned_by": null
-    },
-    {
       "id": "hardening",
       "name": "ufw, unattended-upgrades, qrencode",
       "what": "the hardening set and the QR encoder device enrolment needs",

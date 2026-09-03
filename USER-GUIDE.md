@@ -189,32 +189,20 @@ connection, what crosses, and where it dials.
 A link reads **live** only when the checker can see the far end in that server's connected
 peers. A server with one federate and five recorded links shows one live link, not five.
 
-## Networks: the Meshtastic mesh
+## The Meshtastic mesh: Mesh Manager
 
-Networks is the bearer layer: radio networks that devices ride, distinct from Federation's
-TAK-to-TAK links. The first network type is a Meshtastic LoRa mesh - £40 trackers and
-phones reaching TAK with no internet, no SIM and no infrastructure, bridged by a gateway
-radio on one of your boxes.
+The mesh is not a console tab. Radios, trackers, channels, firmware and the map of what
+the gateway can hear belong to Mesh Manager, a standalone application that runs on the box
+carrying the gateway radio, with a screen of its own. A box running it shows a **Mesh
+Manager** link on its Overview tile and on its server page, beside CloudTAK's, on port 8093.
 
-The page carries the whole journey. The kit guide says what to buy (a Heltec V4 gateway
-radio on USB, Seeed T1000-E trackers on Meshtastic 2.6.11) and how to stand it up. Channels
-are minted on the page - a name and a 256-bit key - and devices join by scanning the
-channel's QR in the Meshtastic app; the key itself never appears on the page, only inside
-the QR. Deploying the gateway is one confirmed job: pick the box, the radio's by-id path,
-the region, the channel and the TAK filter group, and the console pushes the vendored
-gateway bundle from the Store shelf (hash-verified at both ends), builds its environment
-offline, programs the radio, creates the TAK input with its filter group at creation, and
-starts the service. TAK Server restarts once.
-
-Region is a legal setting: pick the region of the country you operate in, and re-check
-before transmitting abroad. Rotating a channel mints a new key - devices on the old one
-drop until they scan the new QR, and the gateway takes the change through the "apply
-channel" action, a brief mesh outage.
-
-The Overview tile shows the mesh line only when it has something honest to say: a gateway
-that has forwarded traffic shows the node count; a running gateway that has never
+The Overview tile still shows the mesh line, and only when it has something honest to say:
+a gateway that has forwarded traffic shows the node count; a running gateway that has never
 forwarded shows quiet, because a service being active proves nothing about a radio mesh.
 The proof that matters is a marker from a tracker on a client that signed in normally.
+
+Mesh Manager installs with its own installer today; installing it from this console as a
+module, the way CloudTAK is, is the join still to come.
 
 ## File store
 

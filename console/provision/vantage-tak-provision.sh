@@ -189,6 +189,27 @@ stage_harden() {
     fi
     run "ufw --force enable"
     run "systemctl enable --now unattended-upgrades"
+    # Prove it rather than announce it, the same way stage 2 learned to. run() ignores exit
+    # status by design, so two dpkg failures here printed STAGE-OK and handed a box with a
+    # half-removed package to every stage after it - and once dpkg is wedged, EVERY apt call
+    # on that box fails on the pending removal, so nothing can be installed for the rest of
+    # the build. edge-laptop1, 3 September 2026: the same error four times across two stages,
+    # both of which carried on. dpkg --audit is silent on a healthy box.
+    if (( ! DRY )); then
+        # Named packages, not dpkg --audit. audit prints prose and can comment on packages
+        # that are merely unconfigured for reasons of their own, and a guard added late in a
+        # day that fires on a HEALTHY box would break the builds that currently work. The
+        # status field is exact: "install ok installed" is fine, and the middle word is the
+        # error flag - anything other than "ok" (reinstreq) or a half-* state is a package
+        # apt will trip over on every call.
+        _audit=$(dpkg-query -W -f '${Package} ${Status}\n' 2>/dev/null \
+                 | awk '$3 != "ok" || $4 ~ /^half-/ {print $1"  ("$2" "$3" "$4")"}' | head -12)
+        if [[ -n "$_audit" ]]; then
+            log "packages are stuck mid-install or mid-removal:"
+            printf '  %s\n' "$_audit" >&2
+            die "apt cannot install anything while a package is stuck mid-removal, so this build would fail later and blame the wrong stage. A half-removed takserver is almost always a process still owned by the tak user: 'sudo pkill -u tak', then 'sudo dpkg --purge --force-remove-reinstreq takserver'. Then tear the box down properly with vantage-teardown and build again."
+        fi
+    fi
     echo "STAGE-OK harden"
 }
 

@@ -35,7 +35,7 @@ fi
 [[ -z "${extra:-}" ]]                  || deny "too many arguments"
 [[ "${digest:-}" =~ ^[0-9a-f]{64}$ ]]  || deny "expected a sha256 digest"
 # Two package shapes ride this key: TAK Server .deb (upgrade-server) and the mesh gateway
-# bundle .tgz (deploy-mesh-gateway). Both land hash-named; both installers re-hash.
+# bundle .tgz (module installers). Both land hash-named; both installers re-hash.
 [[ "${fname:-}" =~ ^[A-Za-z0-9._+-]{1,80}\.(deb|tgz)$ ]] || deny "filename must be [A-Za-z0-9._+-] ending .deb or .tgz"
 [[ "$fname" != *".."* ]]               || deny "illegal filename"
 

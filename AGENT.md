@@ -117,9 +117,10 @@ changes something recoverable, `destructive` changes something that is not trivi
 | `vpn-status` | read | The private-network state of a box |
 | `vpn-join` | write | Join the box to your private network |
 | `vpn-leave` | write | Leave it, shredding the join key |
-| `apply-mesh-channel` | write | Set the mesh gateway's radio channel |
-| `deploy-mesh-gateway` | destructive | Install the Meshtastic TAK gateway |
 | `deploy-console` | write | Install a console on a box so it can manage itself |
+
+The Meshtastic mesh is Mesh Manager's, a standalone application reached from a box's tile
+(ADR-005); the agent points there rather than acting on the mesh.
 
 ### Federation
 

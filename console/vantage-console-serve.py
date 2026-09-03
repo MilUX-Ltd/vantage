@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.55.0"
+VERSION = "2.57.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.56-beta"
+VANTAGE_RELEASE = "0.9.57-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -73,13 +73,6 @@ INSTANCE_DEFAULTS = {
     # instance sets them, so the Deploy wizard asks rather than assumes
     "org": "", "org_unit": "", "country": "", "state": "", "city": "",
     "font": "standard",
-    # Google Maps JS API key for the Networks map (Spec 003). Empty by default: the map
-    # then draws its own plan view instead, so a console with no key and no internet still
-    # shows the mesh. A Maps browser key is public by design - it ships in the page and is
-    # protected by an HTTP-referrer restriction at Google's end, not by being hidden - so it
-    # lives in the instance file with the rest of the operator's identity, not in the
-    # credentials vault. Restrict it to this console's origin when you mint it.
-    "maps_key": "",
 }
 _INSTANCE_TEXT = ("product_name", "maker", "tagline", "agent_name",
                   "org", "org_unit", "state", "city")
@@ -300,9 +293,6 @@ def load_instance():
                 inst["font"] = raw["font"]
             if raw.get("console_mode") in ("admin", "client"):
                 inst["console_mode"] = raw["console_mode"]
-            mk = str(raw.get("maps_key", "")).strip()
-            if re.fullmatch(r"[A-Za-z0-9_.~-]{0,64}", mk):
-                inst["maps_key"] = mk
     except Exception:
         pass
     return inst
@@ -400,7 +390,7 @@ ACTIONS = {
         "desc": "Shows the last N lines of a service's journal.",
         "risk": "read", "tag": "Read only", "needs_passphrase": False, "read": True, "result": "read",
         "inputs": [{"name": "unit", "label": "Service", "pattern": r"^[a-z0-9@._-]{1,60}$",
-                    "help": "e.g. tak-meshtastic-gateway, takserver-messaging"},
+                    "help": "e.g. mesh-manager-bridge, takserver-messaging"},
                    {"name": "lines", "label": "Lines", "pattern": r"^[0-9]{1,4}$",
                     "help": "lines to show, e.g. 200"}],
         "confirm": "Show logs for “{unit}” on {target}.",
@@ -422,7 +412,7 @@ ACTIONS = {
         "desc": "Restarts one allowed service. Short outage while it comes back.",
         "risk": "write", "tag": "Brief outage", "needs_passphrase": False, "result": "text",
         "inputs": [{"name": "unit", "label": "Service", "pattern": r"^[a-z0-9@._-]{1,60}$",
-                    "help": "e.g. tak-meshtastic-gateway"}],
+                    "help": "e.g. mesh-manager-bridge"}],
         "confirm": "Restart “{unit}” on {target}. Brief outage while it restarts.",
     },
     "push-checker": {
@@ -526,65 +516,6 @@ ACTIONS = {
                 "console streams the tarball over the box's scoped key and it is docker-loaded.",
         "risk": "write", "tag": "Offline deploy", "needs_passphrase": False, "result": "read",
         "timeout": 3600, "catalogue": False, "inputs": [],
-    },
-    "deploy-mesh-gateway": {
-        "label": "Deploy Meshtastic TAK gateway", "verb": "deploy-mesh-gateway",
-        "key": "id_action_meshdeploy", "group": "network", "needs": "takserver",
-        "desc": "Installs the vendored Meshtastic TAK gateway on the box: its own venv from "
-                "the shipped artefact, the systemd unit on the chosen radio, the TAK UDP "
-                "input created with its filter group, the gateway joined to the chosen "
-                "channel. TAK Server restarts once to pick up the input.",
-        "risk": "destructive", "tag": "Installs the gateway", "needs_passphrase": False,
-        "result": "text",
-        # The provision-server transport: artefact + sha256 streamed over the scoped key,
-        # every input re-validated box-side, run as a job with a streamed log. The channel
-        # URL (which embeds the PSK) is resolved console-side from the channel store and
-        # injected into the job args - it never appears in a page, a URL or the audit.
-        "artifact": "vantage-mesh-gateway-install.sh", "job": True, "timeout": 900,
-        "inputs": [
-            {"name": "serial", "label": "Radio serial device",
-             "pattern": r"^/dev/serial/by-id/[A-Za-z0-9._:+=-]{4,180}$",
-             "help": "the radio's stable by-id path on the box, from "
-                     "ls -l /dev/serial/by-id/ - never a bare ttyACM number, those "
-                     "shuffle on reboot"},
-            {"name": "region", "label": "Region", "pattern": r"^(EU_868|US)$",
-             "help": "the LoRa regulatory region the radios transmit in. This is a legal "
-                     "setting: pick the region for the country you operate in, and "
-                     "re-check before transmitting abroad"},
-            {"name": "channel", "label": "Channel", "pattern": r"^[A-Za-z0-9_-]{1,11}$",
-             "help": "a channel created on the Networks page; the gateway joins it"},
-            {"name": "filter_group", "label": "TAK filter group",
-             "pattern": r"^[A-Za-z0-9_-]{1,40}$",
-             "help": "the TAK group mesh traffic belongs to. Only clients whose "
-                     "certificate carries this group see mesh markers - set at input "
-                     "creation because the input manager cannot add it later"},
-            {"name": "bundle_file", "label": "Gateway bundle from the Store shelf",
-             "pattern": r"^[A-Za-z0-9._+-]{1,80}\.tgz$",
-             "help": "a bundle cut with cut-bundle.sh (vendored gateway plus wheels, "
-                     "ADR-002), uploaded to Store > mesh-gateway"}],
-        "push_key": "id_action_pkgpush",
-        "confirm": "Deploy the Meshtastic TAK gateway to {target}: radio {serial}, region "
-                   "{region}, channel {channel}. Installs the gateway, creates the TAK "
-                   "input with filter group {filter_group}, and starts the service. TAK "
-                   "Server restarts once - a brief outage.",
-    },
-    "apply-mesh-channel": {
-        "label": "Apply mesh channel to gateway", "verb": "apply-mesh-channel",
-        "key": "id_action_meshchan", "group": "network", "needs": None,
-        "desc": "Rewrites the gateway radio to a channel from the Networks page: the "
-                "gateway service stops (it holds the radio), the channel is written, the "
-                "service restarts. Trackers and phones rejoin by scanning the channel's "
-                "current QR.",
-        "risk": "write", "tag": "Brief mesh outage", "needs_passphrase": False,
-        "result": "text",
-        "artifact": "vantage-mesh-gateway-install.sh", "job": True, "timeout": 300,
-        "fixed_args": {"stage": "channel"},
-        "inputs": [
-            {"name": "channel", "label": "Channel", "pattern": r"^[A-Za-z0-9_-]{1,11}$",
-             "help": "a channel created on the Networks page"}],
-        "confirm": "Apply channel {channel} to the gateway on {target}. The gateway stops, "
-                   "the radio is rewritten, the gateway restarts: a brief mesh outage, and "
-                   "devices on the old channel drop until they rejoin.",
     },
     "destroy-server": {
         "label": "Destroy this server", "verb": "destroy", "key": "id_action_destroy",
@@ -2165,25 +2096,13 @@ def peer_pull(data, client):
                  "vault_folders": snap.get("vault_folders", [])}
 
 
-def vault_pull(data, client):
-    """Pull one folder from a peer into this vault. Never clobbers newer local work:
-    a local file younger than the peer's copy is left alone and reported."""
-    pid = str(data.get("peer", ""))
-    folder = str(data.get("folder", ""))
-    rec = next((p_ for p_ in _load_json_list(PEERS_OUT_FILE) if p_.get("id") == pid), None)
-    if not rec:
-        return 404, {"error": "no such peer"}
-    if not re.fullmatch(STORE_NAME_RE, folder):
-        return 400, {"error": "bad folder name"}
-    try:
-        bundle = peer_fetch(rec, "/api/vault/export?folder="
-                            + __import__("urllib.parse", fromlist=["quote"]).quote(folder))
-    except Exception as e:
-        return 502, {"error": f"could not reach {rec.get('name')}: {e}"[:200]}
-    if "files" not in bundle:
-        return 502, {"error": str(bundle.get("error", "peer returned no files"))[:200]}
+def vault_apply_bundle(bundle):
+    """Land a vault bundle in this vault, whichever way it travelled. One rule for a pull
+    and for a push, so the two routes cannot drift: a local file that is NEWER than the
+    copy offered is kept and reported, never clobbered; everything else is written whole,
+    temp-then-replace, group-writable so the vault sync tools see an ordinary change."""
     created, updated, kept = [], [], []
-    for f in bundle["files"][:400]:
+    for f in (bundle.get("files") or [])[:400]:
         rel = str(f.get("path", ""))
         full = store_resolve(rel, "vault")
         if full is None or not rel.lower().endswith(VAULT_TEXT_EXT):
@@ -2209,14 +2128,113 @@ def vault_pull(data, client):
         except Exception:
             pass
         bucket.append(rel)
-    # remember the subscription so the sync map can draw it
-    log_path = os.path.join(os.path.dirname(PEERS_CACHE), "sync-rules.json")
-    rules = [r for r in _load_json_list(log_path)
+    return created, updated, kept
+
+
+def sync_rules_path():
+    return os.path.join(os.path.dirname(PEERS_CACHE), "sync-rules.json")
+
+
+def record_sync_rule(pid, name, folder, direction, created, updated, kept):
+    """One rule per (peer, folder). direction is "pull" (this console fetched it) or
+    "push" (this console sent it). The Sync page and the map draw from these, so a rule
+    records what happened, not what was intended."""
+    rules = [r for r in _load_json_list(sync_rules_path())
              if not (r.get("peer") == pid and r.get("folder") == folder)]
-    rules.append({"peer": pid, "peer_name": rec.get("name"), "folder": folder,
+    rules.append({"peer": pid, "peer_name": name, "folder": folder, "direction": direction,
                   "last_pull": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   "created": len(created), "updated": len(updated), "kept": len(kept)})
-    _save_json_list(log_path, rules)
+    _save_json_list(sync_rules_path(), rules)
+
+
+def peer_post(rec, path, body):
+    """POST one JSON body to a peer with its token. The write-shaped twin of peer_fetch."""
+    import urllib.request as _ur
+    req = _ur.Request(rec["url"] + path, data=json.dumps(body).encode(), method="POST",
+                      headers={"Authorization": "Bearer " + rec.get("token", ""),
+                               "Content-Type": "application/json"})
+    with _ur.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+
+def vault_push(data, client):
+    """Send one of THIS vault's folders to a peer console. The master model: the box that
+    holds the truth chooses what the others receive, and a tick on its Sync page is an
+    action on the far box, not a note to self. The peer applies it under the same rule
+    as a pull - its newer local work is kept - and says exactly what landed."""
+    pid = str(data.get("peer", ""))
+    folder = str(data.get("folder", ""))
+    rec = next((p_ for p_ in _load_json_list(PEERS_OUT_FILE) if p_.get("id") == pid), None)
+    if not rec:
+        return 404, {"error": "no such peer"}
+    if not re.fullmatch(STORE_NAME_RE, folder):
+        return 400, {"error": "bad folder name"}
+    code, bundle = vault_export(folder)
+    if code != 200:
+        return code, bundle
+    try:
+        res = peer_post(rec, "/api/vault/import", bundle)
+    except Exception as e:
+        return 502, {"error": f"could not reach {rec.get('name')}: {e}"[:200]}
+    if "created" not in res:
+        return 502, {"error": str(res.get("error", "peer did not accept the folder"))[:200]}
+    record_sync_rule(pid, rec.get("name"), folder, "push",
+                     res.get("created", []), res.get("updated", []), res.get("kept", []))
+    audit({"action": "vault-push", "target": folder, "peer": rec.get("name"),
+           "result": "OK", "client": client})
+    return 200, {"folder": folder, "peer": rec.get("name"), "sent": len(bundle["files"]),
+                 "created": res.get("created", []), "updated": res.get("updated", []),
+                 "kept": res.get("kept", [])}
+
+
+def vault_unshare(data, client):
+    """Stop sharing a folder with a peer: the rule goes, the copy already on the far box
+    stays, and the page says so rather than implying a delete it did not do."""
+    pid = str(data.get("peer", "")); folder = str(data.get("folder", ""))
+    rules = _load_json_list(sync_rules_path())
+    keep = [r for r in rules if not (r.get("peer") == pid and r.get("folder") == folder)]
+    if len(keep) == len(rules):
+        return 404, {"error": "that folder was not being shared with that console"}
+    _save_json_list(sync_rules_path(), keep)
+    audit({"action": "vault-unshare", "target": folder, "peer": pid, "result": "OK",
+           "client": client})
+    return 200, {"folder": folder, "stopped": True,
+                 "note": "the copy already on the far box is left where it is"}
+
+
+def vault_import(bundle, peer):
+    """The receiving end of a push: a peer that holds a token this console minted hands
+    over a folder bundle and it lands by the pull rule. Same gate as export, same applier
+    as pull - a push cannot do anything to this vault that a pull could not."""
+    folder = str(bundle.get("folder", ""))
+    if not re.fullmatch(STORE_NAME_RE, folder):
+        return 400, {"error": "bad folder name"}
+    created, updated, kept = vault_apply_bundle(bundle)
+    audit({"action": "vault-import", "target": folder, "peer": peer.get("name"),
+           "result": "OK", "client": "peer:" + str(peer.get("id", ""))})
+    return 200, {"folder": folder, "created": created, "updated": updated, "kept": kept}
+
+
+def vault_pull(data, client):
+    """Pull one folder from a peer into this vault. Never clobbers newer local work:
+    a local file younger than the peer's copy is left alone and reported."""
+    pid = str(data.get("peer", ""))
+    folder = str(data.get("folder", ""))
+    rec = next((p_ for p_ in _load_json_list(PEERS_OUT_FILE) if p_.get("id") == pid), None)
+    if not rec:
+        return 404, {"error": "no such peer"}
+    if not re.fullmatch(STORE_NAME_RE, folder):
+        return 400, {"error": "bad folder name"}
+    try:
+        bundle = peer_fetch(rec, "/api/vault/export?folder="
+                            + __import__("urllib.parse", fromlist=["quote"]).quote(folder))
+    except Exception as e:
+        return 502, {"error": f"could not reach {rec.get('name')}: {e}"[:200]}
+    if "files" not in bundle:
+        return 502, {"error": str(bundle.get("error", "peer returned no files"))[:200]}
+    created, updated, kept = vault_apply_bundle(bundle)
+    # remember the subscription so the sync map can draw it
+    record_sync_rule(pid, rec.get("name"), folder, "pull", created, updated, kept)
     audit({"action": "vault-pull", "target": folder, "peer": rec.get("name"),
            "result": "OK", "client": client})
     return 200, {"created": created, "updated": updated, "kept": kept}
@@ -3187,11 +3205,6 @@ def job_args(aid, inputs):
     args = {f["name"]: str((inputs or {}).get(f["name"], "") or "") for f in a["inputs"]}
     for k, v in (a.get("fixed_args") or {}).items():
         args[k] = str(v)
-    if aid in ("deploy-mesh-gateway", "apply-mesh-channel"):
-        url = mesh_channel_url_for(args.get("channel", ""))
-        if not url:
-            return None, "unknown channel - create it on the Networks page first"
-        args["channel_url_b64"] = base64.urlsafe_b64encode(url.encode()).decode()
     return args, None
 
 
@@ -3244,114 +3257,6 @@ def start_job(aid, target, inputs, confirm, client):
                     log.write(line)
                     log.flush()
                 rc = p.wait(timeout=4000)
-        except Exception as e:
-            try:
-                with open(log_path, "a") as log:
-                    log.write(f"\nERR job runner: {e}\n")
-            except OSError:
-                pass
-        finished = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _job_write(job_id, {"job": job_id, "action": aid, "target": target,
-                            "status": "done" if rc == 0 else "failed", "rc": rc,
-                            "started": started, "finished": finished, "inputs": safe_inputs})
-        audit({"action": aid, "target": target, "inputs": safe_inputs,
-               "result": "OK" if rc == 0 else "ERROR",
-               "reason": "" if rc == 0 else f"job rc={rc}", "job": job_id, "client": client})
-
-    threading.Thread(target=run, daemon=True).start()
-    return 200, {"status": "started", "job": job_id}
-
-
-def start_mesh_deploy_job(target, inputs, confirm, client):
-    """deploy-mesh-gateway as a two-phase job, the start_upgrade_job shape: stream the
-    gateway bundle from the Store shelf to the box's staging inbox (the shared package-push
-    key), then stream the installer with the validated parameters over the mesh key. The
-    shelf copy is hashed here; both box gates re-hash before anything runs."""
-    aid = "deploy-mesh-gateway"
-    cfg = load_actions_config()
-    ok, err, _argv, safe_inputs = validate_action_request(aid, target, inputs, cfg)
-    if not ok:
-        return (403 if err == "action not enabled" else 400), {"error": err}
-    if not confirm:
-        return 400, {"error": "confirmation required"}
-    a = ACTIONS[aid]
-    bundle_file = str((inputs or {}).get("bundle_file") or "")
-    src = os.path.join(STORE_ROOT, "mesh-gateway", bundle_file)
-    if not os.path.isfile(src):
-        return 400, {"error": f"{bundle_file} is not on the Store shelf - upload the cut "
-                              "bundle to Store > mesh-gateway first"}
-    h = hashlib.sha256()
-    with open(src, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    bundle_sha = h.hexdigest()
-    art = resolve_artifact(a["artifact"])
-    try:
-        if not art:
-            raise FileNotFoundError(a["artifact"])
-        with open(art) as fh:
-            payload = fh.read()
-    except Exception:
-        return 500, artifact_missing_error(a)
-    digest = hashlib.sha256(payload.encode()).hexdigest()
-    args, aerr = job_args(aid, inputs)
-    if aerr:
-        return 400, {"error": aerr}
-    args["bundle_sha256"] = bundle_sha
-    argsb64 = base64.b64encode(json.dumps(args).encode()).decode()
-    dest = cfg["targets"][target]
-    job_id = "j" + os.urandom(6).hex()
-    os.makedirs(JOBS_DIR, exist_ok=True)
-    log_path, _ = _job_paths(job_id)
-    started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _job_write(job_id, {"job": job_id, "action": aid, "target": target, "status": "running",
-                        "started": started, "inputs": safe_inputs})
-    audit({"action": aid, "target": target, "inputs": safe_inputs, "result": "STARTED",
-           "job": job_id, "client": client})
-    push_key = os.path.join(ACTION_KEYS, a["push_key"])
-    run_key = os.path.join(ACTION_KEYS, a["key"])
-
-    def run():
-        rc = -1
-        try:
-            with open(log_path, "w") as log:
-                log.write(f"== MESH GATEWAY {target}: {bundle_file} ==\n"
-                          "-- phase 1/2: push the bundle --\n")
-                log.flush()
-                hq = subprocess.run(
-                    ["ssh", "-i", push_key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                     "-o", "StrictHostKeyChecking=accept-new", dest,
-                     f"have-package {bundle_sha}"],
-                    capture_output=True, text=True, timeout=30)
-                if hq.returncode == 0 and "HELD" in (hq.stdout or ""):
-                    log.write("bundle already staged on the box (hash-named); skipping the stream\n")
-                    log.flush()
-                    p = hq
-                else:
-                    with open(src, "rb") as tgz:
-                        p = subprocess.run(
-                            ["ssh", "-i", push_key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                             "-o", "StrictHostKeyChecking=accept-new", dest,
-                             f"push-package {bundle_sha} {bundle_file}"],
-                            stdin=tgz, capture_output=True, text=True, timeout=1800)
-                    log.write((p.stdout or "") + (p.stderr or ""))
-                    log.flush()
-                if p.returncode != 0:
-                    raise RuntimeError("bundle push failed")
-                log.write("-- phase 2/2: install (venv from the bundle, radio, TAK input, unit) --\n")
-                log.flush()
-                p2 = subprocess.Popen(
-                    ["ssh", "-i", run_key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                     "-o", "StrictHostKeyChecking=accept-new", dest,
-                     f"deploy-mesh-gateway {digest} {argsb64}"],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, text=True, bufsize=1)
-                p2.stdin.write(payload)
-                p2.stdin.close()
-                for line in p2.stdout:
-                    log.write(line)
-                    log.flush()
-                rc = p2.wait(timeout=1800)
         except Exception as e:
             try:
                 with open(log_path, "a") as log:
@@ -4404,11 +4309,6 @@ def save_instance(data, client):
         inst["agent_enabled"] = bool(data.get("agent_enabled"))
     if "font" in data:
         inst["font"] = data["font"] if data.get("font") in FONT_STACKS else "standard"
-    if "maps_key" in data:
-        mk = str(data.get("maps_key", "")).strip()
-        if not re.fullmatch(r"[A-Za-z0-9_.~-]{0,64}", mk):
-            return 400, {"error": "maps key: letters, digits, - _ . ~ only"}
-        inst["maps_key"] = mk
     if "console_mode" in data:
         new_mode = data.get("console_mode") if data.get("console_mode") in (
             "admin", "client") else "admin"
@@ -7017,6 +6917,20 @@ form.action.flash{outline:2px solid var(--gold);outline-offset:3px}
 .sync-h{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:14px 0 8px}
 .sync-peer{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:8px}
 .sync-peer-h{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+/* A tick is an action on a far box, so the row carries what the far box said happened. */
+.tick-list{display:flex;flex-direction:column;gap:2px;margin:8px 0 6px}
+.tick-row{display:grid;grid-template-columns:auto minmax(120px,1fr) minmax(0,2fr) auto;gap:10px;
+ align-items:center;padding:6px 8px;border-radius:var(--r-sm);cursor:pointer}
+.tick-row:hover{background:var(--bh)}
+.tick-row.locked{cursor:default;opacity:.8}
+.tick-name{font-weight:600;font-size:13px}
+.tick-note{font-family:var(--font-mono);font-size:11px;color:var(--mute);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tick-send{font-size:11px;padding:3px 9px}
+.sync-more{margin:6px 0 2px}.sync-more>summary{cursor:pointer;font-size:12px;color:var(--mute);font-family:var(--font-mono)}
+.sync-setup{margin:26px 0 0;border-top:1px solid var(--line);padding-top:10px}
+.sync-setup>summary{cursor:pointer;list-style:none}.sync-setup>summary::-webkit-details-marker{display:none}
+.sync-setup>summary::before{content:'+ ';color:var(--acc)}.sync-setup[open]>summary::before{content:'- '}
+@media (max-width:720px){.tick-row{grid-template-columns:auto 1fr;grid-auto-rows:auto}.tick-note{grid-column:2;white-space:normal}}
 .sync-peer-acts{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center}
 .sync-map{width:100%;background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);margin:4px 0 8px}
 .sync-add,.sync-mint{margin-top:8px}
@@ -7463,6 +7377,20 @@ main a:not([class]){color:var(--acc);text-decoration:underline}
 .fl-chip.ok{background:var(--ok-b);color:var(--ok);border-color:var(--ok)}
 .fl-chip.warn{background:var(--warn-b);color:var(--warn);border-color:var(--warn)}
 .fl-chip.bad{background:var(--fail-b);color:var(--fail);border-color:var(--fail)}
+.ai-help{margin:18px 0 12px;border-top:1px solid var(--line);padding-top:8px}
+.ai-help>summary{cursor:pointer;font-size:13px;color:var(--fg2)}
+.fedbox-strip{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));margin:6px 0 16px}
+.fedbox{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);padding:12px 14px}
+.fedbox-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.fedbox-m{font-size:12.5px;color:var(--fg2);line-height:1.5}
+.fedrow-detail td{background:var(--bh);padding:12px 14px}
+.fedsides{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));margin-bottom:8px}
+.fedside{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;font-size:13px}
+.fed-grp{display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.fed-grp input{font:400 13px var(--font-mono);padding:5px 8px;border:1px solid var(--rule2);border-radius:var(--r-sm);background:var(--bg);color:var(--fg);max-width:180px}
+.fed-dials{margin:6px 0;padding-left:18px;font-size:12.5px}
+.fed-help{margin:18px 0 0;border-top:1px solid var(--line);padding-top:8px}
+.fed-help>summary{cursor:pointer;font-size:13px;color:var(--fg2)}
 .fl-num{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;
  border-radius:50%;border:2px solid var(--ok);font-family:var(--font-display);font-weight:700;
  font-size:11px;color:var(--fg);flex:0 0 auto}
@@ -8192,6 +8120,35 @@ if(location.hash.indexOf('#act-')===0)setTimeout(function(){revealAction(locatio
 # federation-connect (or federation-enable) as the form.
 FEDERATION_JS = """
 (function(){
+  // The detail row, and the one control on it that changes a box: share a group. Same
+  // action the map popup runs, so the row and the map cannot disagree about what a
+  // press does. The box restarts nothing for this; it rewrites its federate entries.
+  document.querySelectorAll('.fedrow-open').forEach(function(b){
+    b.addEventListener('click',function(){
+      var r=document.getElementById(b.getAttribute('aria-controls')); if(!r) return;
+      r.hidden=!r.hidden; b.setAttribute('aria-expanded', r.hidden?'false':'true');
+      b.textContent=r.hidden?'Detail':'Close';
+    });
+  });
+  document.querySelectorAll('form.fed-grp').forEach(function(f){
+    f.addEventListener('submit',function(ev){
+      ev.preventDefault();
+      var g=f.querySelector('.fed-grp-name').value.trim(), tgt=f.getAttribute('data-target'),
+          res=f.closest('tr').querySelector('.fed-grp-res'), btn=f.querySelector('.fed-grp-go');
+      if(!/^[A-Za-z0-9_-]{1,40}$/.test(g)){res.className='a-res error fed-grp-res';res.textContent='A group name is letters, numbers, dash and underscore, no spaces.';return;}
+      btn.disabled=true; res.className='a-res fed-grp-res'; res.textContent='Sharing '+g+' on '+tgt+'…';
+      fetch('/api/action/federation-groups',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({target:tgt,inputs:{group:g},confirm:true})})
+      .then(function(x){return x.json().then(function(j){return{code:x.status,j:j};});})
+      .then(function(x){btn.disabled=false;
+        if(x.code===200){res.className='a-res ok fed-grp-res';res.textContent='Group '+g+' shared from '+tgt+'. Reloading…';setTimeout(function(){location.reload();},1200);}
+        else{res.className='a-res error fed-grp-res';res.textContent='Did not work: '+(x.j.error||x.j.message||'unknown error');}})
+      .catch(function(e){btn.disabled=false;res.className='a-res error fed-grp-res';res.textContent='Could not reach the console. '+e;});
+    });
+  });
+})();
+
+(function(){
   var el=document.getElementById('fedmap'); if(!el) return;
   var data={}; try{data=JSON.parse(document.getElementById('feddata').textContent);}catch(e){return;}
   var nodes=data.nodes||[], pairs=data.pairs||[], canConnect=data.canConnect,
@@ -8723,7 +8680,6 @@ def nav_html(state, active, inst=None):
     pend = sum(1 for p in load_proposals() if p.get("status") == "pending")
     items = [("/", "Overview", active == "estate", "Overview"),
              ("/federation", "Federation", active == "federation", "Federation"),
-             ("/networks", "Networks", active == "networks", "Networks"),
              ("/operations", "Operations", active == "operations", "Operations"),
              ("/store", "File store", active == "store", "File store"),
              ("/vault", "Knowledge Vault", active == "vault", "Knowledge Vault")]
@@ -9203,17 +9159,6 @@ def render_customization(state):
                    "<input type=password id=cz-modepw autocomplete=current-password>"
                    "<span class=hint>changing console mode needs your operator "
                    "password</span></label>")
-    doc.append("<div class=fl style='grid-column:1/-1'><span class=wz-comp-t>Maps</span>"
-               "<span class=hint>the basemap the Networks map draws on</span></div>")
-    doc.append("<label class=fl style='grid-column:1/-1'>Google Maps key"
-               f"<input id=cz-maps_key type=text maxlength=64 value='{e(inst['maps_key'])}' "
-               "placeholder='AIza…' autocomplete=off>"
-               "<span class=hint>optional. With a key the Networks map draws mesh nodes on "
-               "Google Maps; without one it draws its own plan view, which is what a console "
-               "on a closed network gets either way, because the basemap loads in YOUR "
-               "browser and not on the box. A Maps browser key is public by design - it ships "
-               "in the page - so restrict it to this console's address in the Google Cloud "
-               "console when you mint it</span></label>")
     doc.append("<div class=fl style='grid-column:1/-1'><span class=wz-comp-t>Build defaults</span>"
                "<span class=hint>the PKI identity a new server's certificate authority "
                "carries, prefilled in the Deploy wizard. Enter these once: a console "
@@ -9285,7 +9230,7 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
   // (product name, maker, tagline, assistant) keep their stored values
   var body={};
   ['font','console_mode','accent','accent_2','ink','band','accent_warm',
-   'maps_key','org','org_unit','country','state','city'].forEach(function(k){
+   'org','org_unit','country','state','city'].forEach(function(k){
     var el=document.getElementById('cz-'+k); if(el) body[k]=el.value;
   });
   // a console-role change is a deliberate commit: confirm it, require the operator
@@ -12535,132 +12480,34 @@ def render_agent(state):
                 if t.get("fqdn")), "")
     _https = tls_active()
     _haskey = bool(load_agent_key().get("key"))
-    doc.append("<h2 class=sec-eye>1 · How this works</h2>")
-    doc.append("<p class=doct>Agents connect to <b>this console</b>, not to each TAK "
-               "server - one connection sees every box this console manages. "
-               "<b>Reachability grants nothing:</b> being on the same network as the "
-               "console gives an AI no access at all. Access exists only when you mint "
-               "a connection below, and it grants exactly this, no more: read the "
-               "estate's health and servers, read credential <i>names</i> (never "
-               "secrets), <b>read</b> the Knowledge Vault (a connection can never "
-               "write it), and - at the level you choose - propose or run actions "
-               "from the gated catalogue. A connection can never change software, "
-               "never open a shell, never touch anything outside that list.</p>")
-    # AUTONOMY explainer
-    doc.append("<div class=agrid style='margin:6px 0 18px'>"
-               "<div class=mod><div class=mod-h><b>Observe</b>"
-               "<span class='mod-b abs'>read only</span></div>"
-               "<div class=mod-d>sees estate health, servers and the vault; changes nothing."
-               "</div></div>"
-               "<div class=mod><div class=mod-h><b>Propose</b>"
-               "<span class='mod-b drift'>human confirms</span></div>"
-               "<div class=mod-d>suggests gated actions that land below for you to run - the "
-               "default, and the safest place to start.</div></div>"
-               "<div class=mod><div class=mod-h><b>Act</b>"
-               "<span class='mod-b ok'>autonomous</span></div>"
-               "<div class=mod-d>runs its allowed actions directly, every one audited under "
-               "the connection's name. Your deliberate choice.</div></div></div>")
-
-    # Draw the line clearly (Matt): what ships in Vantage vs what is an estate build MilUX
-    # helps with. The connection HUB is the product; a resident agent or local model on your
-    # own hardware is a service.
-    doc.append("<h2 class=sec-eye>What is in Vantage, and what we can help you build</h2>"
-               "<div class=agrid style='margin:6px 0 18px'>"
-               "<div class=mod><div class=mod-h><b>In Vantage, today</b>"
-               "<span class='mod-b ok'>self-serve</span></div>"
-               "<div class=mod-d>Everything on this page. Connect an MCP-capable agent, an API "
-               "key, or a resident agent; set its autonomy; it reads the estate and the "
-               "Knowledge Vault and, at the level you choose, proposes or runs gated actions. No "
-               "MilUX involvement, and no cost beyond the model you bring.</div></div>"
-               "<div class=mod><div class=mod-h><b>On your estate, with our help</b>"
-               "<span class='mod-b drift'>a conversation</span></div>"
-               "<div class=mod-d>A resident agent running on your own hardware, a local model for "
-               "a disconnected network, or an assistant wired into your own systems and data - "
-               "these are estate-specific builds. Vantage gives the connection point; standing "
-               "the agent up on your estate is where MilUX helps. Talk to us: "
-               "<b>matt@milux.co.uk</b>.</div></div></div>")
-
-    # CONNECTIONS
-    _ctx = load_agent_context_doc()
-    doc.append("<details class=ai-config><summary class=onto-sum>AI configuration "
-               "<span class=meta>- the identity and standing orders the built-in chat "
-               "and MCP-connected agents follow</span></summary>"
-               "<p class=meta>This is the assistant's setup, not estate knowledge, so "
-               "it lives here rather than in the Knowledge Vault. The built-in chat and "
-               "MCP-connected agents read it before answering. A <b>resident agent</b> "
-               "(ours is called " + e(inst["agent_name"]) + ") has its own identity on "
-               "its own box and does not use this.</p>"
-               "<form id=aicfg>")
-    for key, label, hint in AGENT_CONTEXT_FIELDS:
-        doc.append(f"<label class=fl>{e(label)}"
-                   f"<textarea id='ac-{key}' rows=4 spellcheck=false>"
-                   f"{e(_ctx.get(key, ''))}</textarea>"
-                   f"<span class=hint>{e(hint)}</span></label>")
-    doc.append("<div class=fedpop-act><button type=submit class='a-go confirm'>"
-               "Save AI configuration</button>"
-               "<span id=ac-res class=lib-status role=status "
-               "style='margin-left:10px'></span></div></form></details>")
-    doc.append("<h2 class=sec-eye>2 · Choose your route</h2>")
-    doc.append("<p class=doct>The difference between the routes is <b>where the "
-               "connection comes from</b>: your own computer, Anthropic's cloud, this "
-               "console itself, or a box on this estate.</p>")
-    rows = []
-    rows.append(("Claude Desktop / Claude Code",
-                 "YOUR OWN COMPUTER - the app or terminal tool runs on your machine, "
-                 "so only your machine needs to reach this console (LAN or VPN is "
-                 "enough)",
-                 "ready", "Create an MCP connection below and paste the config it "
-                 "shows you."))
-    if _https and _fq:
-        rows.append(("claude.ai / Cowork (cloud)",
-                     "ANTHROPIC'S CLOUD - the browser product connects from their "
-                     "servers, so this console must be public, on https",
-                     "ready", "This console serves https on a public name: create an "
-                     "MCP connection and give Cowork the endpoint and token."))
-    elif _fq:
-        rows.append(("claude.ai / Cowork (cloud)",
-                     "ANTHROPIC'S CLOUD - the browser product connects from their "
-                     "servers, so this console must be public, on https",
-                     "step", "This box has a public name but the console is on plain "
-                     "http - press the HTTPS button below first."))
+    # PROPOSALS - the default posture, inline
+    doc.append("<h2 class=sec-eye>Connected now</h2>")
+    if conns:
+        doc.append("<div class=conns>")
+        for c in conns:
+            rlabel = {"mcp": "MCP socket", "apikey": "API key",
+                      "the admin box": "OpenClaw"}.get(c.get("route"), c.get("route"))
+            au = c.get("autonomy", "observe")
+            opts = "".join(
+                f"<option value='{a}'" + (" selected" if a == au else "") + f">{a}</option>"
+                for a in AUTONOMY)
+            doc.append(
+                "<div class=conn data-id='" + e(c.get("id", "")) + "'>"
+                "<div class=conn-h><b>" + e(c.get("name", "")) + "</b>"
+                "<span class=conn-route>" + e(rlabel) + "</span></div>"
+                "<div class=conn-meta>" + (f"{c.get('calls', 0)} calls" if c.get("calls")
+                                           else "not used yet")
+                + (f" · last {e(str(c.get('last_used'))[:16])}" if c.get("last_used") else "")
+                + "</div>"
+                "<div class=conn-acts><label class=conn-au>Autonomy"
+                "<select class=cn-au>" + opts + "</select></label>"
+                "<button type=button class='cn-revoke cred-del'>Revoke and remove</button></div></div>")
+        doc.append("</div>")
     else:
-        rows.append(("claude.ai / Cowork (cloud)",
-                     "ANTHROPIC'S CLOUD - the browser product connects from their "
-                     "servers, so this console must be public, on https",
-                     "no", "Not on this console: it is not internet-facing, and by "
-                     "design Vantage never tunnels a private console to the internet. "
-                     "Use Claude Desktop or Code from inside the network instead."))
-    rows.append(("Built-in chat (API key)",
-                 "THIS CONSOLE ITSELF - no other software; the console calls "
-                 "Anthropic over the internet with a key you paste",
-                 "ready" if _haskey else "step",
-                 "Key set - the chat below works." if _haskey else
-                 "Paste an Anthropic API key in the API key tab below. Only for an "
-                 "estate you are happy touches the internet - a deliberately offline "
-                 "estate should not do this."))
-    rows.append(("Resident agent, local model",
-                 "A BOX ON THIS ESTATE - fully offline, a local model, no internet "
-                 "at any point",
-                 "soon", "The right answer for a disconnected estate. The one-press "
-                 "install is designed and not yet built; today you stand the agent up "
-                 "yourself and connect it like Claude Code."))
-    doc.append("<div class=cap-matrix>")
-    for label, where, st, what in rows:
-        badge = {"ready": "<span class='mod-b ok'>available</span>",
-                 "step": "<span class='mod-b drift'>one step away</span>",
-                 "no": "<span class='mod-b abs'>not on this console</span>",
-                 "soon": "<span class='mod-b abs'>designed, not built</span>"}[st]
-        doc.append(f"<div class=cap-row><div class=cap-h><b>{e(label)}</b>{badge}</div>"
-                   f"<div class=cap-where>connects from: {e(where)}</div>"
-                   f"<div class=cap-what>{e(what)}</div></div>")
-    doc.append("</div>")
-    doc.append("<p class=meta>The rule behind the reds: an estate is either "
-               "<b>connected</b> (you are happy it touches the internet) or "
-               "<b>disconnected</b> (private and deliberately offline - local models "
-               "only). Vantage never asks you to expose a privately hosted server to "
-               "the internet.</p>")
+        doc.append("<p class=doct>No agent connected yet. Add one below - it takes a minute, "
+                   "and you can revoke it any time.</p>")
 
-    doc.append("<h2 class=sec-eye>3 · Set it up</h2>")
+    doc.append("<h2 class=sec-eye>Add a connection</h2>")
     doc.append("<div class=route-tabs>"
                "<button type=button class='route-tab on' data-r=mcp>MCP connection</button>"
                "<button type=button class=route-tab data-r=apikey>Built-in chat (API key)</button>"
@@ -12759,35 +12606,136 @@ def render_agent(state):
                "OpenClaw up yourself and connect it with an MCP token from the socket tab.</span>"
                "</div></div>")
 
-    # PROPOSALS - the default posture, inline
-    doc.append("<h2 class=sec-eye>4 · Connected now</h2>")
-    if conns:
-        doc.append("<div class=conns>")
-        for c in conns:
-            rlabel = {"mcp": "MCP socket", "apikey": "API key",
-                      "the admin box": "OpenClaw"}.get(c.get("route"), c.get("route"))
-            au = c.get("autonomy", "observe")
-            opts = "".join(
-                f"<option value='{a}'" + (" selected" if a == au else "") + f">{a}</option>"
-                for a in AUTONOMY)
-            doc.append(
-                "<div class=conn data-id='" + e(c.get("id", "")) + "'>"
-                "<div class=conn-h><b>" + e(c.get("name", "")) + "</b>"
-                "<span class=conn-route>" + e(rlabel) + "</span></div>"
-                "<div class=conn-meta>" + (f"{c.get('calls', 0)} calls" if c.get("calls")
-                                           else "not used yet")
-                + (f" · last {e(str(c.get('last_used'))[:16])}" if c.get("last_used") else "")
-                + "</div>"
-                "<div class=conn-acts><label class=conn-au>Autonomy"
-                "<select class=cn-au>" + opts + "</select></label>"
-                "<button type=button class='cn-revoke cred-del'>Revoke and remove</button></div></div>")
-        doc.append("</div>")
-    else:
-        doc.append("<p class=doct>No agent connected yet. Set one up in section 3 above - it takes a minute, "
-                   "and you can revoke it any time.</p>")
+    # the explanation, for whoever pauses: one fold, opened by the operator, not by default
+    doc.append("<details class=ai-help><summary>How this works, which route fits, and what is in Vantage</summary>")
+    doc.append("<h3 class=sync-h>What a connection can and cannot do</h3>")
+    doc.append("<p class=doct>Agents connect to <b>this console</b>, not to each TAK "
+               "server - one connection sees every box this console manages. "
+               "<b>Reachability grants nothing:</b> being on the same network as the "
+               "console gives an AI no access at all. Access exists only when you mint "
+               "a connection below, and it grants exactly this, no more: read the "
+               "estate's health and servers, read credential <i>names</i> (never "
+               "secrets), <b>read</b> the Knowledge Vault (a connection can never "
+               "write it), and - at the level you choose - propose or run actions "
+               "from the gated catalogue. A connection can never change software, "
+               "never open a shell, never touch anything outside that list.</p>")
+    # AUTONOMY explainer
+    doc.append("<div class=agrid style='margin:6px 0 18px'>"
+               "<div class=mod><div class=mod-h><b>Observe</b>"
+               "<span class='mod-b abs'>read only</span></div>"
+               "<div class=mod-d>sees estate health, servers and the vault; changes nothing."
+               "</div></div>"
+               "<div class=mod><div class=mod-h><b>Propose</b>"
+               "<span class='mod-b drift'>human confirms</span></div>"
+               "<div class=mod-d>suggests gated actions that land below for you to run - the "
+               "default, and the safest place to start.</div></div>"
+               "<div class=mod><div class=mod-h><b>Act</b>"
+               "<span class='mod-b ok'>autonomous</span></div>"
+               "<div class=mod-d>runs its allowed actions directly, every one audited under "
+               "the connection's name. Your deliberate choice.</div></div></div>")
 
+    # Draw the line clearly (Matt): what ships in Vantage vs what is an estate build MilUX
+    # helps with. The connection HUB is the product; a resident agent or local model on your
+    # own hardware is a service.
+    doc.append("<h3 class=sync-h>Which route fits</h3>")
+    doc.append("<p class=doct>The difference between the routes is <b>where the "
+               "connection comes from</b>: your own computer, Anthropic's cloud, this "
+               "console itself, or a box on this estate.</p>")
+    rows = []
+    rows.append(("Claude Desktop / Claude Code",
+                 "YOUR OWN COMPUTER - the app or terminal tool runs on your machine, "
+                 "so only your machine needs to reach this console (LAN or VPN is "
+                 "enough)",
+                 "ready", "Create an MCP connection below and paste the config it "
+                 "shows you."))
+    if _https and _fq:
+        rows.append(("claude.ai / Cowork (cloud)",
+                     "ANTHROPIC'S CLOUD - the browser product connects from their "
+                     "servers, so this console must be public, on https",
+                     "ready", "This console serves https on a public name: create an "
+                     "MCP connection and give Cowork the endpoint and token."))
+    elif _fq:
+        rows.append(("claude.ai / Cowork (cloud)",
+                     "ANTHROPIC'S CLOUD - the browser product connects from their "
+                     "servers, so this console must be public, on https",
+                     "step", "This box has a public name but the console is on plain "
+                     "http - press the HTTPS button below first."))
+    else:
+        rows.append(("claude.ai / Cowork (cloud)",
+                     "ANTHROPIC'S CLOUD - the browser product connects from their "
+                     "servers, so this console must be public, on https",
+                     "no", "Not on this console: it is not internet-facing, and by "
+                     "design Vantage never tunnels a private console to the internet. "
+                     "Use Claude Desktop or Code from inside the network instead."))
+    rows.append(("Built-in chat (API key)",
+                 "THIS CONSOLE ITSELF - no other software; the console calls "
+                 "Anthropic over the internet with a key you paste",
+                 "ready" if _haskey else "step",
+                 "Key set - the chat below works." if _haskey else
+                 "Paste an Anthropic API key in the API key tab below. Only for an "
+                 "estate you are happy touches the internet - a deliberately offline "
+                 "estate should not do this."))
+    rows.append(("Resident agent, local model",
+                 "A BOX ON THIS ESTATE - fully offline, a local model, no internet "
+                 "at any point",
+                 "soon", "The right answer for a disconnected estate. The one-press "
+                 "install is designed and not yet built; today you stand the agent up "
+                 "yourself and connect it like Claude Code."))
+    doc.append("<div class=cap-matrix>")
+    for label, where, st, what in rows:
+        badge = {"ready": "<span class='mod-b ok'>available</span>",
+                 "step": "<span class='mod-b drift'>one step away</span>",
+                 "no": "<span class='mod-b abs'>not on this console</span>",
+                 "soon": "<span class='mod-b abs'>designed, not built</span>"}[st]
+        doc.append(f"<div class=cap-row><div class=cap-h><b>{e(label)}</b>{badge}</div>"
+                   f"<div class=cap-where>connects from: {e(where)}</div>"
+                   f"<div class=cap-what>{e(what)}</div></div>")
+    doc.append("</div>")
+    doc.append("<p class=meta>The rule behind the reds: an estate is either "
+               "<b>connected</b> (you are happy it touches the internet) or "
+               "<b>disconnected</b> (private and deliberately offline - local models "
+               "only). Vantage never asks you to expose a privately hosted server to "
+               "the internet.</p>")
+
+    doc.append("<h3 class=sync-h>What is in Vantage, and what we can help you build</h3>"
+               "<div class=agrid style='margin:6px 0 18px'>"
+               "<div class=mod><div class=mod-h><b>In Vantage, today</b>"
+               "<span class='mod-b ok'>self-serve</span></div>"
+               "<div class=mod-d>Everything on this page. Connect an MCP-capable agent, an API "
+               "key, or a resident agent; set its autonomy; it reads the estate and the "
+               "Knowledge Vault and, at the level you choose, proposes or runs gated actions. No "
+               "MilUX involvement, and no cost beyond the model you bring.</div></div>"
+               "<div class=mod><div class=mod-h><b>On your estate, with our help</b>"
+               "<span class='mod-b drift'>a conversation</span></div>"
+               "<div class=mod-d>A resident agent running on your own hardware, a local model for "
+               "a disconnected network, or an assistant wired into your own systems and data - "
+               "these are estate-specific builds. Vantage gives the connection point; standing "
+               "the agent up on your estate is where MilUX helps. Talk to us: "
+               "<b>matt@milux.co.uk</b>.</div></div></div>")
+
+    doc.append("</details>")
+    # CONNECTIONS
+    _ctx = load_agent_context_doc()
+    doc.append("<details class=ai-config><summary class=onto-sum>AI configuration "
+               "<span class=meta>- the identity and standing orders the built-in chat "
+               "and MCP-connected agents follow</span></summary>"
+               "<p class=meta>This is the assistant's setup, not estate knowledge, so "
+               "it lives here rather than in the Knowledge Vault. The built-in chat and "
+               "MCP-connected agents read it before answering. A <b>resident agent</b> "
+               "(ours is called " + e(inst["agent_name"]) + ") has its own identity on "
+               "its own box and does not use this.</p>"
+               "<form id=aicfg>")
+    for key, label, hint in AGENT_CONTEXT_FIELDS:
+        doc.append(f"<label class=fl>{e(label)}"
+                   f"<textarea id='ac-{key}' rows=4 spellcheck=false>"
+                   f"{e(_ctx.get(key, ''))}</textarea>"
+                   f"<span class=hint>{e(hint)}</span></label>")
+    doc.append("<div class=fedpop-act><button type=submit class='a-go confirm'>"
+               "Save AI configuration</button>"
+               "<span id=ac-res class=lib-status role=status "
+               "style='margin-left:10px'></span></div></form></details>")
     # ADD CONNECTION - the three routes
-    doc.append("<h2 class=sec-eye>5 · Watch it work</h2>")
+    doc.append("<h2 class=sec-eye>What the connections did</h2>")
     doc.append("<h3 class=sync-h>Proposals awaiting you</h3>")
     if not pending:
         doc.append("<p class=doct>Nothing to confirm. When a Propose-level agent suggests an "
@@ -12840,11 +12788,23 @@ def federation_nodes(state, cfg):
         name = t.get("name")
         label = t.get("label", name)
         grp = (fedgroups.get(name) or {})
+        # Every address this box answers to. A link may have dialled it by FQDN, by the
+        # address the console reaches it on (the collector's `host`), or by a raw IP either
+        # of those resolves to. Matching against the FQDN alone drew the box as a phantom
+        # partner beside itself whenever DNS did not agree - a kit LAN, a tailnet - and a
+        # group shared on both sides then read "no group - carries nothing". One set, used
+        # for every match below, so the map cannot disagree with itself.
+        _addr = t.get("link_host") or t.get("fqdn") or name
+        _ips = set()
+        for a in (_addr, t.get("fqdn"), t.get("host"), t.get("address"), name):
+            if a:
+                _ips |= _resolves_to(a)
         nodes.append({
             "name": name,
             "label": label,
             "short": label.split(" (")[0].strip() or name,
-            "address": t.get("link_host") or t.get("fqdn") or name,
+            "address": _addr,
+            "ips": sorted(_ips),
             "fed_on": fed_on,
             "federates": federates,
             "reachable": bool(t.get("reachable")),
@@ -12865,11 +12825,10 @@ def federation_map_data(state, cfg):
     names = {n["name"] for n in nodes}
     by_addr = {}
     for n in nodes:
+        # every name and address the box answers to - see federation_nodes for why the
+        # set exists (a link that dialled the reach address used to draw a phantom)
         aliases = [n.get("address"), n.get("label"), n.get("short"), n.get("name")]
-        # a recorded link may dial a managed box by any of its addresses, including a
-        # raw IP; resolve every alias so the edge lands on the box, not on a stranger
-        # (found live: a link to the firmbase's tailnet IP drew as an external partner)
-        aliases += list(_resolves_to(n.get("address")))
+        aliases += list(n.get("ips") or _resolves_to(n.get("address")))
         for a in aliases:
             if a:
                 by_addr[str(a).lower()] = n["name"]
@@ -12887,6 +12846,9 @@ def federation_map_data(state, cfg):
             continue
         peers_by_src[t["name"]] = {x.strip().lower()
                                    for x in (rec.get("detail") or "").split() if x.strip()}
+    # the wire peers ride on the node, so the page can say "sees on the wire: ..." per box
+    for n in nodes:
+        n["peers"] = sorted(peers_by_src.get(n["name"], set()))
     unmanaged, edges = {}, []
     for lk in load_fedlinks():
         src = lk.get("source")
@@ -12904,9 +12866,9 @@ def federation_map_data(state, cfg):
             to = uid
         src_node = next((n for n in nodes if n["name"] == src), None)
         to_node = next((n for n in nodes if n["name"] == to), None)
-        dst_ips = _resolves_to(addr) | (_resolves_to((to_node or {}).get("address")) if to_node
-                                        else set())
-        src_ips = _resolves_to((src_node or {}).get("address"))
+        dst_ips = _resolves_to(addr) | set((to_node or {}).get("ips")
+                                           or _resolves_to((to_node or {}).get("address")))
+        src_ips = set((src_node or {}).get("ips") or _resolves_to((src_node or {}).get("address")))
         if src in peers_by_src:
             live, basis = bool(dst_ips & peers_by_src[src]), "peers"
         elif to in peers_by_src:
@@ -12925,7 +12887,7 @@ def federation_map_data(state, cfg):
     # already-drawn partner becomes an external node with a live edge - unrecorded, but real.
     known_ips = {}
     for n in nodes:
-        for ip in _resolves_to(n.get("address")):
+        for ip in (n.get("ips") or _resolves_to(n.get("address"))):
             known_ips[ip] = n["name"]
     for u in unmanaged.values():
         for ip in _resolves_to(u.get("address")):
@@ -13047,15 +13009,12 @@ def group_words(pair, long=False):
 
 
 def render_federation(state):
-    """The interactive federation map: the estate's TAK servers as nodes, one line per federated
-    PAIR, and drag-a-link to federate two of them. A link is a gated action - dragging opens a
-    confirm, nothing federates until you click - so the map is a face on federation-connect,
-    federation-enable and federation-groups, not a way round them.
-
-    The map answers three questions and is judged on them: what is federated with what, which way
-    round it was made, and whether anything actually crosses. The third is the one that bites: a
-    link with no shared group is up and carries nothing, and a picture that shows the line but not
-    the group lets an operator believe a job is done when it is half done."""
+    """The federation page, detail first. It is judged on three questions: what is federated
+    with what, which way round, and whether anything actually crosses. Those answers lead:
+    a strip per server saying what it shares and what it can see on the wire, then one row
+    per link that opens to both sides' recorded group with dates, the dial addresses, and
+    a control that sets the group on the box. The map and the how-it-works are still here,
+    below and folded, because a picture is good for shape and bad for detail."""
     e = html.escape
     age = age_seconds(state.get("generated_at", ""))
     stale = age is None or age > STALE_AFTER
@@ -13064,9 +13023,13 @@ def render_federation(state):
     acts = enabled_actions(cfg)
     nodes, edges = federation_map_data(state, cfg)
     pairs = federation_link_pairs(nodes, edges)
+    by_name = {n["name"]: n for n in nodes}
     can_connect = "federation-connect" in acts
     can_enable = "federation-enable" in acts
     can_groups = "federation-groups" in acts
+
+    def when(ts):
+        return str(ts or "")[:16].replace("T", " ") or "never"
 
     doc = page_head("Federation — " + load_instance()["product_name"])
     doc.append(header_html(state, ev, age, "federation", crumb="Federation"))
@@ -13074,93 +13037,47 @@ def render_federation(state):
                f"{e(estate_summary(state, ev, stale, age))}</div>")
     doc.append("<main id=main class=wrap>")
     doc.append(stale_banner(age, stale))
-    doc.append("<section aria-label='Federation map'><div class=ah>"
-               "<h2 class=title>Federation fabric</h2><span class=meta>Your TAK servers, the "
-               "federation between them, and any external federate the servers can see on the "
-               "wire. <b>Drag a server</b> to arrange the map - positions are saved for every "
-               "operator. <b>Drag the ⚡ handle onto another server</b> to federate them, or onto "
-               "empty space to reach a partner you do not manage. Click anything for its details. "
-               "Nothing changes until you confirm.</span></div>")
+    doc.append("<section aria-label='Federation'><div class=ah>"
+               "<h2 class=title>Federation</h2><span class=meta>What is federated with what, "
+               "which side dialled, and what crosses. A link with no shared group is up and "
+               "carries nothing, and that is the usual reason a link looks fine and nobody sees "
+               "anything.</span></div>")
 
-    # Two things to get right, side by side, because operators conflate them: the link carries
-    # the connection, the group decides what goes down it. Numbered so the order is obvious.
-    doc.append("<div class=fedhow>"
-               "<div class=fedhow-c><h3>1 &middot; Make the link</h3><ol>"
-               "<li><b>Enable federation</b> on your server. One restart, opens port 9001.</li>"
-               "<li><b>Drag the ⚡ handle</b> onto the partner and confirm. One restart. Only one "
-               "side needs to do this - see <i>which way the arrow points</i> below.</li>"
-               "<li><b>Trust each other's CA.</b> Each side installs the other's federation CA. "
-               "The link goes live when both have.</li></ol></div>"
-               "<div class=fedhow-c><h3>2 &middot; Decide what crosses</h3><ol>"
-               "<li><b>Share federation group</b> on <b>both</b> servers, with the same group "
-               "name (MilUX&harr;MilUX across this estate).</li>"
-               "<li>Only clients in that group see the traffic that crosses.</li>"
-               "<li>A live link with no shared group is connected and <b>carries nothing</b>. "
-               "That is the usual reason a link looks fine and nobody sees anything.</li>"
-               "</ol></div></div>")
+    # ---- per server: what it shares, and what it can see ---------------------------------
+    managed = [n for n in nodes if n.get("managed")]
+    if managed:
+        doc.append("<div class=fedbox-strip>")
+        for n in managed:
+            partners = [p for p in pairs if n["name"] in (p["a"], p["b"])]
+            live = [p for p in partners if p["live"]]
+            if not n.get("fed_on"):
+                st = "<span class='fl-chip bad'>federation off</span>"
+            elif n.get("group"):
+                st = (f"<span class='fl-chip ok'>shares {e(n['group'])}</span> "
+                      f"<span class=meta>since {e(when(n.get('group_ts')))}</span>")
+            else:
+                st = "<span class='fl-chip bad'>no group</span> <span class=meta>nothing crosses from here</span>"
+            sees = ", ".join(e(x) for x in n.get("peers") or []) or "nothing"
+            doc.append(f"<div class=fedbox data-name='{e(n['name'])}'>"
+                       f"<div class=fedbox-h><b>{e(n['short'])}</b>{st}</div>"
+                       f"<div class=fedbox-m>{len(partners)} link{'s' if len(partners) != 1 else ''}, "
+                       f"{len(live)} live · {n.get('federates', 0)} federate(s) connected now"
+                       f"<br>sees on the wire: <span class=mono>{sees}</span></div></div>")
+        doc.append("</div>")
 
-    # Direction is the single most-asked question about this map, so it gets an answer on the
-    # page rather than in someone's head. One arrow is a complete, healthy link.
-    doc.append("<div class=feddir><b>Which way the arrow points.</b> An arrow shows <b>who dialled "
-               "whom</b>: the server the link was configured on points at the partner it calls. "
-               "<b>One arrow is a complete link.</b> Federation is not one-way - once the "
-               "connection is up and both sides share a group, events cross in both directions. "
-               "A double arrow just means both sides have configured a link, which works but is "
-               "usually redundant. A line with <b>no arrow</b> is a federate the servers can see "
-               "connected on the wire that was not set up from this console, so nobody here knows "
-               "which side dialled.</div>")
-
-    doc.append("<div class=fedlegend>"
-               "<span class=fl-g>Servers</span>"
-               "<span class=fl-i><span class='fl-dot on'></span>federation on</span>"
-               "<span class=fl-i><span class='fl-dot off'></span>standalone (federation off)</span>"
-               "<span class=fl-i><span class='fl-dot ext'></span>partner you do not manage</span>"
-               "<span class=fl-i><span class='fl-dot unrec'></span>external federate, seen on the "
-               "wire</span></div>")
-    doc.append("<div class=fedlegend>"
-               "<span class=fl-g>Links</span>"
-               "<span class=fl-i><span class='fl-edge live'></span>live (connected now)</span>"
-               "<span class=fl-i><span class='fl-edge'></span>configured (not connected)</span>"
-               "<span class=fl-i><span class='fl-edge arr'></span>who dialled</span>"
-               "<span class=fl-i><span class='fl-edge both'></span>both sides dialled</span>"
-               "<span class=fl-i><span class=fl-num>2</span>federates connected right now</span>"
-               "<span class=fl-i><span class='fl-chip ok'>MilUX</span>the group that crosses</span>"
-               "<span class=fl-i><span class='fl-chip bad'>MilUX (one side)</span>set on one "
-               "server only, so nothing crosses yet</span>"
-               "<span class=fl-i><span class='fl-chip bad'>no group</span>connected, carries "
-               "nothing</span></div>")
-
-    if not nodes:
-        doc.append("<div class=meta style='margin-top:8px'>No TAK servers in the estate yet.</div>")
-    elif not can_connect:
-        doc.append("<div class=meta style='margin-top:8px'>The map is read-only on this "
-                   "console: connecting servers from here is not switched on. It arrives "
-                   "when the federation action is enabled during enrolment.</div>")
-    payload = {"nodes": nodes, "pairs": pairs, "canConnect": can_connect,
-               "canEnable": can_enable, "canGroups": can_groups}
-    doc.append('<div class=fedmap-wrap><svg id=fedmap role=img '
-               "aria-label='Federation topology'></svg></div>")
-    doc.append('<script type="application/json" id=feddata>'
-               + json.dumps(payload).replace("<", "\\u003c") + "</script>")
-    doc.append("<div id=fedpop class=fedpop hidden></div>")
-
-    # The same facts as a table. A topology picture is good for shape and bad for detail, and
-    # "what exactly is federated with what" is a detail question - so it gets a table, readable
-    # by anyone who cannot or will not read the diagram.
+    # ---- every link, with the detail one click down ---------------------------------------
     doc.append("<h2 class=sec-eye>Every federation link</h2>")
     if not pairs:
-        doc.append("<p class=doct>Nothing is federated yet. Enable federation on a server, then "
-                   "drag its ⚡ handle onto another to make the first link.</p>")
+        doc.append("<p class=doct>Nothing is federated yet. Turn federation on for a server in the "
+                   "map below, then drag its ⚡ handle onto another to make the first link.</p>")
     else:
         doc.append("<div class=tablewrap><table class='dtable fedtbl'>"
                    "<thead><tr><th>Servers</th><th>Direction</th><th>Connection</th>"
-                   "<th>What crosses</th><th>Where it dials</th></tr></thead><tbody>")
+                   "<th>What crosses</th><th></th></tr></thead><tbody>")
         dirwords = {"a": "{a} dialled {b}", "b": "{b} dialled {a}",
                     "both": "both sides dialled a link",
                     "none": "seen connected on the wire; who dialled is not known here"}
-        for pr in pairs:
-            # a one-way link always reads dialler first, whichever way the pair happens to be
-            # stored: "Edge Kit ← Deployed" is a puzzle, "Deployed → Edge Kit" is a sentence
+        for i, pr in enumerate(pairs):
             left, right = pr["a_short"], pr["b_short"]
             if pr["dir"] == "b":
                 left, right = right, left
@@ -13168,36 +13085,107 @@ def render_federation(state):
             dw = dirwords[pr["dir"]].replace("{a}", pr["a_short"]).replace("{b}", pr["b_short"])
             gs = pr["group_state"]
             chip = "ok" if gs == "shared" else "warn" if gs == "our-side" else "bad"
-            dials = " · ".join(f"{lk['address']}:{lk['port']}" for lk in pr["links"]) or "—"
             if pr["live"] and pr.get("live_guess"):
-                conn = ("<span class=fl-cfg title='The server reports federates connected, but "
-                        "this checker is too old to say which link they are on.'>live?</span>")
+                conn = "<span class=fl-cfg title='The server reports federates connected, but this checker is too old to say which link.'>live?</span>"
             elif pr["live"]:
                 conn = "<span class=fl-live>live</span>"
             else:
                 conn = "<span class=fl-cfg>configured</span>"
-            doc.append(f"<tr><td><b>{e(left)}</b> "
-                       f"<span class=fedtbl-ar>{arrow}</span> "
-                       f"<b>{e(right)}</b></td>"
-                       f"<td class=fedtbl-m>{e(dw)}</td>"
-                       f"<td>{conn}</td>"
-                       f"<td><span class='fl-chip {chip}' "
-                       f"title='{e(group_words(pr, long=True))}'>{e(group_words(pr))}</span></td>"
-                       f"<td class=fedtbl-m>{e(dials)}</td></tr>")
+            rid = f"fedrow-{i}"
+            doc.append(f"<tr><td><b>{e(left)}</b> <span class=fedtbl-ar>{arrow}</span> <b>{e(right)}</b></td>"
+                       f"<td class=fedtbl-m>{e(dw)}</td><td>{conn}</td>"
+                       f"<td><span class='fl-chip {chip}' title='{e(group_words(pr, long=True))}'>"
+                       f"{e(group_words(pr))}</span></td>"
+                       f"<td><button type=button class='fedrow-open cred-refresh' aria-expanded=false "
+                       f"aria-controls={rid}>Detail</button></td></tr>")
+            # the detail row: both sides, the dials, and the control
+            sides = []
+            for nm in (pr["a"], pr["b"]):
+                nd = by_name.get(nm) or {}
+                if nd.get("managed"):
+                    g = nd.get("group")
+                    gtxt = (f"shares <b>{e(g)}</b> (set {e(when(nd.get('group_ts')))})" if g
+                            else "<b>no group set</b>")
+                    ctl = ""
+                    if can_groups:
+                        ctl = (f"<form class=fed-grp data-target='{e(nm)}'>"
+                               f"<input class=fed-grp-name value='{e(g or 'MilUX')}' "
+                               f"pattern='[A-Za-z0-9_-]{{1,40}}' maxlength=40 required>"
+                               f"<button type=submit class='fed-grp-go cred-refresh'>Share this group on {e(nd.get('short', nm))}</button></form>")
+                    sides.append(f"<div class=fedside><b>{e(nd.get('short', nm))}</b> {gtxt}"
+                                 f"<div class=meta>{nd.get('federates', 0)} federate(s) connected · "
+                                 f"sees <span class=mono>{e(', '.join(nd.get('peers') or []) or 'nothing')}</span></div>{ctl}</div>")
+                else:
+                    sides.append(f"<div class=fedside><b>{e(nd.get('short', nm))}</b> is not managed here: "
+                                 f"its group has to be set at their end, and this console cannot see whether it has been.</div>")
+            dials = "".join(f"<li><span class=mono>{e(lk['address'])}:{e(str(lk['port']))}</span> "
+                            f"dialled from {e(by_name.get(lk['from'], {}).get('short', lk['from']))}, "
+                            f"made {e(when(lk['ts']))}</li>" for lk in pr["links"]) or \
+                    "<li>no link recorded by this console; seen on the wire only</li>"
+            doc.append(f"<tr class=fedrow-detail id={rid} hidden><td colspan=5>"
+                       f"<div class=fedsides>{''.join(sides)}</div>"
+                       f"<div class=meta><b>What crosses:</b> {e(group_words(pr, long=True))}</div>"
+                       f"<ul class=fed-dials>{dials}</ul>"
+                       f"<div class=meta><b>CA trust:</b> not tracked here. Each side installs the other's "
+                       f"federation CA by hand; the link goes live only when both have, and this page "
+                       f"can only report the result, not the step.</div>"
+                       f"<div class='a-res fed-grp-res' role=status></div></td></tr>")
         doc.append("</tbody></table></div>")
         doc.append("<p class=doct>“What crosses” is what <b>this console</b> set with "
                    "<code>federation-groups</code>. A group set by hand on a server, or by "
-                   "someone else's console, is real but is not recorded here - run <b>Share "
-                   "federation group</b> from the console once and the map will know it.</p>")
+                   "someone else's console, is real but is not recorded here - share it from the row "
+                   "once and the page will know.</p>")
 
-    doc.append("<h2 class=sec-eye>What the map shows</h2>"
-               "<p class=doct>A line is a federation between two servers. It reads <b>live</b> "
-               "when the source server currently reports connected federates, and "
-               "<b>configured</b> until then. Dragging a link fills in "
-               "<code>federation-connect</code> and asks you to confirm; the box opens its "
-               "firewall for the federation port, edits CoreConfig and restarts once. A standalone "
-               "server is enabled first. Group mapping is a separate, deliberate step, so nothing "
-               "crosses a link until you map it. Every run is in the Operations audit log.</p>")
+    # ---- the map: shape, and the way to make a new link ------------------------------------
+    doc.append("<h2 class=sec-eye>Map</h2>")
+    if not nodes:
+        doc.append("<div class=meta>No TAK servers in the estate yet.</div>")
+    elif not can_connect:
+        doc.append("<div class=meta>The map is read-only on this console: connecting servers "
+                   "from here is not switched on. It arrives when the federation action is "
+                   "enabled during enrolment.</div>")
+    else:
+        doc.append("<div class=meta><b>Drag a server</b> to arrange the map. <b>Drag the ⚡ handle</b> "
+                   "onto another server to federate them, or onto empty space to reach a partner you "
+                   "do not manage. Nothing changes until you confirm.</div>")
+    payload = {"nodes": nodes, "pairs": pairs, "canConnect": can_connect,
+               "canEnable": can_enable, "canGroups": can_groups}
+    doc.append('<div class=fedmap-wrap><svg id=fedmap role=img aria-label="Federation topology"></svg></div>')
+    doc.append('<script type="application/json" id=feddata>'
+               + json.dumps(payload).replace("<", "\\u003c") + "</script>")
+    doc.append("<div id=fedpop class=fedpop hidden></div>")
+    doc.append("<div class=fedlegend>"
+               "<span class=fl-g>Servers</span>"
+               "<span class=fl-i><span class='fl-dot on'></span>federation on</span>"
+               "<span class=fl-i><span class='fl-dot off'></span>standalone</span>"
+               "<span class=fl-i><span class='fl-dot ext'></span>partner you do not manage</span>"
+               "<span class=fl-i><span class='fl-dot unrec'></span>seen on the wire</span>"
+               "<span class=fl-g>Links</span>"
+               "<span class=fl-i><span class='fl-edge live'></span>live</span>"
+               "<span class=fl-i><span class='fl-edge'></span>configured</span>"
+               "<span class=fl-i><span class='fl-edge arr'></span>who dialled</span></div>")
+
+    # ---- how it works, folded: for the operator who pauses -------------------------------
+    doc.append("<details class=fed-help><summary>How federation works, and which way the arrow points</summary>"
+               "<div class=fedhow>"
+               "<div class=fedhow-c><h3>1 &middot; Make the link</h3><ol>"
+               "<li><b>Enable federation</b> on your server. One restart, opens port 9001.</li>"
+               "<li><b>Drag the ⚡ handle</b> onto the partner and confirm. One restart. Only one "
+               "side needs to do this.</li>"
+               "<li><b>Trust each other's CA.</b> Each side installs the other's federation CA. "
+               "The link goes live when both have.</li></ol></div>"
+               "<div class=fedhow-c><h3>2 &middot; Decide what crosses</h3><ol>"
+               "<li><b>Share a federation group</b> on <b>both</b> servers, with the same name.</li>"
+               "<li>Only clients in that group see the traffic that crosses.</li>"
+               "<li>A live link with no shared group is connected and <b>carries nothing</b>.</li>"
+               "</ol></div></div>"
+               "<div class=feddir><b>Which way the arrow points.</b> An arrow shows <b>who dialled "
+               "whom</b>. <b>One arrow is a complete link</b>: federation is not one-way, and once "
+               "the connection is up and both sides share a group, events cross in both directions. "
+               "A double arrow means both sides configured a link, which works but is redundant. "
+               "A line with <b>no arrow</b> is a federate the servers can see on the wire that was "
+               "not set up from this console.</div></details>")
+    doc.append("</section>")
     doc.append(f"<script>{FEDERATION_JS}</script>")
     doc.append(footer_html(state, acts))
     return "".join(doc)
@@ -13229,1027 +13217,6 @@ SAMCHAT_JS = """
       .catch(function(e){wait.remove();add('err','Could not reach the console. '+e);})
       .finally(function(){btn.disabled=false;inp.disabled=false;inp.focus();});
   });
-})();
-"""
-
-
-# ---------- Networks: the Meshtastic TAK gateway (Spec 001) -------------------------
-# The bearer layer, distinct from Federation (TAK-to-TAK): networks that devices ride. First
-# member: a Meshtastic LoRa mesh bridged into TAK by the vendored gateway (ADR-002). Channels
-# are minted here - name plus 256-bit PSK - and held in the console's writable state; the PSK
-# is rendered ONLY inside the join QR image, never in page HTML, a URL or the audit trail.
-MESH_CHANNELS = os.environ.get("VANTAGE_CONSOLE_MESH_CHANNELS",
-                               "/var/lib/vantage-console/agent/mesh-channels.json")
-# Where each gateway box SITS (Spec 003). The mesh nodes carry their own GPS and place
-# themselves; the box does not - a Heltec V4 has no GPS, and the machine it is plugged into
-# has no idea where it is. So the operator places it, once, and the console remembers, the
-# same way it remembers federation-map positions. An unplaced box is drawn from its nodes'
-# centre and SAID to be unplaced: an inferred position that claims to be surveyed is the
-# kind of lie a map should never tell.
-MESH_POS = os.environ.get("VANTAGE_CONSOLE_MESH_POS",
-                          "/var/lib/vantage-console/agent/mesh-positions.json")
-# A node heard within this window is live on the map; older is stale but still drawn, because
-# "was here 40 minutes ago" is information and hiding it is not.
-MESH_FRESH_SECONDS = 15 * 60
-# The regions the console will program. A LoRa region is a legal setting, so the set is
-# deliberate: the two the reference estate actually operates in. Extending it is one line
-# here plus the deploy action's pattern - do it region by region, on purpose.
-MESH_REGIONS = {"EU_868": 3, "US": 1}          # meshtastic RegionCode enum values
-MESH_MODEM_SHORT_FAST = 6                       # ModemPreset enum: the estate's preset
-
-
-def _pb_varint(n):
-    out = bytearray()
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        out.append(b | (0x80 if n else 0))
-        if not n:
-            return bytes(out)
-
-
-def _pb_len(tag, payload):
-    return _pb_varint((tag << 3) | 2) + _pb_varint(len(payload)) + payload
-
-
-def _pb_uint(tag, n):
-    return _pb_varint(tag << 3) + _pb_varint(n)
-
-
-def mesh_channel_url(name, psk, region):
-    """The meshtastic.org join URL: a hand-encoded ChannelSet protobuf (settings + lora_config),
-    base64url, no padding. Field numbers verified against meshtastic/protobufs (apponly.proto,
-    channel.proto, config.proto). position_precision is 32 - full precision - because the
-    estate shipped a 5 km grid by accident once (LESSONS 20)."""
-    module = _pb_uint(1, 32)
-    settings = (_pb_len(2, psk) + _pb_len(3, name.encode())
-                + _pb_len(7, module))
-    lora = (_pb_uint(1, 1) + _pb_uint(2, MESH_MODEM_SHORT_FAST)
-            + _pb_uint(7, MESH_REGIONS[region]))
-    chset = _pb_len(1, settings) + _pb_len(2, lora)
-    return "https://meshtastic.org/e/#" + base64.urlsafe_b64encode(chset).decode().rstrip("=")
-
-
-def _pb_read_varint(b, i):
-    n = shift = 0
-    while True:
-        c = b[i]
-        i += 1
-        n |= (c & 0x7F) << shift
-        if not c & 0x80:
-            return n, i
-        shift += 7
-
-
-def mesh_channel_decode(url):
-    """(name, psk, region) from a meshtastic join URL, or None. The inverse of
-    mesh_channel_url, tolerant of URLs other tools made: repeated settings take the
-    primary (first), unknown fields are skipped, base64 padding is optional. Only what
-    the product mints is adopted: a named channel with a 256-bit key in a supported
-    region - a preset or 128-bit channel is refused rather than half-supported."""
-    try:
-        frag = url.split("#", 1)[1]
-        blob = base64.urlsafe_b64decode(frag + "=" * (-len(frag) % 4))
-        first_settings, lora = None, None
-        i = 0
-        while i < len(blob):
-            key, i = _pb_read_varint(blob, i)
-            tag, wire = key >> 3, key & 7
-            if wire == 2:
-                ln, i = _pb_read_varint(blob, i)
-                val = blob[i:i + ln]
-                i += ln
-                if tag == 1 and first_settings is None:
-                    first_settings = val
-                elif tag == 2:
-                    lora = val
-            elif wire == 0:
-                _, i = _pb_read_varint(blob, i)
-            elif wire == 5:
-                i += 4
-            else:
-                return None
-        if first_settings is None:
-            return None
-        name, psk = "", b""
-        i = 0
-        while i < len(first_settings):
-            key, i = _pb_read_varint(first_settings, i)
-            tag, wire = key >> 3, key & 7
-            if wire == 2:
-                ln, i = _pb_read_varint(first_settings, i)
-                val = first_settings[i:i + ln]
-                i += ln
-                if tag == 2:
-                    psk = val
-                elif tag == 3:
-                    name = val.decode("utf-8", "replace")
-            elif wire == 0:
-                _, i = _pb_read_varint(first_settings, i)
-            elif wire == 5:
-                i += 4
-            else:
-                return None
-        region_code = None
-        if lora:
-            i = 0
-            while i < len(lora):
-                key, i = _pb_read_varint(lora, i)
-                tag, wire = key >> 3, key & 7
-                if wire == 0:
-                    v, i = _pb_read_varint(lora, i)
-                    if tag == 7:
-                        region_code = v
-                elif wire == 2:
-                    ln, i = _pb_read_varint(lora, i)
-                    i += ln
-                elif wire == 5:
-                    i += 4
-                else:
-                    return None
-        rmap = {v: k for k, v in MESH_REGIONS.items()}
-        if len(psk) != 32 or not re.fullmatch(r"[A-Za-z0-9_-]{1,11}", name) \
-                or region_code not in rmap:
-            return None
-        return name, psk, rmap[region_code]
-    except Exception:
-        return None
-
-
-def networks_channel_adopt(data, client):
-    """Adopt an EXISTING network's channel from its join URL, so a running mesh comes
-    under Vantage without a single device rescanning (Spec 001 AC9). The URL is the one
-    moment the key transits a request - body, never a URL parameter, behind the operator
-    session - and it is never echoed or audited. The console then renders its own QR for
-    the channel: same name, key and region, position precision normalised to full."""
-    url = str((data or {}).get("url", ""))
-    if len(url) > 1024 or not url.startswith("https://meshtastic.org/e/#"):
-        return 400, {"error": "paste the channel's meshtastic.org/e/# join link"}
-    dec = mesh_channel_decode(url)
-    if not dec:
-        return 400, {"error": "that link does not decode to a channel this console "
-                              "manages: a named channel (up to 11 characters), 256-bit "
-                              "key, region " + " or ".join(sorted(MESH_REGIONS))}
-    name, psk, region = dec
-    channels = load_mesh_channels()
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rec = channels.get(name) or {"created": now}
-    rec.update({"psk_b64": base64.b64encode(psk).decode(), "region": region,
-                "adopted": now})
-    channels[name] = rec
-    try:
-        save_mesh_channels(channels)
-    except OSError as ex:
-        return 500, {"error": f"could not write the channel store: {ex}"[:200]}
-    audit({"action": "mesh-channel-adopt", "target": name, "result": "OK",
-           "client": client})
-    return 200, {"ok": True, "name": name, "region": region, "psk_stored": True,
-                 "adopted": True}
-
-
-def networks_channel_delete(data, client):
-    """Forget a channel: the console drops the name and key, so it can no longer render
-    the QR or apply the channel to a gateway. Devices already on the channel keep talking
-    to each other - deleting here revokes nothing on the air, and the confirm says so.
-    First live use found the gap: create existed, delete did not (Matt, 30 Aug 2026)."""
-    name = str((data or {}).get("name", ""))
-    if not re.match(r"^[A-Za-z0-9_-]{1,11}$", name):
-        return 400, {"error": "bad channel name"}
-    channels = load_mesh_channels()
-    if name not in channels:
-        return 400, {"error": f"no channel called {name}"}
-    del channels[name]
-    try:
-        save_mesh_channels(channels)
-    except OSError as ex:
-        return 500, {"error": f"could not write the channel store: {ex}"[:200]}
-    audit({"action": "mesh-channel-delete", "target": name, "result": "OK",
-           "client": client})
-    return 200, {"ok": True, "name": name, "deleted": True}
-
-
-def load_mesh_channels():
-    try:
-        with open(MESH_CHANNELS) as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_mesh_channels(channels):
-    os.makedirs(os.path.dirname(MESH_CHANNELS), exist_ok=True)
-    tmp = MESH_CHANNELS + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(channels, fh, indent=1)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, MESH_CHANNELS)
-
-
-def mesh_channel_url_for(name):
-    """The join URL for a stored channel, or None. The only reader of the stored PSK."""
-    ch = load_mesh_channels().get(name)
-    if not ch:
-        return None
-    try:
-        psk = base64.b64decode(ch.get("psk_b64", ""))
-        if len(psk) != 32 or ch.get("region") not in MESH_REGIONS:
-            return None
-        return mesh_channel_url(name, psk, ch["region"])
-    except Exception:
-        return None
-
-
-def networks_channel_create(data, client):
-    """Create a channel, or rotate an existing one's PSK. The response says the PSK was
-    stored; it never carries it."""
-    name = str((data or {}).get("name", ""))
-    region = str((data or {}).get("region", ""))
-    if not re.match(r"^[A-Za-z0-9_-]{1,11}$", name):
-        return 400, {"error": "channel name: 1 to 11 characters, letters, digits, - and _"}
-    if region not in MESH_REGIONS:
-        return 400, {"error": "region must be one of: " + ", ".join(sorted(MESH_REGIONS))}
-    channels = load_mesh_channels()
-    rotated = name in channels
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rec = channels.get(name) or {"created": now}
-    rec.update({"psk_b64": base64.b64encode(os.urandom(32)).decode(),
-                "region": region})
-    if rotated:
-        rec["rotated"] = now
-    channels[name] = rec
-    try:
-        save_mesh_channels(channels)
-    except OSError as ex:
-        return 500, {"error": f"could not write the channel store: {ex}"[:200]}
-    audit({"action": "mesh-channel-rotate" if rotated else "mesh-channel-create",
-           "target": name, "result": "OK", "client": client})
-    return 200, {"ok": True, "name": name, "region": region, "psk_stored": True,
-                 "rotated": rotated}
-
-
-def networks_channel_qr(name):
-    """The join QR as a PNG, rendered by qrencode on the console box (the /eud pattern).
-    Returns PNG bytes, or None when the channel is unknown or qrencode is absent. The QR
-    payload embeds the PSK - that is how Meshtastic joining works - so this endpoint sits
-    behind the operator session like every /api path."""
-    url = mesh_channel_url_for(name)
-    if not url:
-        return None
-    try:
-        png = subprocess.run(["qrencode", "-t", "PNG", "-s", "6", "-m", "2", "-o", "-", url],
-                             capture_output=True, timeout=10).stdout
-    except Exception:
-        png = b""
-    return png or None
-
-
-# ---------- the mesh map (Spec 003): where the network actually is ----------------------------
-def load_mesh_pos():
-    try:
-        with open(MESH_POS) as fh:
-            d = json.load(fh)
-        return {k: v for k, v in d.items() if isinstance(v, dict)} if isinstance(d, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_mesh_pos(box, lat, lon):
-    """Place a gateway box on the map. Estate state, not a browser preference: stored
-    server-side so another operator, another browser and a refresh all see the same map."""
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", str(box or "")):
-        return False
-    try:
-        lat, lon = float(lat), float(lon)
-    except (TypeError, ValueError):
-        return False
-    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        return False
-    pos = load_mesh_pos()
-    pos[str(box)] = {"lat": round(lat, 6), "lon": round(lon, 6),
-                     "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-    try:
-        os.makedirs(os.path.dirname(MESH_POS), exist_ok=True)
-        tmp = MESH_POS + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(pos, fh, indent=2)
-        os.replace(tmp, MESH_POS)
-        return True
-    except OSError:
-        return False
-
-
-def _snr_band(snr):
-    """Meshtastic's own rule of thumb for a LoRa link, in three words an operator can act on."""
-    if snr is None:
-        return "unknown"
-    return "good" if snr >= 5 else ("fair" if snr >= -7 else "poor")
-
-
-def mesh_map_data(state, box):
-    """Everything the map draws for one gateway box, or None when that box runs no mesh.
-
-    Three honesty rules earn their place here, because a map is believed in a way a table is
-    not. A node the gateway has never had a position for is NOT plotted - it is listed as
-    reporting without a position, which is a real and different state from absent. The link
-    from gateway to node is drawn only when we know where BOTH ends are, and a multi-hop node
-    gets a link marked with its hop count rather than a route: Meshtastic tells us how many
-    hops a packet took, never which nodes relayed it, so the path between the ends is unknown
-    and the map must not invent one. And an unplaced box is centred on its nodes so the
-    operator sees something, with placed=False so the page can say the centre is inferred."""
-    t = next((x for x in state.get("targets", []) if x.get("name") == box), None)
-    m = (t or {}).get("mesh") or {}
-    if not t or not m:
-        return None
-    now = datetime.now(timezone.utc)
-    nodes, unplaced, unheard = [], [], []
-    for raw in (m.get("nodes") or [])[:250]:
-        if not isinstance(raw, dict):
-            continue
-        heard = str(raw.get("heard") or "")
-        age = age_seconds(heard) if heard else None
-        try:
-            hops = int(raw["hops"]) if raw.get("hops") is not None else None
-        except (TypeError, ValueError):
-            hops = None
-        try:
-            snr = float(raw["snr"]) if raw.get("snr") is not None else None
-        except (TypeError, ValueError):
-            snr = None
-        # Three states, not two. A node this gateway has HEARD is on the mesh. A node it has
-        # only read out of the radio's stored database has never been heard by it at all -
-        # it may be switched off, or long gone, or renamed. Filing that under "no GPS fix"
-        # would be a quiet lie about a device that may not be there (found live 31 Aug: a
-        # tracker renamed months ago, plus a nodedb entry for one that was never on).
-        n = {"id": str(raw.get("id", ""))[:16], "name": str(raw.get("name", ""))[:32],
-             "battery": raw.get("battery") or 0, "heard": heard, "age": age,
-             "fresh": age is not None and age <= MESH_FRESH_SECONDS,
-             "heard_here": bool(raw.get("heard_here", True)) if "heard_here" in raw
-             else bool(heard),
-             "snr": snr, "band": _snr_band(snr), "hops": hops}
-        if not n["heard_here"]:
-            unheard.append(n)
-            continue
-        try:
-            lat, lon = float(raw["lat"]), float(raw["lon"])
-        except (TypeError, ValueError, KeyError):
-            unplaced.append(n)
-            continue
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            unplaced.append(n)
-            continue
-        n["lat"], n["lon"] = lat, lon
-        nodes.append(n)
-    saved = (load_mesh_pos().get(box) or {})
-    try:
-        glat, glon, placed = float(saved["lat"]), float(saved["lon"]), True
-    except (TypeError, ValueError, KeyError):
-        placed = False
-        glat = sum(n["lat"] for n in nodes) / len(nodes) if nodes else None
-        glon = sum(n["lon"] for n in nodes) / len(nodes) if nodes else None
-    gateway = {"box": box, "label": t.get("label", box), "lat": glat, "lon": glon,
-               "placed": placed, "placed_ts": saved.get("ts", ""),
-               "state": ("no radio" if not m.get("radio_present")
-                         else "flowing" if m.get("last_forwarded") else "quiet"),
-               "last_forwarded": m.get("last_forwarded") or "",
-               "nodes_seen": m.get("nodes_seen", 0)}
-    links = []
-    if glat is not None and glon is not None:
-        for n in nodes:
-            links.append({"id": n["id"], "lat": n["lat"], "lon": n["lon"],
-                          "hops": n["hops"], "band": n["band"], "snr": n["snr"],
-                          "fresh": n["fresh"],
-                          # direct means the gateway's own radio heard it: one link we can
-                          # draw as a real line. Anything else is "reached, via unknown".
-                          "direct": n["hops"] == 0,
-                          "known": n["hops"] is not None})
-    # the gateway can report a node count without a node list - an older gateway that has
-    # not been re-cut. Saying so is the difference between "no map yet" and "mesh is empty".
-    reports_nodes = isinstance(m.get("nodes"), list)
-    return {"gateway": gateway, "nodes": nodes, "unplaced": unplaced,
-            "unheard": unheard, "links": links,
-            "reports_nodes": reports_nodes,
-            "generated_at": state.get("generated_at", ""),
-            "now": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
-
-
-def mesh_boxes(state):
-    """The boxes that run a mesh gateway, in estate order. The map is per box: one gateway,
-    one radio, one mesh - an estate-wide overlay of three separate meshes would say that
-    nodes on different radios can hear each other, and they cannot."""
-    return [t.get("name") for t in state.get("targets", [])
-            if (t.get("mesh") or {}) and t.get("name")]
-
-
-def networks_map(box, state):
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", str(box or "")):
-        return 400, {"error": "bad box name"}
-    data = mesh_map_data(state, box)
-    if data is None:
-        return 404, {"error": f"no mesh gateway on a box called '{box}'"}
-    return 200, data
-
-
-def networks_gwpos(data, client):
-    """Place (or move) a gateway box on the map."""
-    box = str((data or {}).get("box", ""))
-    if not save_mesh_pos(box, (data or {}).get("lat"), (data or {}).get("lon")):
-        return 400, {"error": "box, lat and lon: a known box name and a real position"}
-    audit({"action": "mesh-gateway-place", "target": box, "result": "OK", "client": client})
-    return 200, {"ok": True, "box": box}
-
-
-def render_networks(state):
-    """The Networks page: mesh status per box, the map of each mesh, the channel manager,
-    deploy, and the kit guide - what to buy and how to stand it up, on the page and not in
-    anyone's head."""
-    e = html.escape
-    age = age_seconds(state.get("generated_at", ""))
-    stale = age is None or age > STALE_AFTER
-    ev = state.get("estate_result", "UNKNOWN")
-    cfg = load_actions_config()
-    acts = enabled_actions(cfg)
-    act_targets = set((cfg or {}).get("targets", {}).keys())
-    targets = state.get("targets", [])
-    channels = load_mesh_channels()
-
-    doc = page_head("Networks — " + load_instance()["product_name"])
-    doc.append(header_html(state, ev, age, "networks", crumb="Networks"))
-    doc.append(f"<div class='vband {e(ev)}'><span class=vdot></span>"
-               f"{e(estate_summary(state, ev, stale, age))}</div>")
-    doc.append("<main id=main class=wrap>")
-    doc.append(stale_banner(age, stale))
-
-    # -- mesh status: what the heartbeat proves, box by box. Output, not process: a unit
-    # can be active with a dead radio or an empty mesh, so the row says what actually flowed.
-    doc.append("<section aria-label='Meshtastic mesh'><div class=ah>"
-               "<h2 class=title>Meshtastic mesh</h2><span class=meta>Low-bandwidth LoRa "
-               "radio mesh bridged into TAK: trackers and phones on the mesh appear as "
-               "markers on every authenticated client in the gateway's filter group. No "
-               "internet, no SIM, no infrastructure.</span></div>")
-    rows = []
-    for t in targets:
-        m = t.get("mesh") or {}
-        if not m:
-            continue
-        name = t.get("name", "")
-        fwd = m.get("last_forwarded")
-        radio_ok = bool(m.get("radio_present"))
-        st = ("flowing" if fwd else ("no radio" if not radio_ok else "quiet"))
-        # Each box's row opens onto its own map. The row stays the summary it always was -
-        # the operator who only wants to know whether packets flow reads it and moves on -
-        # and the map is one click under it for the operator who wants to SEE the mesh.
-        rows.append("<tr class=mesh-row><td>" + e(t.get("label", name)) + "</td>"
-                    "<td>" + e(m.get("gateway", "?")) + "</td>"
-                    "<td>" + ("present" if radio_ok else "MISSING") + "</td>"
-                    "<td>" + e(str(fwd or "never")) + "</td>"
-                    "<td>" + e(str(m.get("nodes_seen", 0))) + "</td>"
-                    "<td>" + e(st) + "</td>"
-                    "<td class=mesh-mapcell><button type=button class=mesh-toggle "
-                    f"data-box='{e(name)}' aria-expanded=false "
-                    f"aria-controls='meshmap-{e(name)}'>"
-                    "<span class=chev></span>Map</button></td></tr>")
-        rows.append(f"<tr class=mesh-maprow id='meshmap-{e(name)}' hidden>"
-                    "<td colspan=7><div class=meshmap-panel "
-                    f"data-box='{e(name)}'></div></td></tr>")
-    if rows:
-        doc.append("<div class=tablewrap><table class='dtable mesh-table'>"
-                   "<tr><th>Box</th><th>Gateway</th><th>Radio</th><th>Last packet "
-                   "forwarded</th><th>Nodes seen</th><th>Mesh</th><th></th></tr>"
-                   + "".join(rows) + "</table></div>")
-    else:
-        doc.append("<p class=doct>No box runs a mesh gateway yet. Deploy one below - the "
-                   "kit guide at the foot of the page says what to plug in first.</p>")
-    doc.append("</section>")
-
-    # -- channels: minted here, applied to gateways, joined by scanning. The QR embeds the
-    # PSK (that is how Meshtastic joining works); the page itself never carries it.
-    doc.append("<section aria-label='Channels'><div class=ah>"
-               "<h2 class=title>Channels</h2><span class=meta>A channel is a name and a "
-               "256-bit key. Devices join by scanning its QR in the Meshtastic app; the "
-               "gateway joins when you deploy it or apply the channel. Rotating a channel "
-               "mints a new key: devices on the old one drop until they scan the new "
-               "QR.</span></div>")
-    if channels:
-        for name in sorted(channels):
-            ch = channels[name]
-            doc.append(
-                "<div class=meshchan><div class=mc-meta>"
-                f"<b>{e(name)}</b><span class=hint>region {e(ch.get('region', '?'))}"
-                + (" · rotated " + e(str(ch.get("rotated", ""))[:10])
-                   if ch.get("rotated") else
-                   " · created " + e(str(ch.get("created", ""))[:10])) + "</span>"
-                f"<button type=button class=mc-rotate data-name='{e(name)}' "
-                f"data-region='{e(ch.get('region', ''))}'>Rotate key</button>"
-                f"<button type=button class='mc-rotate mc-del' data-name='{e(name)}'>"
-                "Delete</button></div>"
-                f"<img class=mc-qr alt='Join QR for channel {e(name)}' "
-                f"src='/api/networks/channel/qr?name={e(name)}' "
-                "onerror=\"this.replaceWith('QR needs qrencode on the console box')\">"
-                "</div>")
-    else:
-        doc.append("<p class=doct>No channels yet. The first deploy needs one.</p>")
-    doc.append("<div class=mc-new><label class=fl>Channel name"
-               "<input id=mc-name maxlength=11 placeholder='e.g. OPS-MESH'></label>"
-               "<label class=fl>Region<select id=mc-region>"
-               + "".join(f"<option>{e(r)}</option>" for r in sorted(MESH_REGIONS)) +
-               "</select><span class=hint>a legal setting: the region of the country you "
-               "operate in. Re-check before transmitting abroad, and re-apply on "
-               "return.</span></label>"
-               "<button type=button class=a-go id=mc-create>Create channel</button>"
-               "<span id=mc-res class=lib-status role=status></span></div>")
-    doc.append("<div class=mc-new><label class=fl>Adopt an existing channel"
-               "<input id=mc-adopt type=password autocomplete=off "
-               "placeholder='https://meshtastic.org/e/#...'>"
-               "<span class=hint>already running a mesh? Paste its channel link (the "
-               "Meshtastic app: channel > share, or the QR's URL) and this console takes "
-               "it over - no device rescans, and the deploy below can target it</span>"
-               "</label>"
-               "<button type=button class=a-go id=mc-adoptgo>Adopt channel</button>"
-               "<span id=mc-adoptres class=lib-status role=status></span></div>")
-    doc.append("</section>")
-
-    # -- deploy: the gateway to a box of the operator's choice, as a gated job
-    can_deploy = "deploy-mesh-gateway" in acts
-    doc.append("<section aria-label='Deploy gateway'><div class=ah>"
-               "<h2 class=title>Deploy a gateway</h2><span class=meta>Plug the radio into "
-               "the box first. The deploy installs the gateway in its own environment, "
-               "points it at the radio, creates the TAK input with its filter group, and "
-               "starts the service. TAK Server restarts once.</span></div>")
-    bundles = []
-    try:
-        bundles = sorted(f for f in os.listdir(os.path.join(STORE_ROOT, "mesh-gateway"))
-                         if f.endswith(".tgz"))
-    except OSError:
-        pass
-    if not can_deploy:
-        doc.append("<p class=doct>The deploy-mesh-gateway action is not enabled on this "
-                   "console. Re-run enrolment on a box to add it, then return here.</p>")
-    elif not channels:
-        doc.append("<p class=doct>Create a channel above first - the gateway joins it as "
-                   "part of the deploy.</p>")
-    elif not bundles:
-        doc.append("<p class=doct>No gateway bundle on the shelf. Cut one with "
-                   "cut-bundle.sh (it vendors the patched gateway and its wheels), then "
-                   "upload it to <a href='/store'>Store</a> > mesh-gateway and return "
-                   "here.</p>")
-    else:
-        opts = "".join(f"<option>{e(t.get('name', ''))}</option>" for t in targets
-                       if t.get("name") in act_targets)
-        chopts = "".join(f"<option>{e(n)}</option>" for n in sorted(channels))
-        bopts = "".join(f"<option>{e(b)}</option>" for b in bundles)
-        doc.append(
-            "<div class=mc-new>"
-            "<label class=fl>Box<select id=md-target>" + opts + "</select></label>"
-            "<label class=fl>Radio serial device<input id=md-serial "
-            "placeholder='/dev/serial/by-id/usb-...'>"
-            "<span class=hint>on the box: ls -l /dev/serial/by-id/ - use the by-id path, "
-            "never ttyACM0, those renumber on reboot</span></label>"
-            "<label class=fl>Region<select id=md-region>"
-            + "".join(f"<option>{e(r)}</option>" for r in sorted(MESH_REGIONS))
-            + "</select></label>"
-            "<label class=fl>Channel<select id=md-channel>" + chopts + "</select></label>"
-            "<label class=fl>TAK filter group<input id=md-group value='mesh' maxlength=40>"
-            "<span class=hint>only clients whose certificate carries this group see mesh "
-            "markers - set at creation, the input manager cannot add it later</span></label>"
-            "<label class=fl>Gateway bundle<select id=md-bundle>" + bopts + "</select>"
-            "<span class=hint>from Store > mesh-gateway; pushed to the box and verified "
-            "by hash at both ends</span></label>"
-            "<button type=button class='a-go confirm' id=md-go>Deploy gateway</button>"
-            "<span id=md-res class=lib-status role=status></span>"
-            "<pre id=md-log class=deplog hidden></pre></div>")
-    doc.append("</section>")
-
-    # -- the kit guide: full instructions and the recommended hardware, on the page
-    doc.append(
-        "<section aria-label='Kit guide'><div class=ah>"
-        "<h2 class=title>Kit guide</h2><span class=meta>What to buy and how to stand a "
-        "mesh up, end to end.</span></div>"
-        "<h3 class=mc-h>Recommended hardware</h3>"
-        "<ul class=mc-list>"
-        "<li><b>Gateway radio: Heltec V4</b> (ESP32, USB-C). Proven on the reference "
-        "estate. One free USB port on the box and a USB-C data cable - check the cable "
-        "carries data, not just charge.</li>"
-        "<li><b>Trackers: Seeed T1000-E</b> (card-sized, GPS, days of battery). Run "
-        "Meshtastic firmware <b>2.6.11</b>: 2.7.x has a GPS-detection regression on this "
-        "hardware. Verify GPS on one device before rolling any new firmware to the "
-        "fleet.</li>"
-        "<li><b>Phones and EUDs</b>: install the Meshtastic app, scan the channel QR "
-        "above, pair a radio over Bluetooth or USB.</li>"
-        "<li><b>Antennas</b>: use the fitted 868 MHz antenna or better. Gateway transmit "
-        "power defaults low for the bench; raise it for the field within your region's "
-        "ERP cap (14 dBm in EU_868).</li></ul>"
-        "<h3 class=mc-h>Standing it up</h3>"
-        "<ol class=mc-list>"
-        "<li>Plug the gateway radio into the box. Find its stable path: "
-        "<code>ls -l /dev/serial/by-id/</code>.</li>"
-        "<li>Create a channel above, in your region.</li>"
-        "<li>Deploy the gateway to the box: radio path, region, channel, filter group. "
-        "TAK Server restarts once.</li>"
-        "<li>On each tracker and phone: Meshtastic app, scan the channel QR, set the "
-        "same region.</li>"
-        "<li>Prove it end to end: a marker from a tracker on a TAK client that signed in "
-        "normally. The mesh table above shows the last packet forwarded - a running "
-        "gateway that has never forwarded is quiet, not healthy.</li></ol>"
-        "</section>")
-
-    doc.append("</main>")
-    # The map's configuration, as data rather than as generated JavaScript: the key and the
-    # freshness window are read out of a JSON blob the page cannot be tricked into executing.
-    inst = load_instance()
-    doc.append("<script type=application/json id=meshmap-cfg>"
-               + json.dumps({"key": inst.get("maps_key", ""),
-                             "fresh": MESH_FRESH_SECONDS}).replace("<", "\\u003c")
-               + "</script>")
-    doc.append(f"<script>{NETWORKS_JS}</script>")
-    doc.append("</body></html>")
-    return "".join(doc)
-
-
-NETWORKS_JS = r"""
-(function(){
-  function J(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){
-      return {code:r.status,j:j};});});}
-  var cr=document.getElementById('mc-create');
-  if(cr)cr.onclick=function(){
-    var res=document.getElementById('mc-res');
-    J('/api/networks/channel',{name:(document.getElementById('mc-name').value||'').trim(),
-                               region:document.getElementById('mc-region').value})
-      .then(function(x){if(x.code===200){location.reload();}
-        else{res.textContent=x.j.error||'failed';}})
-      .catch(function(){res.textContent='could not reach the console';});};
-  var ad=document.getElementById('mc-adoptgo');
-  if(ad)ad.onclick=function(){
-    var res=document.getElementById('mc-adoptres');
-    var f=document.getElementById('mc-adopt');
-    J('/api/networks/channel/adopt',{url:(f.value||'').trim()})
-      .then(function(x){if(x.code===200){f.value='';location.reload();}
-        else{res.textContent=x.j.error||'failed';}})
-      .catch(function(){res.textContent='could not reach the console';});};
-  Array.prototype.forEach.call(document.querySelectorAll('.mc-rotate'),function(b){
-    b.onclick=function(){
-      if(!confirm('Rotate the key for "'+b.dataset.name+'"? Devices on the old key drop '
-                  +'until they scan the new QR, and the gateway needs the channel '
-                  +'re-applied.'))return;
-      J('/api/networks/channel',{name:b.dataset.name,region:b.dataset.region})
-        .then(function(x){if(x.code===200){location.reload();}else{alert(x.j.error||'failed');}});};});
-  Array.prototype.forEach.call(document.querySelectorAll('.mc-del'),function(b){
-    b.onclick=function(){
-      if(!confirm('Delete channel "'+b.dataset.name+'" from this console? Devices on it '
-                  +'keep working - this only forgets the key here, so the QR and the '
-                  +'apply action are gone. There is no undo.'))return;
-      J('/api/networks/channel/delete',{name:b.dataset.name})
-        .then(function(x){if(x.code===200){location.reload();}else{alert(x.j.error||'failed');}});};});
-  var go=document.getElementById('md-go');
-  if(go)go.onclick=function(){
-    var res=document.getElementById('md-res'), log=document.getElementById('md-log');
-    var target=document.getElementById('md-target').value;
-    var inputs={serial:(document.getElementById('md-serial').value||'').trim(),
-                region:document.getElementById('md-region').value,
-                channel:document.getElementById('md-channel').value,
-                filter_group:(document.getElementById('md-group').value||'').trim(),
-                bundle_file:document.getElementById('md-bundle').value};
-    if(!confirm('Deploy the Meshtastic TAK gateway to '+target+': radio '+inputs.serial
-                +', region '+inputs.region+', channel '+inputs.channel
-                +'. TAK Server restarts once - a brief outage.'))return;
-    go.disabled=true;res.textContent='starting…';
-    J('/api/action/deploy-mesh-gateway',{target:target,inputs:inputs,confirm:true})
-      .then(function(x){
-        if(x.code!==200){res.textContent=x.j.error||'refused';go.disabled=false;return;}
-        res.textContent='running (job '+x.j.job+')';log.hidden=false;
-        var poll=setInterval(function(){
-          fetch('/api/job/'+x.j.job).then(function(r){return r.json();}).then(function(j){
-            if(j.log)log.textContent=j.log;log.scrollTop=log.scrollHeight;
-            if(j.status&&j.status!=='running'){clearInterval(poll);go.disabled=false;
-              res.textContent=(j.status==='done')?'done - check the mesh table after the '
-                +'next health sweep':'failed - read the log';}});},3000);})
-      .catch(function(){res.textContent='could not reach the console';go.disabled=false;});};
-
-  // ---- the mesh map (Spec 003) ---------------------------------------------------------
-  // One map per gateway box, opened from that box's row. Google Maps where a key is set and
-  // the browser can reach Google; a self-contained plan view otherwise, because a console on
-  // a closed network still has to be able to SEE its mesh. Both draw the same three things:
-  // where the gateway is, where the nodes are, and what the gateway can actually hear.
-  var CFG={};
-  try{CFG=JSON.parse(document.getElementById('meshmap-cfg').textContent)||{};}catch(e){}
-  // idle -> loading -> ready | failed | authfail | nokey
-  var gmapsState=CFG.key?'idle':'nokey';
-  var gmapsWaiting=[];
-  var gmapsDrawn=[];   // panels already drawn with Google, so a late failure can redraw them
-
-  // A REJECTED key is not the same as no key and not the same as no network: Google's script
-  // loads perfectly, calls our callback, and only then refuses to draw - leaving its own grey
-  // "didn't load correctly" box where the mesh should be. gm_authFailure is Google's documented
-  // signal for exactly that, and it can arrive after we have already drawn. Found by looking at
-  // the page with a bad key: without this, a mistyped key or a referrer restriction that does
-  // not include this console silently costs the operator the map.
-  window.gm_authFailure=function(){fallBackEveryPanel();};
-
-  function toPlan(panel,data){
-    var canvas=panel.querySelector('.meshmap-canvas');
-    if(!canvas)return;
-    canvas.innerHTML='';
-    planView(canvas,data);
-    noteFallback(panel);}
-
-  function fallBackEveryPanel(){
-    gmapsState='authfail';
-    var q=gmapsDrawn; gmapsDrawn=[];
-    q.forEach(function(entry){toPlan(entry.panel,entry.data);});}
-
-  // Did a basemap actually appear? That is the only question worth asking, and 'tilesloaded'
-  // is Google's own answer to it. Everything else we tried was unreliable: gm_authFailure is
-  // DELETED by the API as it registers, so it cannot be counted on to fire; and Google's grey
-  // error box appears late, at no fixed moment, and on a rejected key sometimes not at all -
-  // measured across runs on this page, one run left a blank map with no error box whatsoever.
-  //
-  // tilesloaded covers every way this fails with one check - bad key, a referrer restriction
-  // that does not list this console, quota, no route to Google, tiles blocked upstream -
-  // because all of them end the same way: no basemap. No tiles inside the window means the
-  // operator gets the plan view and a sentence naming the likely cause, never a blank rectangle
-  // with lines floating on it.
-  function watchGoogleDrew(map,panel,data){
-    var settled=false;
-    var give_up=setTimeout(function(){
-      if(settled)return;
-      settled=true;
-      fallBackEveryPanel();
-      toPlan(panel,data);},6000);
-    try{
-      google.maps.event.addListenerOnce(map,'tilesloaded',function(){
-        settled=true; clearTimeout(give_up);});
-    }catch(e){ /* no event bus means no map; the timeout below still rescues the panel */ }}
-
-  function fallbackWords(){
-    if(gmapsState==='nokey')return 'plan view: no Google Maps key set (Customize > Maps key)';
-    if(gmapsState==='authfail')return 'plan view: Google rejected this Maps key - check the key '
-      +'and that its referrer restriction allows this console';
-    return 'plan view: Google Maps did not load - this browser has no route to it';}
-
-  function noteFallback(panel){
-    var n=panel.querySelector('.meshmap-note');
-    if(n&&n.textContent.indexOf('plan view')<0)n.textContent=n.textContent+' · '+fallbackWords();}
-
-  function loadGoogleMaps(cb){
-    if(gmapsState==='ready'){cb(true);return;}
-    if(gmapsState==='failed'||gmapsState==='nokey'){cb(false);return;}
-    gmapsWaiting.push(cb);
-    if(gmapsState==='loading')return;
-    gmapsState='loading';
-    var done=function(ok){
-      gmapsState=ok?'ready':'failed';
-      var q=gmapsWaiting;gmapsWaiting=[];
-      q.forEach(function(f){f(ok);});};
-    // A blocked or absent network makes the script tag fire onerror; some proxies instead
-    // serve something that never calls back, so a timeout is the second guard. Either way
-    // the map falls back rather than sitting on a blank grey square for ever.
-    var to=setTimeout(function(){if(gmapsState==='loading')done(false);},8000);
-    window.__meshmapReady=function(){clearTimeout(to);done(true);};
-    var sc=document.createElement('script');
-    sc.async=true;
-    sc.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(CFG.key)
-          +'&callback=__meshmapReady';
-    sc.onerror=function(){clearTimeout(to);done(false);};
-    document.head.appendChild(sc);}
-
-  function esc(t){var d=document.createElement('div');d.textContent=(t==null?'':String(t));
-    return d.innerHTML;}
-  function ago(sec){
-    if(sec==null)return 'never';
-    if(sec<90)return Math.round(sec)+'s ago';
-    if(sec<5400)return Math.round(sec/60)+' min ago';
-    return Math.round(sec/3600)+' h ago';}
-  function linkStyle(l){
-    // green solid = the gateway's own radio heard it. Amber dashed = it got here, over that
-    // many hops, by a route Meshtastic does not report. Grey dotted = the firmware did not
-    // say. The line NEVER implies a path it does not know.
-    if(l.direct)return {colour:'#2f6b2a',dash:null,weight:2.4};
-    if(l.known)return {colour:'#A35C17',dash:[6,6],weight:1.8};
-    return {colour:'#6A6A63',dash:[2,5],weight:1.5};}
-  function linkWords(l){
-    if(l.direct)return 'heard direct by the gateway';
-    if(l.known)return l.hops+' hop'+(l.hops===1?'':'s')+' away, route not reported';
-    return 'hop count not reported by this firmware';}
-
-  function nodeTitle(n){
-    var bits=[(n.name||n.id)];
-    if(n.snr!=null)bits.push('SNR '+n.snr+' ('+n.band+')');
-    if(n.battery)bits.push(n.battery+'%');
-    bits.push('heard '+ago(n.age));
-    return bits.join(' · ');}
-
-  function legend(d){
-    var h='<div class=meshmap-legend>'
-      +'<span><i class=gw></i>gateway</span>'
-      +'<span><i class=node></i>node heard recently</span>'
-      +'<span><i class="node stale"></i>node gone quiet</span>'
-      +'<span><i class=direct></i>direct</span>'
-      +'<span><i class=hop></i>multi-hop (route unknown)</span>';
-    if(d.links.some(function(l){return !l.known;}))
-      h+='<span><i class=unk></i>hops not reported</span>';
-    return h+'</div>';}
-
-  // ---- the plan view: no key, no internet, still a usable picture ------------------------
-  // Positions are real lat/lon projected flat onto the panel with a scale bar, not a
-  // basemap. It says what it is - no terrain, no roads - so nobody mistakes it for one.
-  function planView(el,d){
-    var pts=d.nodes.slice();
-    var gw=d.gateway;
-    if(gw.lat!=null)pts=pts.concat([{lat:gw.lat,lon:gw.lon,gw:true}]);
-    if(!pts.length){el.innerHTML='<div class=meshmap-empty>Nothing to plot yet.</div>';return;}
-    var lats=pts.map(function(p){return p.lat;}),lons=pts.map(function(p){return p.lon;});
-    var la0=Math.min.apply(null,lats),la1=Math.max.apply(null,lats);
-    var lo0=Math.min.apply(null,lons),lo1=Math.max.apply(null,lons);
-    var mid=(la0+la1)/2, kx=Math.max(Math.cos(mid*Math.PI/180),0.01);
-    // pad, and never divide by zero when every node sits on one spot
-    var spanY=Math.max((la1-la0),0.0009), spanX=Math.max((lo1-lo0)*kx,0.0009);
-    var pad=0.18;
-    la0=la0-spanY*pad; la1=la1+spanY*pad;
-    lo0=lo0-spanX*pad/kx; lo1=lo1+spanX*pad/kx;
-    if(la1-la0<1e-9){la0-=0.0005;la1+=0.0005;}
-    if(lo1-lo0<1e-9){lo0-=0.0005;lo1+=0.0005;}
-    var W=1000,H=380;
-    var sx=function(lon){return (lon-lo0)/(lo1-lo0)*W;};
-    var sy=function(lat){return H-(lat-la0)/(la1-la0)*H;};
-    var sv=['<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio=xMidYMid'
-            +' style="width:100%;height:100%" role=img aria-label="Plan view of the mesh">'];
-    if(gw.lat!=null)d.links.forEach(function(l){
-      var st=linkStyle(l);
-      sv.push('<line x1='+sx(gw.lon).toFixed(1)+' y1='+sy(gw.lat).toFixed(1)
-        +' x2='+sx(l.lon).toFixed(1)+' y2='+sy(l.lat).toFixed(1)
-        +' stroke="'+st.colour+'" stroke-width='+(st.weight*1.4)
-        +(st.dash?' stroke-dasharray="'+st.dash.map(function(v){return v*1.6;}).join(' ')+'"':'')
-        +' />');});
-    d.nodes.forEach(function(n){
-      sv.push('<circle cx='+sx(n.lon).toFixed(1)+' cy='+sy(n.lat).toFixed(1)+' r=7 fill="'
-        +(n.fresh?'#2f6b2a':'#6A6A63')+'" stroke="#fff" stroke-width=2><title>'
-        +esc(nodeTitle(n))+'</title></circle>');
-      sv.push('<text x='+(sx(n.lon)+11).toFixed(1)+' y='+(sy(n.lat)+4).toFixed(1)
-        +' font-size=13 font-family="ui-monospace,monospace" fill="#8f9682">'
-        +esc(n.name||n.id)+'</text>');});
-    if(gw.lat!=null){
-      sv.push('<rect x='+(sx(gw.lon)-8).toFixed(1)+' y='+(sy(gw.lat)-8).toFixed(1)
-        +' width=16 height=16 fill="#B5B171" stroke="#fff" stroke-width=2><title>'
-        +esc(gw.label+' (gateway)')+'</title></rect>');}
-    // scale bar: without one, a flat projection invites guessing at distance
-    var metresPerPx=((lo1-lo0)*kx*111320)/W;
-    var target=W*0.22*metresPerPx, pow=Math.pow(10,Math.floor(Math.log(target)/Math.LN10));
-    var nice=[1,2,5,10].map(function(m){return m*pow;}).filter(function(v){return v<=target*1.5;});
-    var barM=nice[nice.length-1]||target, barPx=barM/metresPerPx;
-    sv.push('<line x1=20 y1='+(H-20)+' x2='+(20+barPx).toFixed(1)+' y2='+(H-20)
-      +' stroke="#8f9682" stroke-width=2 />'
-      +'<text x=20 y='+(H-27)+' font-size=12 font-family="ui-monospace,monospace" fill="#8f9682">'
-      +(barM>=1000?(barM/1000)+' km':Math.round(barM)+' m')+'</text>');
-    sv.push('</svg>');
-    el.className='meshmap-canvas plan';
-    el.innerHTML=sv.join('');}
-
-  function googleView(el,d,panel){
-    // returns the map, so the caller can check whether it ever drew a tile
-    var gw=d.gateway;
-    var centre=(gw.lat!=null)?{lat:gw.lat,lng:gw.lon}
-              :(d.nodes.length?{lat:d.nodes[0].lat,lng:d.nodes[0].lon}:{lat:0,lng:0});
-    var map=new google.maps.Map(el,{center:centre,zoom:14,mapTypeId:'hybrid',
-      streetViewControl:false,fullscreenControl:true,mapTypeControl:true});
-    var info=new google.maps.InfoWindow();
-    var bounds=new google.maps.LatLngBounds();
-    if(gw.lat!=null){
-      var gm=new google.maps.Marker({position:{lat:gw.lat,lng:gw.lon},map:map,
-        title:gw.label+' (gateway)',zIndex:99,
-        icon:{path:google.maps.SymbolPath.CIRCLE,scale:9,fillColor:'#B5B171',fillOpacity:1,
-              strokeColor:'#ffffff',strokeWeight:2}});
-      gm.addListener('click',function(){
-        info.setContent('<div class=gm-pop><b>'+esc(gw.label)+'</b><br>gateway · '+esc(gw.state)
-          +'<br>'+(gw.placed?'placed by an operator':'position inferred from its nodes')
-          +'</div>');info.open(map,gm);});
-      bounds.extend(gm.getPosition());
-      d.links.forEach(function(l){
-        var st=linkStyle(l);
-        var opts={path:[{lat:gw.lat,lng:gw.lon},{lat:l.lat,lng:l.lon}],map:map,
-          strokeColor:st.colour,strokeOpacity:st.dash?0:0.9,strokeWeight:st.weight};
-        if(st.dash)opts.icons=[{icon:{path:'M 0,-1 0,1',strokeOpacity:0.9,
-          strokeColor:st.colour,strokeWeight:st.weight,scale:3},offset:'0',repeat:'12px'}];
-        new google.maps.Polyline(opts);});}
-    d.nodes.forEach(function(n){
-      var mk=new google.maps.Marker({position:{lat:n.lat,lng:n.lon},map:map,title:nodeTitle(n),
-        icon:{path:google.maps.SymbolPath.CIRCLE,scale:6,
-              fillColor:n.fresh?'#2f6b2a':'#6A6A63',fillOpacity:1,
-              strokeColor:'#ffffff',strokeWeight:1.5}});
-      var lk=d.links.filter(function(l){return l.id===n.id;})[0];
-      mk.addListener('click',function(){
-        info.setContent('<div class=gm-pop><b>'+esc(n.name||n.id)+'</b><br>'
-          +esc(n.id)+'<br>heard '+esc(ago(n.age))
-          +(n.snr!=null?'<br>SNR '+esc(n.snr)+' ('+esc(n.band)+')':'')
-          +(n.battery?'<br>battery '+esc(n.battery)+'%':'')
-          +(lk?'<br>'+esc(linkWords(lk)):'')+'</div>');
-        info.open(map,mk);});
-      bounds.extend(mk.getPosition());});
-    if(!bounds.isEmpty()){
-      map.fitBounds(bounds,48);
-      // one point makes fitBounds zoom to the building; pull back to something readable
-      google.maps.event.addListenerOnce(map,'idle',function(){
-        if(map.getZoom()>17)map.setZoom(17);});}
-    // click to place the gateway - the same job as the lat/lon boxes, done on the map
-    map.addListener('click',function(ev){
-      var la=ev.latLng.lat().toFixed(6),lo=ev.latLng.lng().toFixed(6);
-      var f=panel.querySelector('.mm-lat'),g=panel.querySelector('.mm-lon');
-      if(f&&g){f.value=la;g.value=lo;
-        var st=panel.querySelector('.mm-posres');
-        if(st)st.textContent='picked '+la+', '+lo+' - Save to place the gateway';}});
-    return map;}
-
-  function drawPanel(panel,d){
-    var gw=d.gateway,e=esc;
-    var note;
-    if(!d.reports_nodes)
-      note='This gateway reports a node count but no node list, so there is nothing to plot. '
-          +'It is running a build cut before the map: re-cut and redeploy the gateway bundle.';
-    else if(!d.nodes.length&&!d.unplaced.length)
-      note='No nodes seen yet. A node appears here once the gateway has heard it.';
-    else if(!d.nodes.length)
-      note='Nodes are being heard, but none has reported a GPS position yet.';
-    else
-      note=d.nodes.length+' node'+(d.nodes.length===1?'':'s')+' on the map'
-          +(gw.placed?'':' · gateway position inferred from its nodes, not surveyed');
-    var h='<div class=meshmap-head><h3>'+e(gw.label)+' mesh</h3>'
-      +'<span class=meshmap-note>'+e(note)+'</span></div>'
-      +'<div class=meshmap-canvas></div>';
-    if(d.nodes.length||gw.lat!=null)h+=legend(d);
-    if(d.unplaced.length){
-      h+='<div class=meshmap-nodes><div class=nolo><b>'+d.unplaced.length+' node'
-        +(d.unplaced.length===1?'':'s')+' reporting without a position:</b> '
-        +d.unplaced.map(function(n){return e(n.name||n.id)+' ('+e(ago(n.age))+')';}).join(', ')
-        +'. They are on the mesh; their GPS has not fixed, or their firmware is not sending '
-        +'position.</div></div>';}
-    // A THIRD state, and worth its own sentence: the gateway knows of these only because the
-    // radio's stored node database mentioned them when it started. It has not heard them. They
-    // may be switched off, out of range, or gone - and the name shown is whatever the radio had
-    // cached, which can be an old one.
-    if((d.unheard||[]).length){
-      h+='<div class=meshmap-nodes><div class=nolo><b>'+d.unheard.length+' in the radio\'s '
-        +'database, not heard:</b> '
-        +d.unheard.map(function(n){return e(n.name||n.id);}).join(', ')
-        +'. The gateway has not heard these since it started - switched off, out of range, or '
-        +'no longer in service. Names come from the radio\'s stored list and may be out of '
-        +'date.</div></div>';}
-    h+='<div class=meshmap-place>'
-      +'<label class=fl>Gateway latitude<input class=mm-lat inputmode=decimal placeholder="51.5017" value="'
-      +(gw.placed?e(gw.lat):'')+'"></label>'
-      +'<label class=fl>Longitude<input class=mm-lon inputmode=decimal placeholder="-0.1246" value="'
-      +(gw.placed?e(gw.lon):'')+'"></label>'
-      +'<button type=button class="a-go mm-save">'+(gw.placed?'Move gateway':'Place gateway')
-      +'</button><span class="lib-status mm-posres" role=status></span></div>';
-    panel.innerHTML=h;
-    var canvas=panel.querySelector('.meshmap-canvas');
-    var plottable=d.nodes.length||gw.lat!=null;
-    if(!plottable){
-      canvas.className='meshmap-canvas plan';
-      canvas.innerHTML='<div class=meshmap-empty>'+e(note)+'</div>';}
-    else loadGoogleMaps(function(ok){
-      // gmapsState can have turned to authfail while this panel waited its turn
-      if(ok&&gmapsState==='ready'){
-        try{
-          var gmap=googleView(canvas,d,panel);
-          gmapsDrawn.push({panel:panel,data:d});
-          watchGoogleDrew(gmap,panel,d);
-          return;}
-        catch(err){}}
-      planView(canvas,d);
-      noteFallback(panel);});
-    var save=panel.querySelector('.mm-save');
-    if(save)save.onclick=function(){
-      var st=panel.querySelector('.mm-posres');
-      st.textContent='saving…';
-      J('/api/networks/gwpos',{box:panel.dataset.box,
-        lat:panel.querySelector('.mm-lat').value,lon:panel.querySelector('.mm-lon').value})
-        .then(function(x){
-          if(x.code===200){st.textContent='placed';loadPanel(panel,true);}
-          else{st.textContent=x.j.error||'failed';}})
-        .catch(function(){st.textContent='could not reach the console';});};}
-
-  function loadPanel(panel,force){
-    if(panel.dataset.loaded==='1'&&!force)return;
-    panel.dataset.loaded='1';
-    panel.innerHTML='<div class=meshmap-head><span class=meshmap-note>loading the mesh…'
-                   +'</span></div>';
-    fetch('/api/networks/map?box='+encodeURIComponent(panel.dataset.box))
-      .then(function(r){return r.json().then(function(j){return {code:r.status,j:j};});})
-      .then(function(x){
-        if(x.code!==200){panel.innerHTML='<div class=meshmap-head><span class=meshmap-note>'
-          +esc(x.j.error||'could not read this mesh')+'</span></div>';return;}
-        drawPanel(panel,x.j);})
-      .catch(function(){panel.innerHTML='<div class=meshmap-head><span class=meshmap-note>'
-        +'could not reach the console</span></div>';});}
-
-  Array.prototype.forEach.call(document.querySelectorAll('.mesh-toggle'),function(b){
-    b.onclick=function(){
-      var row=document.getElementById(b.getAttribute('aria-controls'));
-      if(!row)return;
-      var open=row.hidden;
-      row.hidden=!open;
-      b.setAttribute('aria-expanded',open?'true':'false');
-      if(open)loadPanel(row.querySelector('.meshmap-panel'));};});
 })();
 """
 
@@ -14337,6 +13304,8 @@ def render_chat(state):
 
 # 1.19.0 the Store: the filestore as a file manager over everything that gets deployed -
 # install packages, mission packs, map packs. Browse folders, upload, download, move, delete.
+
+
 STORE_JS = """
 (function(){
   var root=document.getElementById('storepage'); if(!root) return;
@@ -15992,6 +14961,43 @@ reload();
 
 SYNC_JS = r"""
 (function(){
+  // A tick is a push to the far console, now; an untick stops the rule and says the copy
+  // stays. Both report what actually happened, from the far side's own answer.
+  function J(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return{code:r.status,j:j};});});}
+  document.querySelectorAll('.sync-peer[data-id] .tick-folder').forEach(function(cb){
+    var row=cb.closest('.tick-row'), card=cb.closest('.sync-peer'), pid=card.getAttribute('data-id'),
+        folder=row.getAttribute('data-folder'), note=row.querySelector('.tick-note'),
+        send=row.querySelector('.tick-send'), res=card.querySelector('.sp-res');
+    function push(){
+      cb.disabled=true; note.textContent='sending…';
+      J('/api/vault/push',{peer:pid,folder:folder}).then(function(x){
+        cb.disabled=false;
+        if(x.code===200){
+          send.hidden=false; cb.checked=true;
+          note.textContent=x.j.created.length+' new, '+x.j.updated.length+' updated, '+x.j.kept.length+' kept - just now';
+          res.className='a-res ok sp-res'; res.textContent='Sent '+folder+' to '+x.j.peer+'.';
+        } else {
+          cb.checked=false; send.hidden=true; note.textContent='not shared';
+          res.className='a-res error sp-res'; res.textContent='Could not send '+folder+': '+(x.j.error||'unknown error');
+        }
+      }).catch(function(){cb.disabled=false;cb.checked=false;res.className='a-res error sp-res';res.textContent='Could not reach the console.';});
+    }
+    cb.addEventListener('change',function(){
+      if(cb.checked){push();return;}
+      cb.disabled=true;
+      J('/api/vault/unshare',{peer:pid,folder:folder}).then(function(x){
+        cb.disabled=false;
+        if(x.code===200){send.hidden=true; note.textContent='not shared';
+          res.className='a-res sp-res'; res.textContent='Stopped sharing '+folder+'. '+(x.j.note||'');}
+        else{cb.checked=true; res.className='a-res error sp-res'; res.textContent=x.j.error||'Could not stop sharing.';}
+      });
+    });
+    send.addEventListener('click',push);
+  });
+})();
+
+(function(){
 var root=document.getElementById('syncpage'); if(!root) return;
 function escapeHtml(x){var d=document.createElement('div');d.textContent=x==null?'':x;return d.innerHTML;}
 function reload(){location.reload();}
@@ -16154,7 +15160,7 @@ DEVICES_SYNC_JS = r"""
   setInterval(load, 5000);
   function linkForm(msg){
     dv.textContent=''; mv.textContent='';
-    mv.appendChild(el('p','meta','Link the box first, above.'));
+    mv.appendChild(el('p','meta','Link the box first: the form is under Devices, below.'));
     dv.appendChild(el('p','doct','This console is not yet linked to the box\u2019s device-sync surface. '+
       'On the box, run  vd-ops config  and copy the URL and admin token here.'));
     if(msg){dv.appendChild(el('p','vd-err',msg));}
@@ -16222,21 +15228,52 @@ DEVICES_SYNC_JS = r"""
         'Vantage Deployed (Settings, Join a box); their six-digit code then appears above.'));});};
     det.appendChild(mb); det.appendChild(out); dv.appendChild(det);
 
-    if(!(o.devices||[]).length){mv.appendChild(el('p','meta','Enrol a device to see what it will receive.'));}
-    (o.devices||[]).forEach(function(d){
-      if(d.revoked)return;
-      var labs=(d.deployment||'').split('|').map(function(x){return x.trim();}).filter(Boolean);
-      var c=el('div','vd-card');
-      c.appendChild(el('b',null,d.label+' ('+labs.join(', ')+') receives:'));
-      var ul=el('ul');
-      var anyPacks=false;
-      labs.forEach(function(lab2){
-        ul.appendChild(el('li',null,'Knowledge Vault: the "'+lab2+'" folder'));
-        ((o.manifest&&o.manifest[lab2])||[]).forEach(function(pp){
-          anyPacks=true;
-          ul.appendChild(el('li',null,pp.name+'  ('+pp.kind+' pack, '+Math.round(pp.size/1024)+' KB, '+lab2+')'));});});
-      if(!anyPacks){ul.appendChild(el('li','meta','No packs shared to these deployments yet - share one from the File store.'));}
-      c.appendChild(ul); mv.appendChild(c);});
+    // Per deployment: the vault folder it is bound to (fixed by name, carried by the box's
+    // vault sync, so it is shown ticked and locked rather than pretended to be a choice),
+    // then every pack on this console's shelf as a tick. A tick assigns the pack on the
+    // deployed box now; an untick removes it. The far box's answer is what the row shows.
+    var shelf=[]; try{shelf=JSON.parse(document.getElementById('store-packs').textContent);}catch(e){}
+    var deps=(o.deployments||[]);
+    if(!deps.length){mv.appendChild(el('p','meta','No deployment yet. Enrol a device below and name its deployment; it appears here.'));}
+    deps.forEach(function(dep){
+      var c=el('div','vd-card'); c.appendChild(el('b',null,dep));
+      var have={}; ((o.manifest&&o.manifest[dep])||[]).forEach(function(pp){have[pp.name]=pp;});
+      var list=el('div','tick-list');
+      var vrow=el('label','tick-row locked');
+      var vcb=el('input'); vcb.type='checkbox'; vcb.checked=true; vcb.disabled=true;
+      vrow.appendChild(vcb); vrow.appendChild(el('span','tick-name','Knowledge Vault: "'+dep+'"'));
+      vrow.appendChild(el('span','tick-note','always: the folder of the same name, carried by the vault sync'));
+      list.appendChild(vrow);
+      if(!shelf.length){list.appendChild(el('p','meta','No packs on the File store yet - build or upload one there and it appears here.'));}
+      shelf.forEach(function(pk){
+        var row=el('label','tick-row'); var cb=el('input'); cb.type='checkbox'; cb.className='tick-pack';
+        cb.checked=!!have[pk.name];
+        var note=el('span','tick-note', have[pk.name] ? ('on the box, '+Math.round((have[pk.name].size||pk.bytes)/1024)+' KB') : 'not assigned');
+        row.appendChild(cb); row.appendChild(el('span','tick-name',pk.name+'  ('+pk.kind+' pack)')); row.appendChild(note);
+        cb.onchange=function(){
+          cb.disabled=true;
+          if(cb.checked){
+            note.textContent='assigning…';
+            post('/api/deployed/pack-assign',{deployment:dep,kind:pk.kind,store_path:pk.path},function(st,j){
+              cb.disabled=false;
+              if(st===200){note.textContent='on the box, just now';}
+              else{cb.checked=false; note.textContent='could not assign: '+((j&&(j.error||j.reason))||st);}
+            });
+          } else {
+            note.textContent='removing…';
+            post('/api/deployed/pack-remove',{deployment:dep,name:pk.name},function(st,j){
+              cb.disabled=false;
+              if(st===200){note.textContent='not assigned';}
+              else{cb.checked=true; note.textContent='could not remove: '+((j&&(j.error||j.reason))||st);}
+            });
+          }
+        };
+        list.appendChild(row);
+      });
+      c.appendChild(list);
+      var who=(o.devices||[]).filter(function(d){return !d.revoked && (d.deployment||'').split('|').map(function(x){return x.trim();}).indexOf(dep)>=0;});
+      c.appendChild(el('p','meta', who.length ? ('Reaches: '+who.map(function(d){return d.label;}).join(', ')) : 'No device on this deployment yet.'));
+      mv.appendChild(c);});
     var rl=el('button','cred-refresh','Refresh'); rl.type='button'; rl.onclick=load;
     dv.appendChild(rl);
   }
@@ -16246,65 +15283,126 @@ DEVICES_SYNC_JS = r"""
 
 
 def render_sync(state):
-    """The Sync tab: the estate's sharing surface. Consoles that read each other, what
-    each may pull, and the map of what actually moved. Bigger than the vault on purpose:
-    permissions and admin-credential sync belong on this page as they land."""
+    """The Sync tab, master-first. This console holds the truth; the operator ticks what
+    each other box receives. A tick is an action on the far box (a push, or a pack
+    assignment on the deployed surface), never a note to self, and every row shows what
+    actually landed last time rather than what was intended. The mechanics of adding a
+    console are still here, folded, because they are a once-per-box job."""
     age = age_seconds(state.get("generated_at", ""))
     ev = state.get("estate_result", "UNKNOWN")
     cfg = load_actions_config()
     acts = enabled_actions(cfg)
-    doc = page_head("Sync — " + load_instance()["product_name"])
+    inst = load_instance()
+    doc = page_head("Sync — " + inst["product_name"])
     doc.append(header_html(state, ev, age, "sync", crumb="Sync"))
     doc.append("<main id=main class=wrap>")
-    # ---- estate sync: which consoles this vault talks to, and what flows
     _pin = _load_json_list(PEERS_IN_FILE)
     _pout = _load_json_list(PEERS_OUT_FILE)
-    _rules = _load_json_list(os.path.join(os.path.dirname(PEERS_CACHE), "sync-rules.json"))
+    _rules = _load_json_list(sync_rules_path())
     _pc = {c.get("id"): c for c in _load_json_list(PEERS_CACHE)}
     _e2 = html.escape
-    doc.append("<section id=syncpage aria-label='Estate sync'><div class=ah>"
-               "<h2 class=title>Servers</h2><span class=meta>"
-               "Which boxes keep each other up to date, and exactly what moves between "
-               "them. Add a box here once; after that the sharing follows the rules you "
-               "set.</span></div>")
-    _nconsoles = 1 + len(_pout)
-    doc.append("<div class='banner'><b>How estate sync works.</b><span> Sync happens "
-               "<b>between Vantage consoles</b> - not between plain TAK servers. A box "
-               "can be a sync peer only if it runs a Vantage console you can reach. So "
-               "a public cloud TAK server with no console cannot be a peer, and a box "
-               "that is powered off or off the network will not appear. To sync a "
-               "folder from one box to another, both need a console; you add the far "
-               "console here (its address and a token it mints), then pull the folders "
-               "you want. This is a pull model: <b>this</b> console reaches out and "
-               "pulls; nothing is pushed at you.</span></div>")
-    if _nconsoles == 1 and not _pin:
-        doc.append("<div class='banner drift'><b>Only this console is set up for sync.</b>"
-                   "<span> That is expected on an estate with one console. It is NOT a "
-                   "version problem. To sync with another box: install a Vantage console "
-                   "on it, make sure it is powered on and reachable from here, then add "
-                   "it below. If a box is a plain TAK server (no console) it cannot take "
-                   "part - manage its files through the console that built it, or over "
-                   "the box directly.</span></div>")
-    doc.append("<div class=sync-cols><div>")
-    doc.append("<h3 class=sync-h>Consoles this one reads</h3>")
-    if _pout:
-        for p_ in _pout:
-            seen = _pc.get(p_.get("id"), {})
-            snap = (seen.get("snapshot") or {})
-            folders = snap.get("vault_folders", [])
-            opts = "".join(f"<option>{_e2(f)}</option>" for f in folders) or                    "<option value=''>pull the estate first</option>"
-            doc.append(
-                f"<div class=sync-peer data-id='{_e2(p_.get('id', ''))}'>"
-                f"<div class=sync-peer-h><b>{_e2(p_.get('name', ''))}</b>"
-                f"<span class=meta>{_e2(p_.get('url', ''))}</span></div>"
-                f"<div class=sync-peer-acts>"
-                f"<button type=button class='sp-pull cred-refresh'>Refresh estate</button>"
-                f"<select class=sp-folder>{opts}</select>"
-                f"<button type=button class='sp-vpull cred-refresh'>Pull folder</button>"
-                f"</div><div class='a-res sp-res' role=status></div></div>")
-    else:
-        doc.append("<p class=doct>None yet. Ask the other console's operator for a peer "
-                   "token (they mint it below on their side), then add it here.</p>")
+    _mine = estate_snapshot().get("vault_folders", [])
+    _rule_for = {(r.get("peer"), r.get("folder")): r for r in _rules}
+    # the packs on this console's shelf that a deployment can be given
+    _packs = []
+    for kind, area in (("map", "map-packs"), ("mission", "mission-packs")):
+        lst = store_list(area, "store") or {}
+        for f in lst.get("files", []):
+            _packs.append({"name": f["name"], "path": f["path"], "kind": kind,
+                           "bytes": f.get("bytes", 0)})
+
+    doc.append("<section id=syncpage aria-label='Sync'><div class=ah>"
+               "<h2 class=title>Sync</h2><span class=meta>"
+               f"<b>{_e2(inst.get('product_name', 'This console'))}</b> holds the master copy: "
+               f"{len(_mine)} Knowledge Vault folder{'s' if len(_mine) != 1 else ''} and "
+               f"{len(_packs)} pack{'s' if len(_packs) != 1 else ''} on the File store. Tick what "
+               "each other box should receive. A tick sends it now; the far box keeps any newer "
+               "edits of its own.</span></div>")
+
+    # ---- to other consoles: one card per peer, a tick per folder ---------------------------
+    doc.append("<h3 class=sync-h>To other consoles</h3>")
+    if not _pout:
+        doc.append("<p class=doct>No other console is set up yet. Open <b>Set up a console</b> "
+                   "below: it takes the far console's address and a token it mints, once.</p>")
+    for p_ in _pout:
+        pid = p_.get("id", "")
+        far = (((_pc.get(pid) or {}).get("snapshot") or {}).get("vault_folders", []))
+        rows = []
+        for f in _mine:
+            r = _rule_for.get((pid, f))
+            on = bool(r and r.get("direction", "pull") == "push")
+            if r:
+                when = str(r.get("last_pull", ""))[:16].replace("T", " ")
+                what = (f"{r.get('created', 0)} new, {r.get('updated', 0)} updated, "
+                        f"{r.get('kept', 0)} kept - {when}")
+                if r.get("direction", "pull") == "pull":
+                    what = "pulled from there, not sent - " + what
+            else:
+                what = "not shared"
+            rows.append(
+                f"<label class=tick-row data-folder='{_e2(f)}'>"
+                f"<input type=checkbox class=tick-folder{' checked' if on else ''}>"
+                f"<span class=tick-name>{_e2(f)}</span>"
+                f"<span class=tick-note>{_e2(what)}</span>"
+                f"<button type=button class='tick-send cred-refresh'{'' if on else ' hidden'}>"
+                f"Send now</button></label>")
+        if not rows:
+            rows.append("<p class=meta>This console's vault has no folders yet.</p>")
+        far_opts = "".join(f"<option>{_e2(f)}</option>" for f in far) or \
+                   "<option value=''>refresh first</option>"
+        doc.append(
+            f"<div class=sync-peer data-id='{_e2(pid)}'>"
+            f"<div class=sync-peer-h><b>{_e2(p_.get('name', ''))}</b>"
+            f"<span class=meta>{_e2(p_.get('url', ''))}</span></div>"
+            f"<div class=tick-list>{''.join(rows)}</div>"
+            f"<div class='a-res sp-res' role=status></div>"
+            f"<details class=sync-more><summary>Pull from this console instead</summary>"
+            f"<div class=cred-pkg-why>The other direction: take a folder that console offers. "
+            f"Your own newer edits are kept.</div>"
+            f"<div class=sync-peer-acts>"
+            f"<button type=button class='sp-pull cred-refresh'>Refresh estate</button>"
+            f"<select class=sp-folder>{far_opts}</select>"
+            f"<button type=button class='sp-vpull cred-refresh'>Pull folder</button>"
+            f"</div></details></div>")
+
+    # ---- to devices: per deployment, tick the packs; the vault folder is fixed by name -------
+    doc.append("<h3 class=sync-h>To devices</h3>")
+    doc.append("<section id=vd-moves aria-label='What moves to devices'>"
+               "<div class=cred-pkg-why>Each deployment's devices receive the Knowledge Vault "
+               "folder of the same name, carried by the vault sync on the box, plus every pack "
+               "ticked here. A tick assigns the pack on the deployed box now; an untick removes "
+               "it from the next sync.</div>"
+               "<div class=vd-body>Loading...</div></section>")
+    doc.append("<script type=application/json id=store-packs>"
+               + json.dumps(_packs).replace("<", "\\u003c") + "</script>")
+    doc.append("<h3 class=sync-h>Devices</h3>")
+    doc.append("<section id=vd-devices aria-label='Synchronised devices'>"
+               "<div class=cred-pkg-why>The phones and tablets synchronised to this box. Enrol "
+               "one with a QR, confirm it against the six-digit code the holder reads out, "
+               "revoke it when the deployment ends.</div>"
+               "<div class=vd-body>Loading...</div></section>")
+
+    # ---- the map, from the rules ------------------------------------------------------------
+    doc.append("<h3 class=sync-h>Sync map</h3>"
+               "<svg class=sync-map viewBox='0 0 900 300' role=img "
+               "aria-label='What syncs between consoles and devices'></svg>")
+    doc.append("<script type=application/json id=sync-data>" + json.dumps({
+        "me": inst.get("product_name", "Vantage"),
+        "mode": inst.get("console_mode", "admin"),
+        "peers": [{"id": p_.get("id"), "name": p_.get("name"),
+                   "servers": len(((_pc.get(p_.get("id")) or {}).get("snapshot") or {})
+                                  .get("servers", []))} for p_ in _pout],
+        "granted": [p_.get("name") for p_ in _pin],
+        "rules": _rules,
+        "local_servers": len(state.get("targets", []))}) + "</script>")
+
+    # ---- set up a console: the once-per-box mechanics, folded -------------------------------
+    doc.append("<details class=sync-setup><summary class=sync-h>Set up a console</summary>"
+               "<div class=cred-pkg-why>Sync happens between Vantage consoles, over a token the "
+               "far console mints for this one. A plain TAK server with no console cannot take "
+               "part. Add a console once; after that everything is a tick above.</div>"
+               "<div class=sync-cols><div>")
+    doc.append("<h4 class=sync-h>Add a console this one sends to</h4>")
     doc.append("<form class=sync-add>"
                "<label class=fl>Console"
                "<select class=pa-node></select>"
@@ -16322,48 +15420,21 @@ def render_sync(state):
                "<div class=fedpop-act><button type=submit class='a-go confirm'>"
                "Add console</button></div><div class='a-res pa-res' role=status></div></form>")
     doc.append("</div><div>")
-    doc.append("<h3 class=sync-h>Consoles allowed to read this one</h3>")
+    doc.append("<h4 class=sync-h>Consoles allowed to read from, and send to, this one</h4>")
     if _pin:
         for p_ in _pin:
             doc.append(f"<div class=sync-peer><div class=sync-peer-h>"
                        f"<b>{_e2(p_.get('name', ''))}</b>"
-                       f"<span class=meta>{p_.get('pulls', 0)} reads"
+                       f"<span class=meta>{p_.get('pulls', 0)} uses"
                        + (f" · last {_e2(str(p_.get('last_seen', ''))[:16])}"
                           if p_.get("last_seen") else " · never used")
                        + "</span></div></div>")
     doc.append("<form class=sync-mint>"
-               "<label class=fl>Grant a console read access"
+               "<label class=fl>Grant a console access"
                "<input class=pm-name maxlength=40 placeholder='name the console'></label>"
                "<div class=fedpop-act><button type=submit class=cred-refresh>"
                "Mint peer token</button></div><div class=pm-out></div></form>")
-    doc.append("</div></div>")
-    # the sync map: this console, its peers, its devices - and what flows
-    doc.append("<h3 class=sync-h>Sync map</h3>"
-               "<svg class=sync-map viewBox='0 0 900 300' role=img "
-               "aria-label='What syncs between consoles and devices'></svg>")
-    doc.append("<script type=application/json id=sync-data>" + json.dumps({
-        "me": load_instance().get("product_name", "Vantage"),
-        "mode": load_instance().get("console_mode", "admin"),
-        "peers": [{"id": p_.get("id"), "name": p_.get("name"),
-                   "servers": len(((_pc.get(p_.get("id")) or {}).get("snapshot") or {})
-                                  .get("servers", []))} for p_ in _pout],
-        "granted": [p_.get("name") for p_ in _pin],
-        "rules": _rules,
-        "local_servers": len(state.get("targets", []))}) + "</script>")
-    doc.append("</section>")
-    doc.append("<section id=vd-devices aria-label='Synchronised devices'><div class=ah>"
-               "<h2 class=title>Devices</h2><span class=meta>"
-               "The phones and tablets synchronised to this box. Enrol one with a QR; "
-               "confirm it against the six-digit code the holder reads out; revoke it "
-               "when the deployment ends.</span></div>"
-               "<div class=vd-body>Loading...</div></section>")
-    doc.append("<section id=vd-moves aria-label='What moves to devices'><div class=ah>"
-               "<h2 class=title>What moves</h2><span class=meta>"
-               "What each device receives on its next sync: its deployment's Knowledge "
-               "Vault folder, plus every pack shared to that deployment from the File "
-               "store. Decide sharing where those things live; this section only shows "
-               "the consequence.</span></div>"
-               "<div class=vd-body>Loading...</div></section>")
+    doc.append("</div></div></details></section>")
     doc.append("<style>.vd-code{font-family:monospace;font-size:40px;font-weight:700;"
                "margin:4px 0}.vd-in{display:block;margin:6px 0;padding:8px;min-width:260px}"
                ".vd-card{margin:10px 0;padding:10px;border:1px solid #D2C78D;"
@@ -16375,7 +15446,6 @@ def render_sync(state):
     doc.append(f"<script>{SYNC_JS}</script>")
     doc.append(footer_html(state, acts))
     return "".join(doc)
-
 
 def deployed_api(path, data, client):
     """The POST half of the Deployed page: every route proxies to the linked box's admin
@@ -17404,12 +16474,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             self._send(200, json.dumps({"active": active}), "application/json")
-        elif not console_is_admin() and (path in ("/deploy", "/federation", "/networks",
+        elif not console_is_admin() and (path in ("/deploy", "/federation",
                 "/agent", "/chat")
                 or (path.startswith("/api/setup/") and path not in CLIENT_SETUP_PATHS)
                 or path in ("/api/sam/chat", "/api/propose", "/api/propose/dismiss",
-                            "/api/fedlink/forget", "/api/fedmap/pos",
-                            "/api/networks/channel/qr", "/api/networks/map")):
+                            "/api/fedlink/forget", "/api/fedmap/pos")):
             # the deployed edition is one box's own console: no fleet deploy, no federation,
             # no estate agent, no white-labelling, and none of their APIs. Checked ahead of
             # every page and API route so nothing fleet-shaped answers on a forward box.
@@ -17425,32 +16494,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(503 if err else 200,
                        render_error(err, "federation") if err else render_federation(state),
                        "text/html; charset=utf-8")
-        elif path == "/networks":
-            self._send(503 if err else 200,
-                       render_error(err, "networks") if err else render_networks(state),
-                       "text/html; charset=utf-8")
-        elif path == "/api/networks/map":
-            import urllib.parse as _up
-            _q = _up.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
-            if err:
-                self._send(503, json.dumps({"error": err}), "application/json")
-                return
-            code, res = networks_map((_q.get("box", [""])[0] or "").strip(), state)
-            self._send(code, json.dumps(res), "application/json")
-        elif path == "/api/networks/channel/qr":
-            import urllib.parse as _up
-            _q = _up.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
-            _nm = (_q.get("name", [""])[0] or "").strip()
-            png = networks_channel_qr(_nm) if re.fullmatch(r"[A-Za-z0-9_-]{1,11}", _nm) else None
-            if not png:
-                self._send(404, "unknown channel, or qrencode unavailable\n", "text/plain")
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "image/png")
-            self.send_header("Content-Length", str(len(png)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(png)
         elif path == "/agent":
             self._send(503 if err else 200,
                        render_error(err, "agent") if err else render_agent(state),
@@ -17649,6 +16692,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
+        if path == "/api/vault/import":
+            # A push from a peer console. Bearer only, the same peer token that gates the
+            # export reads, checked the same way; no session, no cookie. Its own body cap:
+            # a folder bundle is up to 4 MB of notes, far past the 64 KB the JSON routes take.
+            auth = self.headers.get("Authorization", "")
+            tok = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+            peer = peer_for_token(tok) if tok else None
+            if not peer:
+                audit({"action": "peer-write", "path": path, "result": "DENIED",
+                       "client": self.client_address[0]})
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", "Bearer")
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"invalid or missing peer token"}')
+                return
+            ln = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(ln) if 0 < ln <= 6 * 1024 * 1024 else b""
+            try:
+                bundle = json.loads(raw or b"{}")
+            except Exception:
+                self._send(400, json.dumps({"error": "bad json"}), "application/json")
+                return
+            code, res = vault_import(bundle if isinstance(bundle, dict) else {}, peer)
+            self._send(code, json.dumps(res), "application/json")
+            return
         if path == "/mcp":
             # the agent socket: bearer-token authed, its own JSON-RPC, no session or CSRF
             auth = self.headers.get("Authorization", "")
@@ -17729,9 +16798,7 @@ class Handler(BaseHTTPRequestHandler):
                 or path in ("/api/propose", "/api/propose/dismiss", "/api/sam/chat",
                             "/api/fedlink/forget", "/api/fedmap/pos",
                             "/api/library/upload", "/api/library/upload-image",
-                            "/api/library/delete", "/api/library/fetch",
-                            "/api/networks/channel", "/api/networks/channel/adopt",
-                            "/api/networks/channel/delete", "/api/networks/gwpos")):
+                            "/api/library/delete", "/api/library/fetch")):
             self._send(404, json.dumps({"error": "not part of this console"}), "application/json")
             return
         # streamed uploads first: they carry raw bodies far beyond the JSON cap
@@ -17753,9 +16820,7 @@ class Handler(BaseHTTPRequestHandler):
                             "/api/updates/estate", "/api/updates/remove", "/api/usb-export",
                             "/api/kiosk/exit",
                             "/api/store/mkdir", "/api/store/move", "/api/store/delete",
-                            "/api/vault/save", "/api/networks/channel",
-                            "/api/networks/channel/adopt",
-                            "/api/networks/channel/delete", "/api/networks/gwpos")):
+                            "/api/vault/save")):
             self._send(404, json.dumps({"error": "not found"}), "application/json")
             return
         n = int(self.headers.get("Content-Length", "0") or 0)
@@ -17846,6 +16911,10 @@ class Handler(BaseHTTPRequestHandler):
             code, res = sync_discover(client)
         elif path == "/api/vault/pull":
             code, res = vault_pull(data, client)
+        elif path == "/api/vault/push":
+            code, res = vault_push(data, client)
+        elif path == "/api/vault/unshare":
+            code, res = vault_unshare(data, client)
         elif path == "/api/vault/mission-pack":
             code, res = build_mission_pack(data, client)
         elif path == "/api/agent/chat/clear":
@@ -17968,14 +17037,6 @@ class Handler(BaseHTTPRequestHandler):
             code, res = vault_rename(data.get("from"), data.get("to"), client)
         elif path == "/api/vault/restore":
             code, res = vault_restore(data, client)
-        elif path == "/api/networks/channel":
-            code, res = networks_channel_create(data, client)
-        elif path == "/api/networks/channel/adopt":
-            code, res = networks_channel_adopt(data, client)
-        elif path == "/api/networks/gwpos":
-            code, res = networks_gwpos(data, client)
-        elif path == "/api/networks/channel/delete":
-            code, res = networks_channel_delete(data, client)
         elif path.startswith("/api/deployed/"):
             code, res = deployed_api(path, data, client)
         else:
@@ -17983,9 +17044,6 @@ class Handler(BaseHTTPRequestHandler):
             if aid == "upgrade-server":
                 code, res = start_upgrade_job(data.get("target"), data.get("inputs", {}),
                                               bool(data.get("confirm")), client)
-            elif aid == "deploy-mesh-gateway":
-                code, res = start_mesh_deploy_job(data.get("target"), data.get("inputs", {}),
-                                                  bool(data.get("confirm")), client)
             elif ACTIONS.get(aid, {}).get("job"):
                 code, res = start_job(aid, data.get("target"), data.get("inputs", {}),
                                       bool(data.get("confirm")), client)
