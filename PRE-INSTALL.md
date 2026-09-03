@@ -61,8 +61,8 @@ The worked examples throughout are this kit, so you can price the whole thing.
 
 ## The build record
 
-Fill this in before you touch anything. Every field is asked for later, by the router, by
-Cloudflare, by the Ubuntu installer or by Vantage itself, and deciding them on the fly is how
+Fill this in before you touch anything. Every field is asked for later, by the router, by your
+DNS provider, by the Ubuntu installer or by Vantage itself, and deciding them on the fly is how
 a subnet clash or a name mismatch gets built in.
 
 > **Open [`PRE-INSTALL-PLANNER.html`](PRE-INSTALL-PLANNER.html) in a browser and fill it in
@@ -279,8 +279,8 @@ devices connect to. **Needing a name is not the same as publishing one.**
 - **Building something that has to be reachable**, a demonstration or playground server?
   All of this step applies.
 
-The rest of this step assumes the second. Any DNS provider works; the worked example is
-Cloudflare because that is where our zone lives.
+The rest of this step assumes the second. Any DNS provider works. The examples below name no
+provider: substitute yours wherever one is called for.
 
 ### 2.0 If you do not have a domain yet
 
@@ -290,8 +290,9 @@ Skip this if you already have one and can edit its DNS.
    name is enough: every box you ever build can be a different label under it, so
    `kit1.example.com` and `kit2.example.com` cost nothing extra.
 2. **Point it at a DNS provider whose web page you can actually use.** The registrar you
-   bought from will host DNS itself, which is fine. We use Cloudflare's free tier because the
-   API token in 2.3 makes renewals scriptable. Moving a name to another provider means
+   bought from will host DNS itself, which is fine. If you want scripted renewals, prefer one
+   with an API token and a certbot plugin; most of the large providers have both. Moving a
+   name to another provider means
    changing its **nameservers** at the registrar, which the new provider walks you through and
    which takes a few hours to settle.
 3. **Check you can add a record** before going further. If you cannot reach the page that
@@ -308,8 +309,9 @@ by name.
 Otherwise, in the zone, add an **A record** for the hostname, pointing at the address the
 outside world should reach.
 
-**Set it to DNS only. The proxy must be off.** In Cloudflare that is the grey cloud, not the
-orange one. The proxy breaks TAK's ports (8089, 8443, 8446) and it breaks the HTTP-01
+**Set it to DNS only. Any proxying must be off.** Some providers can sit in front of your
+traffic rather than just answering for the name; on Cloudflare, for instance, that is the grey
+cloud rather than the orange one. The proxy breaks TAK's ports (8089, 8443, 8446) and it breaks the HTTP-01
 certificate challenge. This has bitten us on a public box and it is not obvious from the
 symptom.
 
@@ -357,13 +359,15 @@ entry exists.
 
 ### 2.4 The API token, if you want scripted certificates
 
-Step 3 issues the certificate with `certbot --dns-cloudflare`, which needs a token.
+Step 3 issues the certificate with certbot's plugin for your DNS provider, which needs a
+token. Install the plugin for yours: the package is usually `python3-certbot-dns-<provider>`
+and the flags follow the same shape, `--dns-<provider>` and `--dns-<provider>-credentials`.
 
-In Cloudflare, create an API token scoped to **Zone / DNS / Edit** on that one zone. Nothing
-wider.
+In your provider's console, create an API token that can **edit DNS records in that one zone**
+and nothing wider.
 
-**Decide where that token lives, deliberately.** It can edit your DNS. Ours stays on the estate
-console at `/etc/letsencrypt/cloudflare.ini` and **never goes on a field box**, which is the
+**Decide where that token lives, deliberately.** It can edit your DNS. Keep it on the machine
+that issues certificates, not on a box you take out with you, which is the
 whole reason step 3 issues the certificate off-box and carries it. A token on a kit is a token
 you have shipped.
 
@@ -438,13 +442,18 @@ probably not the laptop in front of you. **Name that machine in the command** ra
 pasting a bare `sudo` line into whichever terminal is on top:
 
 ```bash
-ssh -t you@your-console 'sudo certbot certonly --dns-cloudflare \
-  --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
+ssh -t you@your-console 'sudo certbot certonly --dns-PROVIDER \
+  --dns-PROVIDER-credentials /etc/letsencrypt/dns.ini \
   -d kit1.example.com'
 ```
 
-`-t` because `sudo` needs a terminal. If certbot is not there yet,
-`sudo apt install certbot python3-certbot-dns-cloudflare` on that machine first.
+Replace `PROVIDER` with certbot's plugin name for your DNS provider, and put that provider's
+credentials in the file you name. `-t` because `sudo` needs a terminal. If certbot is not
+there yet, `sudo apt install certbot python3-certbot-dns-PROVIDER` on that machine first.
+
+If your provider has no plugin, `certbot certonly --manual --preferred-challenges dns` works
+with any of them: it prints a TXT record for you to add by hand, and you repeat that at every
+renewal.
 
 Then, **on that same machine**, carry `/etc/letsencrypt/live/<fqdn>/` and `/etc/letsencrypt/archive/<fqdn>/` to the same
 paths on the box. **Carry them with `tar`, not `cp`**, so the live-to-archive symlinks survive.

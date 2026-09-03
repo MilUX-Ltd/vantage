@@ -611,7 +611,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
       "<tr><td>Proxy</td><td class=\"k\">OFF. DNS only</td></tr>" +
       "</tbody></table></div>" +
       (dnsOptional ? "" :
-        '<div class="trap"><p><b>The proxy must be off.</b> On Cloudflare that is the grey cloud, not the orange one. Leaving it on breaks TAK\'s ports and the certificate check, and the symptom will not tell you that is why.</p></div>')));
+        '<div class="trap"><p><b>Any proxying must be off.</b> If your DNS provider can sit in front of your traffic, turn that off for this name; on Cloudflare it is the grey cloud rather than the orange one. Leaving it on breaks TAK\'s ports and the certificate check, and the symptom will not tell you that is why.</p></div>')));
 
     // ---- step 3, certificate
     if (kit && s.cert === "none") {
@@ -640,13 +640,16 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 
         "<p>Run this on a machine that has internet and holds your DNS provider's API token. Not on the box: a kit behind a router cannot be reached by the certificate authority, and the token should never travel to a field box.</p>" +
         cmd(certhost
-              ? "ssh -t " + certhost + " 'sudo certbot certonly --dns-cloudflare \\\n" +
-                "  --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \\\n" +
+              ? "ssh -t " + certhost + " 'sudo certbot certonly \\\n" +
+                "  --dns-YOUR-PROVIDER \\\n" +
+                "  --dns-YOUR-PROVIDER-credentials /etc/letsencrypt/dns.ini \\\n" +
                 "  -d " + fqdn + "'"
-              : "sudo certbot certonly --dns-cloudflare \\\n" +
-                "  --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \\\n" +
+              : "sudo certbot certonly \\\n" +
+                "  --dns-YOUR-PROVIDER \\\n" +
+                "  --dns-YOUR-PROVIDER-credentials /etc/letsencrypt/dns.ini \\\n" +
                 "  -d " + fqdn,
             certhost ? MINE : TOKEN) +
+        "<p>certbot has a plugin for most DNS providers. Install the one for yours and put its credentials in that file; the plugin name replaces YOUR-PROVIDER above. If yours has no plugin, use the by-hand route instead &mdash; it works with any provider and costs you a TXT record every 60 days.</p>" +
         "<p>Then carry it to the box, keeping the links between the two folders intact. Copying the files individually breaks it.</p>" +
         cmd("sudo tar -C /etc/letsencrypt -cf - live/" + fqdn + " archive/" + fqdn + " \\\n" +
             "  | ssh " + user + "@" + box + " 'sudo tar -C /etc/letsencrypt -xf -'", TOKEN) +

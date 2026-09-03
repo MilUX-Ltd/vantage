@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.49.0"
+VERSION = "2.50.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.50-beta"
+VANTAGE_RELEASE = "0.9.51-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -507,19 +507,25 @@ ACTIONS = {
             {"name": "le_email", "label": "Let's Encrypt email", "optional": True,
              "pattern": r"^$|^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$",
              "help": "expiry notices go here; not needed on a private build"},
-            {"name": "public_cert", "label": "Publicly trusted certificate",
-             "pattern": r"^(none|http|dns)?$", "optional": True,
-             "choices": [("none", "No - this estate's own authority"),
-                         ("http", "Yes - the box is reachable from the internet"),
-                         ("dns", "Yes - prove the name by DNS (works on a private box)")],
-             "help": "Both yes answers publish this box's name permanently in public "
-                     "certificate transparency logs, and both let a device join from "
-                     "the plain QR. DNS is the one that works behind a router"},
-            {"name": "dns_token_b64", "label": "DNS API token",
-             "pattern": r"^[A-Za-z0-9+/=]{0,512}$", "optional": True,
-             "secret": True, "encode": "b64", "input_type": "password",
-             "help": "only for the DNS route: a Cloudflare token with permission to edit "
-                     "records in the zone this name sits in. The box keeps it for renewal"},
+            {"name": "public_cert", "label": "Certificate for this box",
+             "pattern": r"^(none|http|supplied)?$", "optional": True,
+             "choices": [("none", "Make its own - devices need this estate's authority once"),
+                         ("http", "Get one automatically - only if the box is reachable "
+                                  "from the internet"),
+                         ("supplied", "I already have one - paste it below")],
+             "help": "A certificate from a well-known authority means handsets join by "
+                     "scanning one code and nothing else. Making its own publishes "
+                     "nothing, and each handset takes this estate's authority once "
+                     "instead"},
+            {"name": "cert_pem_b64", "label": "Certificate", "optional": True,
+             "pattern": r"^[A-Za-z0-9+/=]{0,20000}$", "encode": "b64", "kind": "textarea",
+             "help": "only for I already have one: the certificate, including any "
+                     "intermediates, in PEM form (-----BEGIN CERTIFICATE-----)"},
+            {"name": "key_pem_b64", "label": "Private key", "optional": True,
+             "pattern": r"^[A-Za-z0-9+/=]{0,20000}$", "encode": "b64", "secret": True,
+             "kind": "textarea",
+             "help": "the key that goes with it, in PEM form. It is written to the box "
+                     "and readable only by root"},
             {"name": "org", "label": "Organisation", "pattern": r"^[A-Za-z0-9._ -]{1,40}$",
              "help": "PKI organisation, e.g. MilUX"},
             {"name": "org_unit", "label": "Org unit", "pattern": r"^[A-Za-z0-9._ -]{1,40}$",
@@ -806,25 +812,6 @@ ACTIONS = {
         "confirm": "Export this estate\u2019s certificate authority as a device package "
                    "from {target}. It carries no credential, but it decides what a device "
                    "will trust; hand it over as deliberately as a key.",
-    },
-    "public-cert": {
-        "label": "Get a public certificate (DNS)", "verb": "public-cert",
-        "key": "id_action_publiccert", "group": "tak", "needs": "takserver",
-        "desc": "Proves this name through DNS and puts a publicly trusted certificate on "
-                "the enrolment port, so a device joins from the plain QR with nothing typed.",
-        "risk": "write", "tag": "Certificate", "needs_passphrase": True, "result": "text",
-        "inputs": [{"name": "token_b64", "label": "Cloudflare API token",
-                    "pattern": r"^[A-Za-z0-9+/=]{20,512}$",
-                    "secret": True, "encode": "b64", "input_type": "password",
-                    "help": "a token with Zone:DNS:Edit on the zone this box's name sits "
-                            "in. Cloudflare > My Profile > API Tokens > Create. It is "
-                            "written to the box 0600 and used again at renewal."},
-                   {"name": "email", "label": "Contact email", "optional": True,
-                    "pattern": r"^[A-Za-z0-9._%+-]*@?[A-Za-z0-9.-]*\.?[A-Za-z]*$",
-                    "help": "where Let's Encrypt sends expiry warnings; optional"}],
-        "confirm": "Obtain a publicly trusted certificate for {target} by writing a DNS "
-                   "record in your zone, then restart TAK Server. The enrolment port stops "
-                   "serving this box\u2019s own certificate.",
     },
     "deploy-console": {
         "label": "Install a console on this box", "verb": "install-console",
@@ -4502,6 +4489,9 @@ def start_setup_job(data, client, authed=False):
     # a new box gets its own self-manage console unless the operator opts out; a plain
     # bind default keeps it local to the box (reachable by whoever logs into that box)
     with_console = str(data.get("with_console", "1")) == "1" and not enrol_only
+    # A box with a screen boots into its own console instead of a text login. Only
+    # meaningful alongside a console, so it follows that decision.
+    kiosk = "yes" if str(data.get("kiosk", "no")) == "yes" else "no"
     console_bind = str(data.get("console_bind", "") or "127.0.0.1:8090")
     if not re.fullmatch(r"[A-Za-z0-9.:_-]{1,64}", console_bind):
         console_bind = "127.0.0.1:8090"
@@ -4660,14 +4650,20 @@ def start_setup_job(data, client, authed=False):
                     else:
                         say(log, f"credential FAILED: {c['user']}: {res.get('error') or res.get('message')}")
                 if with_console:
-                    say(log, "-- phase 4b/5: install a self-manage console on this box --")
+                    say(log, "-- phase 4b/5: install a self-manage console on this box"
+                             + (" (booting into it)" if kiosk == "yes" else "") + " --")
+                    # deploy-console has taken a kiosk input since it was written. The
+                    # build never passed it, so a box asked for a screen got a text login.
                     ccode, cres = run_action("deploy-console", ename,
-                                             {"bind": console_bind}, passphrase, True,
-                                             client, passphrase_ok=authed)
+                                             {"bind": console_bind, "kiosk": kiosk},
+                                             passphrase, True, client, passphrase_ok=authed)
                     if ccode == 200:
                         say(log, cres.get("message", "console installed"))
                         say(log, "   this box can now run its own Vantage console; the "
                                  "operator on the box logs in to manage it locally.")
+                        if kiosk == "yes":
+                            say(log, "   the screen boots into that console; power it on "
+                                     "and it is there.")
                     else:
                         say(log, "console install did not complete: "
                                  + str(cres.get("error") or cres.get("message")))
@@ -14743,29 +14739,27 @@ SETUP_JS = """
   function pubcertNote(){
     var sel=$('#wz-pubcert'), note=$('#wz-pubcert-note'), ew=$('#wz-emailwrap');
     if(!sel||!note) return;
-    var dw=$('#wz-dnswrap');
-    // Private and publicly-certified are not opposites. A box on a private address can
-    // hold a real certificate by proving its name through DNS, which is how this estate
-    // runs its own boxes. A two-answer question could not say that, so it did not.
+    var dw=$('#wz-certwrap');
+    // Where a certificate comes from is the operator's business, not ours. An earlier
+    // version wired our own DNS provider into this question, which is fine for us and
+    // meaningless to anybody else who installs the product.
     if(sel.value==='none'){
-      note.innerHTML='<b>Devices need the estate authority once.</b> Nothing about '+
-        'this box is published, and no certificate authority is asked for anything. In '+
-        'exchange, each handset imports the estate authority once - Actions > Provision '+
-        'a device to this estate - and after that joining any box in the estate is a '+
-        'plain QR with nothing typed.';
+      note.innerHTML='<b>Nothing about this box is published.</b> Handsets will not trust '+
+        'it until they have this estate authority, so each one takes that once - Actions '+
+        '&gt; Provision a device to this estate - from a memory stick or your file store. '+
+        'After that, joining any box in the estate is one scan and nothing typed.';
       if(ew) ew.hidden=true; if(dw) dw.hidden=true;
-    }else if(sel.value==='dns'){
-      note.innerHTML='<b>Devices join from the QR alone, and the box stays private.</b> '+
-        'The name is proved by writing a record in your DNS zone, so nothing has to reach '+
-        'this box: no inbound port, no public address. Its name is still published '+
-        'permanently in public certificate transparency logs, which is the part to be '+
-        'deliberate about.';
-      if(ew) ew.hidden=false; if(dw) dw.hidden=false;
+    }else if(sel.value==='supplied'){
+      note.innerHTML='<b>Handsets join by scanning one code.</b> Paste a certificate you '+
+        'already hold, from whoever issued it. Nothing is asked of any authority during '+
+        'the build, and renewing it stays with you. Whether the name was published '+
+        'depends on who issued it, not on this build.';
+      if(ew) ew.hidden=true; if(dw) dw.hidden=false;
     }else{
-      note.innerHTML='<b>Devices join from the QR alone.</b> The box must already be '+
-        'reachable from the internet on port 80 for the name you gave, so this is for a '+
-        'hosted server rather than kit behind a router. Its name is published permanently '+
-        'in public certificate transparency logs.';
+      note.innerHTML='<b>Handsets join by scanning one code.</b> The box asks for a '+
+        'certificate during the build, which only works if it can already be reached from '+
+        'the internet - a hosted server, not kit behind a router. Its name is then '+
+        'published permanently in public certificate logs.';
       if(ew) ew.hidden=false; if(dw) dw.hidden=true;
     }
   }
@@ -14778,7 +14772,7 @@ SETUP_JS = """
     // receive. Requiring an address for one blocked step 5 on a field with no purpose.
     var pubcert=($('#wz-pubcert')?$('#wz-pubcert').value:'yes');
     var need = pubcert==='none' ? ['wz-fqdn'] : ['wz-fqdn','wz-email'];
-    if(pubcert==='dns') need.push('wz-dnstoken');
+    if(pubcert==='supplied'){ need.push('wz-certpem'); need.push('wz-keypem'); }
     var ok=true;
     need.forEach(function(id){if(!$('#'+id).value.trim())ok=false;});
     if(ok&&(S.pkg||S.debOnBox)) unlock(5);
@@ -14832,14 +14826,16 @@ SETUP_JS = """
       provision:{fqdn:$('#wz-fqdn').value.trim(),ca_pass:($('#wz-capass')?$('#wz-capass').value:''),
         le_email:$('#wz-email').value.trim(),
         public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'none'),
-        dns_token_b64:($('#wz-dnstoken')&&$('#wz-dnstoken').value?btoa($('#wz-dnstoken').value):''),
+        cert_pem_b64:($('#wz-certpem')&&$('#wz-certpem').value?btoa($('#wz-certpem').value):''),
+        key_pem_b64:($('#wz-keypem')&&$('#wz-keypem').value?btoa($('#wz-keypem').value):''),
         org:$('#wz-org').value.trim(),org_unit:$('#wz-orgunit').value.trim(),
         country:$('#wz-country').value.trim(),state:$('#wz-state').value.trim(),
         city:$('#wz-city').value.trim(),deb:$('#wz-deb').value.trim(),
         components:$('#wz-components').value.trim(),
         dry_run:$('#wz-dry').checked?'1':'0'},
       creds:creds,passphrase:$('#wz-pass').value,confirm:true,
-      with_console:($('#wz-console')&&$('#wz-console').checked)?'1':'0'};
+      with_console:($('#wz-console')&&$('#wz-console').checked)?'1':'0',
+      kiosk:($('#wz-kiosk')&&$('#wz-kiosk').checked)?'yes':'no'};
     var eo=$('#wz-enrolonly'); if(eo&&eo.checked){body.enrol_only='1';body.creds=[];}
     // Name what is about to be rebuilt. This button is the last thing between here and a
     // machine being wiped, and it had no confirmation at all. A dry run and an enrol-only
@@ -14980,7 +14976,8 @@ SETUP_JS = """
       deb_file:S.pkg?S.pkg.file:'',deb_sha256:S.pkg?S.pkg.sha:'',
       fqdn:$('#wz-fqdn').value.trim(),le_email:$('#wz-email').value.trim(),
       public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'none'),
-      dns_token_b64:($('#wz-dnstoken')&&$('#wz-dnstoken').value?btoa($('#wz-dnstoken').value):''),
+      cert_pem_b64:($('#wz-certpem')&&$('#wz-certpem').value?btoa($('#wz-certpem').value):''),
+      key_pem_b64:($('#wz-keypem')&&$('#wz-keypem').value?btoa($('#wz-keypem').value):''),
       org:$('#wz-org').value.trim(),org_unit:$('#wz-orgunit').value.trim(),
       country:$('#wz-country').value.trim(),state:$('#wz-state').value.trim(),
       city:$('#wz-city').value.trim(),components:$('#wz-components').value.trim(),
@@ -16728,20 +16725,26 @@ def render_deploy(state):
                "<span class=hint>must already resolve to the box for Let's Encrypt</span></label>"
                "<label class=fl>Publicly trusted certificate"
                "<select id=wz-pubcert>"
-               "<option value=none>No - this estate's own authority</option>"
-               "<option value=http>Yes - the box is reachable from the internet</option>"
-               "<option value=dns>Yes - prove the name by DNS (works on a private box)"
-               "</option>"
+               "<option value=none>Make its own certificate</option>"
+               "<option value=http>Get one automatically</option>"
+               "<option value=supplied>I already have one</option>"
                "</select></label>"
                "<div class=fedpop-note id=wz-pubcert-note></div>"
-               "<label class=fl id=wz-dnswrap hidden>DNS API token"
-               "<input id=wz-dnstoken type=password autocomplete=off "
-               "placeholder='Cloudflare token with Zone:DNS:Edit'>"
-               "<span class=hint>Cloudflare &gt; My Profile &gt; API Tokens &gt; Create. "
-               "It is written to the box privately and kept there for renewal, so the "
-               "box holds a credential for that zone from then on.</span></label>"
-               "<label class=fl id=wz-emailwrap>Let's Encrypt email<input id=wz-email placeholder='ops@example.org'>"
-               "<span class=hint>expiry notices go here</span></label>"
+               "<div id=wz-certwrap hidden>"
+               "<label class=fl>Certificate"
+               "<textarea id=wz-certpem rows=4 spellcheck=false "
+               "placeholder='-----BEGIN CERTIFICATE-----'></textarea>"
+               "<span class=hint>The certificate and any intermediates, as text. Get one "
+               "however suits you; this box does not mind who issued it.</span></label>"
+               "<label class=fl>Private key"
+               "<textarea id=wz-keypem rows=4 spellcheck=false autocomplete=off "
+               "placeholder='-----BEGIN PRIVATE KEY-----'></textarea>"
+               "<span class=hint>The key that goes with it. Written to the box and "
+               "readable only by root. Renewing it stays with you.</span></label></div>"
+               "<label class=fl id=wz-emailwrap>Email for expiry warnings"
+               "<input id=wz-email placeholder='ops@example.org'>"
+               "<span class=hint>where the certificate authority sends renewal "
+               "reminders</span></label>"
                f"<label class=fl>Organisation<input id=wz-org value='{e(_di['org'])}' placeholder='e.g. Acme Defence' required></label>"
                f"<label class=fl>Org unit<input id=wz-orgunit value='{e(_di['org_unit'])}' placeholder='e.g. Operations' required></label>"
                f"<label class=fl>Country<input id=wz-country value='{e(_di['country'])}' maxlength=2 placeholder='e.g. GB' required></label>"
@@ -16793,6 +16796,11 @@ def render_deploy(state):
                "certificate authority, and signing is what your password releases. Add no "
                "users and you are not asked for it.</p></div></fieldset>")
     doc.append("<fieldset class='wz-step depcard locked'><legend>5 · Run</legend>"
+               "<label class=depdry><input type=checkbox id=wz-kiosk> "
+               "<b>Boot this box into its console</b> - for a box with a screen. It "
+               "powers on into a full-screen browser showing its own console, instead "
+               "of a text login. The plan ticks this for you if you said the box has a "
+               "screen.</label>"
                "<label class=depdry><input type=checkbox id=wz-console checked> "
                "<b>Install a console on this box</b> - a self-manage Vantage console (the "
                "same version this one runs), so whoever logs into the box can manage it "
@@ -16878,7 +16886,12 @@ def render_deploy(state):
     lines.push('\u2022 name: ' + (p.fqdn||'not set'));
     lines.push('\u2022 admin user: ' + (p.user||'not set'));
     lines.push('\u2022 carries: ' + ((p.comp&&p.comp.length)?p.comp.join(', '):'TAK Server only'));
-    if(p.kiosk) lines.push('\u2022 this box is meant to boot into its own console');
+    // The plan said the box has a screen, so tick the box that acts on it. Saying so in
+    // the summary and then leaving the control alone is how a build finished with no
+    // kiosk on a laptop that was asked for one, more than once.
+    var kk=document.getElementById('wz-kiosk');
+    if(kk) kk.checked = !!p.kiosk;
+    if(p.kiosk) lines.push('\u2022 this box will boot into its own console');
     if(p.cert==='none') lines.push('\u2022 no public certificate was wanted for it');
     if(!p.addr) lines.push('\u2022 the address is blank - fill it in yourself, it is the one '
       + 'this console must be able to reach');

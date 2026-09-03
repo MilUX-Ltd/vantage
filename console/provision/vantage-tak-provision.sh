@@ -42,11 +42,13 @@ FQDN="" LE_EMAIL="" ORG="MilUX" ORG_UNIT="TAK" COUNTRY="GB" STATE="England" CITY
 DEB="" COMPONENTS="" ONLY_STAGE="" DRY=0 CA_PASS_CHOICE=""
 OFFLINE_REPO=""      # --offline-repo: build from a carried-in package bundle
 NO_LE=0              # --no-letsencrypt: skip the public-certificate stage
-# --dns-credentials: prove the name by writing a DNS record instead of by answering an
-# inbound connection. This is what lets a box on a private address hold a publicly
-# trusted certificate, which is how our own estate runs: private boxes, real
-# certificates. Without it a box behind a router has only its own authority.
-DNS_CREDS=""
+# --cert-file / --key-file: a certificate you already hold, from wherever you got it.
+# This is how a box on a private address ends up with a publicly trusted certificate: you
+# obtain one by whatever means your DNS provider offers, and hand it over. The build has
+# no opinion about who issued it or how, which is the point - an earlier version wired one
+# particular DNS provider into the product because that is what WE use, and that provider
+# is nobody else's business.
+CERT_FILE="" KEY_FILE=""
 # needrestart list-mode: apt inside a provision must never auto-restart services. On a
 # single-box install the console IS on this box, and needrestart restarting it kills the
 # job that is driving the provision (bitten live, 27 Aug). Deferred restarts land at the
@@ -71,7 +73,8 @@ while [[ $# -gt 0 ]]; do
         --offline-repo) OFFLINE_REPO="${2:-}"; shift 2 ;;
         # skip the browser-trusted 8446 connector: no public DNS, or you do not want it
         --no-letsencrypt) NO_LE=1; shift ;;
-        --dns-credentials) DNS_CREDS="${2:-}"; shift 2 ;;
+        --cert-file) CERT_FILE="${2:-}"; shift 2 ;;
+        --key-file) KEY_FILE="${2:-}"; shift 2 ;;
         --components) COMPONENTS="${2:-}"; shift 2 ;;
         --stage) ONLY_STAGE="${2:-}"; shift 2 ;;
         --ca-pass) CA_PASS_CHOICE="${2:-}"; shift 2 ;;
@@ -412,6 +415,47 @@ stage_letsencrypt() {
     # 8446 keystore and the assignment used to sit after it, so that path ran with an
     # empty password. It is the path a private build takes.
     local pass; pass=$(capass)
+    # A certificate we were handed. No authority is contacted, no challenge is answered,
+    # and nothing about this box is published by us - whatever was published happened when
+    # the certificate was issued, wherever that was.
+    if [[ -n "$CERT_FILE" ]]; then
+        if (( DRY )); then
+            echo "DRY: install the supplied certificate on 8446"
+            echo "STAGE-OK letsencrypt (supplied certificate)"
+            return 0
+        fi
+        if [[ ! -s "$CERT_FILE" || ! -s "$KEY_FILE" ]]; then
+            log "the supplied certificate or key is missing or empty"
+            log "  falling back to this box's own certificate on 8446, so the API still starts"
+            local own0="$CERTS/files/${FQDN}.jks"
+            [[ -f "$own0" ]] && add_8446_connector "certs/files/${FQDN}.jks" "$pass" "cert_https_own"
+            echo "STAGE-OK letsencrypt (own certificate: nothing usable was supplied)"
+            return 0
+        fi
+        # It has to be a real pair, and it has to be for this name, or 8446 comes up
+        # serving something no device will accept and the build calls that success.
+        if ! openssl x509 -in "$CERT_FILE" -noout >/dev/null 2>&1; then
+            die "--cert-file is not a certificate"
+        fi
+        local cmod kmod
+        cmod=$(openssl x509 -in "$CERT_FILE" -noout -modulus 2>/dev/null | openssl md5)
+        kmod=$(openssl rsa  -in "$KEY_FILE"  -noout -modulus 2>/dev/null | openssl md5)
+        [[ -n "$cmod" && "$cmod" == "$kmod" ]] || die "that key does not match that certificate"
+        if ! openssl x509 -in "$CERT_FILE" -noout -checkhost "$FQDN" >/dev/null 2>&1; then
+            log "WARNING: the certificate does not name $FQDN - devices will refuse it"
+        fi
+        run "openssl pkcs12 -export -in '$CERT_FILE' -inkey '$KEY_FILE' \
+             -out /opt/tak/certs/files/le.p12 -name $FQDN -passout pass:$pass"
+        run "rm -f $LE_JKS"
+        run "keytool -importkeystore -destkeystore $LE_JKS -srckeystore /opt/tak/certs/files/le.p12 \
+             -srcstoretype pkcs12 -deststorepass '$pass' -destkeypass '$pass' -srcstorepass '$pass'"
+        run "chown tak:tak $LE_JKS /opt/tak/certs/files/le.p12"
+        add_8446_connector "certs/files/le.jks" "$pass" "cert_https_LE"
+        log "  8446 serves the certificate you supplied"
+        log "  renewal is yours: this box did not obtain it and cannot renew it"
+        echo "STAGE-OK letsencrypt (supplied certificate)"
+        return 0
+    fi
     if (( NO_LE )) || [[ -n "$OFFLINE_REPO" ]]; then
         local why="--no-letsencrypt"
         [[ -n "$OFFLINE_REPO" ]] && why="an offline build"
@@ -434,24 +478,12 @@ stage_letsencrypt() {
         echo "STAGE-OK letsencrypt (own certificate)"
         return 0
     fi
-    if [[ -n "$DNS_CREDS" ]]; then
-        # DNS-01. The authority reads a TXT record from the zone's public nameservers,
-        # so nothing has to reach this box: no inbound port, no public address. The
-        # box's name still enters public certificate transparency logs, which is the
-        # part to be deliberate about rather than the reachability.
-        run "apt-get install -y -qq certbot python3-certbot-dns-cloudflare"
-    else
+    # A certificate that was handed to us needs no certbot and no challenge at all.
+    if [[ -z "$CERT_FILE" ]]; then
         run "apt-get install -y -qq certbot"
     fi
     if [[ ! -d /etc/letsencrypt/live/$FQDN ]]; then
-        if [[ -n "$DNS_CREDS" ]]; then
-            run "certbot certonly -d $FQDN -m $LE_EMAIL --dns-cloudflare \
-                 --dns-cloudflare-credentials $DNS_CREDS \
-                 --dns-cloudflare-propagation-seconds 30 \
-                 --agree-tos --no-eff-email --non-interactive --keep-until-expiring"
-        else
-            run "certbot certonly -d $FQDN -m $LE_EMAIL --standalone --agree-tos --no-eff-email --non-interactive"
-        fi
+        run "certbot certonly -d $FQDN -m $LE_EMAIL --standalone --agree-tos --no-eff-email --non-interactive"
     fi
     # certbot is allowed to fail: a box with no public A record cannot be validated, which
     # is CORRECT on a private build. What is not allowed is carrying on as though it
@@ -465,15 +497,11 @@ stage_letsencrypt() {
         # The two routes fail for completely different reasons, and telling an operator
         # to check a public A record when they asked for the DNS route sends them to the
         # wrong place entirely.
-        if [[ -n "$DNS_CREDS" ]]; then
-            log "  certbot could not prove control of the name through DNS. Check the token"
-            log "  can edit records in the zone this name sits in, and that the zone is the"
-            log "  one your nameservers actually serve."
-        else
-            log "  certbot could not prove control of the name from the internet. On a private"
-            log "  box that is expected: there is no public A record, by choice. If you want a"
-            log "  real certificate here, build with the DNS route instead."
-        fi
+        log "  the certificate authority could not reach this box to check the name. It"
+        log "  needs to connect to port 80 from the internet, which nothing behind a router"
+        log "  can offer. That is expected on a private box."
+        log "  To have a trusted certificate here, get one however your DNS provider allows"
+        log "  and build again with 'I already have a certificate'."
         log "  falling back to this box's own certificate on 8446, so the API still starts"
         local own="$CERTS/files/${FQDN}.jks"
         if [[ -f "$own" ]]; then

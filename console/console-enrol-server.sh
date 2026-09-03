@@ -45,7 +45,6 @@ declare -A ACTION_SCRIPTS=(
   [id_action_cloudtak]=tak-update-cloudtak
   [id_action_cert]=tak-issue-cert
   [id_action_enrol]=tak-enrol-device
-  [id_action_publiccert]=tak-public-cert
   [id_action_estateca]=tak-estate-ca
   [id_action_group]=tak-set-group
   [id_action_revoke]=tak-revoke-cert

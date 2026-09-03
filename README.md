@@ -138,7 +138,7 @@ Three routes, in order of preference for a first box:
    to the same paths on the box, preserving the live-to-archive symlinks (carry them with
    tar, not cp). Renewal is manual, roughly every sixty days.
 
-2. **A DNS API token.** `certbot --dns-cloudflare` (and equivalents for other providers)
+2. **A DNS API token.** certbot has a plugin for most DNS providers (`--dns-<provider>`)
    runs scripted and renewable wherever the token lives. Decide deliberately where that
    is: the token can edit your DNS, and putting it on a field box means shipping it.
 

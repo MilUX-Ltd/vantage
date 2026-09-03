@@ -5,13 +5,13 @@ audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
 audit_note_2026-09-03: |
-  Prose only. Added the public-cert section describing the DNS-01 route to a
-  publicly trusted certificate. No executable content, no new commands, no new
-  credential paths beyond describing where the action writes its token. Hash
-  updated by the maintainer; a full re-audit with skill-safety-audit is still
-  owed and is not blocked by anything here.
-audit_sha: 731e5761ecb91943
-audit_sha_source: 8c3c9d163d85a643
+  Prose only, across several edits. The certificate guidance now describes the
+  three build-time choices rather than one DNS provider's plugin, and the
+  provider-specific action it referred to has been removed from the product. No
+  executable content, no new commands, no new credential paths. Hash updated by the
+  maintainer; a full re-audit with skill-safety-audit is still owed.
+audit_sha: 433b503f9cebda8f
+audit_sha_source: 0921c84ab861608b
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -56,44 +56,6 @@ certificate transparency logs, which is rarely acceptable for a customer's deplo
 The package carries no credential and no client certificate, but it does carry the password that
 opens the authority, which is the same password that opens this box's client certificates. Hand
 it over as deliberately as a key.
-
-### Getting a publicly trusted certificate onto a private box
-
-Private and publicly-certified are not opposites, and treating them as one question was
-wrong. A box on a private address can hold a genuine certificate; this estate runs its own
-boxes exactly that way. What decides it is how the name is proved, not where the box sits:
-
-| Route | How the name is proved | Works behind a router? | Published |
-|---|---|---|---|
-| Own authority | nothing is proved to anyone | yes | nothing |
-| Public, inbound | the authority connects to port 80 on the box | **no** | the name, in certificate transparency logs, permanently |
-| Public, DNS | a TXT record in the zone | yes | the same |
-
-A build now asks which of the three, and the DNS route asks for a zone API token with it.
-`public-cert` below does the same thing on a box that is already built.
-
-
-**`public-cert`** &rarr; `console/actions/tak-public-cert`
-
-Do this **before** enrolling devices, because it decides how much work joining one is.
-
-A device will not trust a server whose certificate the box signed itself. With the box's own
-certificate on the enrolment port, a plain QR cannot complete and the operator is pushed into
-importing a data package instead. With a publicly trusted certificate there, one scan is the
-whole join and nothing is typed.
-
-The obstacle is not that the box is private. It is the challenge type. Let's Encrypt's HTTP-01
-challenge needs the authority to reach port 80 on the box from the internet, which nothing on a
-private address can offer. **DNS-01 proves the name by writing a TXT record instead**, so a box
-on 192.168.x.x gets a genuine certificate like any other.
-
-It needs an API token for the DNS zone the name sits in, with permission to edit that zone's
-records. The token is written to the box 0600 and reused at renewal, so treat the box as holding
-a zone credential from then on.
-
-The action refuses rather than reporting a hollow success: it checks the issued certificate is
-not the box's own, waits for 8446 to listen after the restart, and asks that port what it is
-actually serving before it says yes.
 
 ### Enrolling a device
 
