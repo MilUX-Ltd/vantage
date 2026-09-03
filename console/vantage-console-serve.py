@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.45.1"
+VERSION = "2.45.2"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.44-beta"
+VANTAGE_RELEASE = "0.9.45-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -14747,6 +14747,14 @@ SETUP_JS = """
         // carries the authority, the server and the credential together. Lead with it and
         // say plainly which of the two codes to point the camera at.
         var h='<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>';
+        // ATAK asks for the username and password at the end of enrolment even when the
+        // package carries them, so the operator needs them ON THIS SCREEN. They were in
+        // the data all along and simply never printed: the build finished, the device
+        // asked, and the answer existed nowhere the operator could see it.
+        if(c.password){
+          h+='<div class=cred-lines>Sign in on the device as <code>'+esc(c.user)+'</code>'
+            +' with <code>'+esc(c.password)+'</code></div>';
+        }
         if(c.pkg_token){
           h+='<div class=cred-pkg-why><b>Scan this code.</b> This server signs its own '
             +'certificates, so a device cannot verify it until it has the certificate '
