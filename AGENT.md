@@ -118,6 +118,7 @@ changes something recoverable, `destructive` changes something that is not trivi
 | `vpn-join` | write | Join the box to your private network |
 | `vpn-leave` | write | Leave it, shredding the join key |
 | `deploy-console` | write | Install a console on a box so it can manage itself |
+| `push-vault` | write | Sends one of this console's Knowledge Vault folders to the box over the install-console key, under the never-clobber rule: anything newer on the box is kept. |
 
 The Meshtastic mesh is Mesh Manager's, a standalone application reached from a box's tile
 (ADR-005); the agent points there rather than acting on the mesh.

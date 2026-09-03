@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.57.0"
+VERSION = "2.58.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.57-beta"
+VANTAGE_RELEASE = "0.9.58-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -692,6 +692,23 @@ ACTIONS = {
                    "from {target}. It carries no credential, but it decides what a device "
                    "will trust; hand it over as deliberately as a key.",
     },
+    "push-vault": {
+        # Rides the install-console key: the far box's forced command permits one verb
+        # and demands the installer marker, both of which this payload carries. So the
+        # vault reaches every enrolled console box with NO re-enrol and no change on the
+        # box - and no far-side HTTP surface, which the deployed edition does not offer.
+        "label": "Send a vault folder to this box", "verb": "install-console",
+        "key": "id_action_install_console", "group": "box", "needs": "",
+        "desc": "Lands one of this console's Knowledge Vault folders on the box, under the "
+                "never-clobber rule: anything newer on the box is kept.",
+        # the same shape STORE_NAME_RE enforces on the store; the registry is built
+        # before that constant exists, so the pattern is written out here
+        "inputs": [{"name": "folder", "label": "Folder", "pattern": r"[A-Za-z0-9][A-Za-z0-9._ -]{0,79}",
+                    "placeholder": "OP TELIC"}],
+        "confirm": "Send the folder to {target}.",
+        "risk": "write", "tag": "Writes the box's vault", "needs_passphrase": True,
+        "result": "text", "gen_artifact": "vault", "timeout": 120,
+    },
     "deploy-console": {
         "label": "Install a console on this box", "verb": "install-console",
         "key": "id_action_install_console", "group": "network", "needs": "",
@@ -1030,6 +1047,10 @@ def enabled_actions(cfg):
     if not cfg:
         return []
     en = set(cfg.get("enabled", []))
+    # push-vault rides deploy-console's key, so it exists wherever that does; enrolment
+    # never had to learn its name for it to work on a console enrolled before it existed
+    if "deploy-console" in en:
+        en.add("push-vault")
     return [a for a in ACTIONS if a in en]   # registry order = safe -> dangerous
 
 
@@ -1290,6 +1311,15 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
             return 500, {"error": f"could not build the console installer: {e}"[:200]}
         argv = [hashlib.sha256(payload.encode()).hexdigest(),
                 base64.b64encode(str(bind).encode()).decode()]
+    elif a.get("gen_artifact") == "vault":
+        folder = str((inputs or {}).get("folder", ""))
+        vcode, bundle = vault_export(folder)
+        if vcode != 200:
+            return vcode, bundle
+        payload = build_vault_installer(bundle)
+        # the front script insists on a bind spec; a push has none, so a harmless token
+        argv = [hashlib.sha256(payload.encode()).hexdigest(),
+                base64.b64encode(b"vault").decode()]
     elif a.get("artifact"):
         art = resolve_artifact(a["artifact"])
         try:
@@ -1775,6 +1805,70 @@ WantedBy=multi-user.target
 
 
 
+def build_vault_installer(bundle):
+    """A self-contained bash payload that lands one vault folder on the box it runs on. It
+    rides the install-console key: the forced command on every enrolled box accepts one
+    verb, checks the sha256, insists on the VANTAGE-CONSOLE-INSTALLER marker, and runs the
+    payload as root. So the vault reaches a box over the same channel the console itself
+    arrived by - no far-side HTTP surface, no token handshake, and a kit box on a LAN behind
+    its router is reached exactly as easily as one on the tailnet.
+
+    The rule is the pull rule, restated in python on the box: a local file newer than the
+    copy offered is kept and reported, everything else is written whole, temp-then-replace,
+    owned like the vault root so the box's own vault sync and console can still write it."""
+    blob = base64.b64encode(json.dumps(bundle).encode()).decode()
+    lines = [blob[i:i + 76] for i in range(0, len(blob), 76)]
+    return (
+        "#!/usr/bin/env bash\n"
+        "# VANTAGE-CONSOLE-INSTALLER - lands one Knowledge Vault folder on this box.\n"
+        "# Sent by the estate console over the install-console key. It writes into this\n"
+        "# box's vault under the never-clobber rule and changes nothing else.\n"
+        "set -euo pipefail\n"
+        "root=\"${VANTAGE_CONSOLE_VAULT:-}\"\n"
+        "if [[ -z \"$root\" ]]; then\n"
+        "  for u in /etc/systemd/system/vantage-console-deployed.service /etc/systemd/system/vantage-console.service; do\n"
+        "    [[ -f \"$u\" ]] && root=$(grep -m1 '^Environment=VANTAGE_CONSOLE_VAULT=' \"$u\" | cut -d= -f3-) && [[ -n \"$root\" ]] && break\n"
+        "  done\n"
+        "fi\n"
+        "root=\"${root:-/srv/vault/Deployed}\"\n"
+        "mkdir -p \"$root\"\n"
+        "b64=$(mktemp) && trap 'rm -f \"$b64\"' EXIT\n"
+        "cat > \"$b64\" <<'B64BUNDLE'\n" + "\n".join(lines) + "\nB64BUNDLE\n"
+        "export VAULT_ROOT=\"$root\" BUNDLE_B64=\"$b64\"\n"
+        "python3 - <<'PY'\n"
+        "import base64, json, os, sys\n"
+        "root = os.path.realpath(os.environ['VAULT_ROOT'])\n"
+        "bundle = json.loads(base64.b64decode(open(os.environ['BUNDLE_B64']).read()))\n"
+        "st = os.stat(root)\n"
+        "created, updated, kept = [], [], []\n"
+        "for f in bundle.get('files', [])[:400]:\n"
+        "    rel = str(f.get('path', ''))\n"
+        "    full = os.path.realpath(os.path.join(root, rel))\n"
+        "    if not full.startswith(root + os.sep) or not rel.lower().endswith(('.md', '.txt', '.json', '.csv', '.yaml', '.yml')):\n"
+        "        continue\n"
+        "    raw = base64.b64decode(f.get('content_b64', ''))\n"
+        "    if os.path.exists(full):\n"
+        "        if os.path.getmtime(full) >= int(f.get('mtime', 0)):\n"
+        "            kept.append(rel); continue\n"
+        "        updated.append(rel)\n"
+        "    else:\n"
+        "        created.append(rel)\n"
+        "    d = os.path.dirname(full)\n"
+        "    if not os.path.isdir(d):\n"
+        "        os.makedirs(d, exist_ok=True)\n"
+        "        try: os.chown(d, st.st_uid, st.st_gid); os.chmod(d, 0o2775)\n"
+        "        except OSError: pass\n"
+        "    tmp = full + '.vault-push-tmp'\n"
+        "    with open(tmp, 'wb') as fh: fh.write(raw)\n"
+        "    os.replace(tmp, full)\n"
+        "    try: os.chown(full, st.st_uid, st.st_gid); os.chmod(full, 0o664)\n"
+        "    except OSError: pass\n"
+        "print('VAULT-IMPORT folder=%s created=%d updated=%d kept=%d' % (bundle.get('folder',''), len(created), len(updated), len(kept)))\n"
+        "print('VAULT-IMPORT-JSON ' + json.dumps({'created': created, 'updated': updated, 'kept': kept}))\n"
+        "PY\n"
+    )
+
+
 def build_console_installer(kiosk=False):
     """A self-contained bash installer that stands up a deployed-edition console on the
     box it runs on. It embeds THIS console's program (so the estate stays one version)
@@ -2164,11 +2258,43 @@ def vault_push(data, client):
     as a pull - its newer local work is kept - and says exactly what landed."""
     pid = str(data.get("peer", ""))
     folder = str(data.get("folder", ""))
+    if not re.fullmatch(STORE_NAME_RE, folder):
+        return 400, {"error": "bad folder name"}
+    if pid.startswith("box:"):
+        # An enrolled box: the vault goes over the install-console key this console already
+        # holds for it, as an installer payload the box verifies and runs as root. This is
+        # the route for the deployed edition, whose console listens on loopback and cannot
+        # mint a peer token, and for any kit box the tailnet cannot reach on HTTP.
+        name = pid[4:]
+        label = next((t.get("label") or name for t in (load_state()[0] or {}).get("targets", [])
+                      if t.get("name") == name), name)
+        # The operator gate is satisfied the way the dispatcher satisfies it everywhere else:
+        # a signed-in session, or open mode (where nobody is ever signed in because the
+        # console trusts the caller outright). Without the second half a dev console in
+        # open mode answered every tick with "passphrase incorrect".
+        code, res = run_action("push-vault", name, {"folder": folder}, None, True, client,
+                               passphrase_ok=bool(data.get("_session_ok")) or AUTH_OPEN_MODE)
+        if code != 200:
+            return code, {"error": str(res.get("error") or res.get("message") or "the box refused")[:300]}
+        msg = str(res.get("message") or "")
+        m = re.search(r"VAULT-IMPORT-JSON (\{.*\})", msg)
+        try:
+            landed = json.loads(m.group(1)) if m else {}
+        except Exception:
+            landed = {}
+        if not m:
+            return 502, {"error": "the box ran the payload but did not report what landed: "
+                                  + msg[:200]}
+        record_sync_rule(pid, label, folder, "push",
+                         landed.get("created", []), landed.get("updated", []), landed.get("kept", []))
+        audit({"action": "vault-push", "target": folder, "peer": name, "result": "OK",
+               "client": client})
+        return 200, {"folder": folder, "peer": label, "sent": True,
+                     "created": landed.get("created", []), "updated": landed.get("updated", []),
+                     "kept": landed.get("kept", [])}
     rec = next((p_ for p_ in _load_json_list(PEERS_OUT_FILE) if p_.get("id") == pid), None)
     if not rec:
         return 404, {"error": "no such peer"}
-    if not re.fullmatch(STORE_NAME_RE, folder):
-        return 400, {"error": "bad folder name"}
     code, bundle = vault_export(folder)
     if code != 200:
         return code, bundle
@@ -15319,11 +15445,63 @@ def render_sync(state):
                "each other box should receive. A tick sends it now; the far box keeps any newer "
                "edits of its own.</span></div>")
 
-    # ---- to other consoles: one card per peer, a tick per folder ---------------------------
-    doc.append("<h3 class=sync-h>To other consoles</h3>")
+    # ---- to the estate's own boxes: every enrolled box with a console, no pairing ------------
+    # The deployed edition listens on loopback and cannot mint a token, so the peer handshake
+    # can never reach it; the enrolment channel can. A box appears here the moment its
+    # collector reports a console, and a tick sends the folder over the install-console key.
+    def _card(pid, title, sub, rows, extra=""):
+        doc.append(
+            f"<div class=sync-peer data-id='{_e2(pid)}'>"
+            f"<div class=sync-peer-h><b>{_e2(title)}</b><span class=meta>{_e2(sub)}</span></div>"
+            f"<div class=tick-list>{''.join(rows)}</div>"
+            f"<div class='a-res sp-res' role=status></div>{extra}</div>")
+
+    def _rows(pid):
+        out = []
+        for f in _mine:
+            r = _rule_for.get((pid, f))
+            on = bool(r and r.get("direction", "pull") == "push")
+            if r:
+                when = str(r.get("last_pull", ""))[:16].replace("T", " ")
+                what = (f"{r.get('created', 0)} new, {r.get('updated', 0)} updated, "
+                        f"{r.get('kept', 0)} kept - {when}")
+                if r.get("direction", "pull") == "pull":
+                    what = "pulled from there, not sent - " + what
+            else:
+                what = "not shared"
+            out.append(
+                f"<label class=tick-row data-folder='{_e2(f)}'>"
+                f"<input type=checkbox class=tick-folder{' checked' if on else ''}>"
+                f"<span class=tick-name>{_e2(f)}</span>"
+                f"<span class=tick-note>{_e2(what)}</span>"
+                f"<button type=button class='tick-send cred-refresh'{'' if on else ' hidden'}>"
+                f"Send now</button></label>")
+        return out or ["<p class=meta>This console's vault has no folders yet.</p>"]
+
+    _tcfg = (cfg or {}).get("targets") or {}
+    _self_hosts = ("127.0.0.1", "localhost", "::1")
+    boxes = [t for t in state.get("targets", [])
+             if t.get("name") in _tcfg and t.get("console_version")
+             and str(_tcfg[t["name"]]).rsplit("@", 1)[-1] not in _self_hosts]
+    doc.append("<h3 class=sync-h>To the estate's boxes</h3>")
+    if "push-vault" not in acts:
+        doc.append("<p class=doct>Sending to a box needs the install-console action, which "
+                   "arrives with enrolment. None is enabled on this console.</p>")
+    elif not boxes:
+        doc.append("<p class=doct>No enrolled box reports a console yet. Install one from a "
+                   "box's page (Install a console on this box) and it appears here on the "
+                   "next poll.</p>")
+    for t in boxes:
+        pid = "box:" + t["name"]
+        _card(pid, t.get("label") or t["name"],
+              f"console {t.get('console_version')} · over the enrolment channel", _rows(pid))
+
+    # ---- other consoles, reached by a token they minted ----------------------------------------
+    doc.append("<h3 class=sync-h>Other consoles, by token</h3>")
     if not _pout:
-        doc.append("<p class=doct>No other console is set up yet. Open <b>Set up a console</b> "
-                   "below: it takes the far console's address and a token it mints, once.</p>")
+        doc.append("<p class=doct>None. This is for a console outside the estate's enrolment - "
+                   "another organisation's, say. Open <b>Set up a console</b> below: it takes "
+                   "the far console's address and a token it mints, once.</p>")
     for p_ in _pout:
         pid = p_.get("id", "")
         far = (((_pc.get(pid) or {}).get("snapshot") or {}).get("vault_folders", []))

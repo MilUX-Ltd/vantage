@@ -13,14 +13,27 @@ audit_note_2026-09-03_teardown: |
   it runs on. Written by MilUX; hash updated so the cut is not blocked. A RE-AUDIT WITH
   skill-safety-audit IS OWED BEFORE THE NEXT RELEASE, and is owed more here than for the
   prose edit noted above.
+audit_note_2026-09-03_push_vault: |
+  Adds a short section naming the push-vault action (sends a vault folder to an enrolled
+  box over the install-console key). Prose only, no commands. Written by MilUX; hash
+  updated; the re-audit with skill-safety-audit owed above still stands.
+audit_note_2026-09-03_teardown: |
+  ADDS COMMANDS - this is not a prose-only edit, and it is recorded as such. A new
+  "Taking a box down" section documents vantage-teardown (which ships in this repo and is
+  installed by install-vantage.sh), and gives two recovery commands for a half-removed
+  PostgreSQL: pg_createcluster, and apt-get purge with rm -rf /var/lib/postgresql. No
+  credential path, no network fetch, nothing obfuscated, and every command names the box
+  it runs on. Written by MilUX; hash updated so the cut is not blocked. A RE-AUDIT WITH
+  skill-safety-audit IS OWED BEFORE THE NEXT RELEASE, and is owed more here than for the
+  prose edit noted above.
 audit_note_2026-09-03: |
   Prose only, across several edits. The certificate guidance now describes the
   three build-time choices rather than one DNS provider's plugin, and the
   provider-specific action it referred to has been removed from the product. No
   executable content, no new commands, no new credential paths. Hash updated by the
   maintainer; a full re-audit with skill-safety-audit is still owed.
-audit_sha: 44da3bea6953eed9
-audit_sha_source: 0d71b81ad4a248eb
+audit_sha: 2a6a303ff63c428d
+audit_sha_source: 7570a53f5f2bd22e
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -260,4 +273,16 @@ build it again from Deploy as a new box.
 
 What a teardown keeps, deliberately: the operating system, your login account and its keys,
 sshd, networking and the VPN. A teardown that strands the box is not a teardown.
+
+## Sending a vault folder to a box
+
+`push-vault` sends one of this console's Knowledge Vault folders to an enrolled box, over the
+same install-console key that put the console there. Use it from the Sync page (a tick per
+folder per box), or as an action against a box. The folder lands in the box's vault under the
+never-clobber rule: anything newer on the box is kept and reported, everything else is written
+whole. It changes nothing but that folder.
+
+It exists because the deployed edition's console listens on loopback and cannot mint a peer
+token, so the token handshake between consoles can never reach it. A box appears on the Sync
+page the moment its collector reports a console; nothing has to be paired.
 

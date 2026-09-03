@@ -10,8 +10,14 @@ audit_note_2026-09-03_join: |
   which case it is in, and the two failures that say nothing useful on the handset. No
   commands, no executable content, no credential paths. Written by MilUX; hash updated,
   and a re-audit with skill-safety-audit is still owed.
-audit_sha: 1c95cef7b53c7c73
-audit_sha_source: 47d758b8b44b292b
+audit_note_2026-09-03_join: |
+  Prose only. A new "Getting the first device on" section explains which join route leads
+  on a publicly trusted certificate versus a box signing its own, how the console measures
+  which case it is in, and the two failures that say nothing useful on the handset. No
+  commands, no executable content, no credential paths. Written by MilUX; hash updated,
+  and a re-audit with skill-safety-audit is still owed.
+audit_sha: 27d21182878a1dae
+audit_sha_source: 175cd0b707185aac
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
