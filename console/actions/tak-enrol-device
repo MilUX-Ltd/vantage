@@ -17,7 +17,7 @@
 #     OK <username>
 #     PASS <password>
 #     URL tak://com.atakmap.app/enroll?host=...&username=...&token=...
-#     ITAK <host>,<username>,<password>
+#     ITAK <name>,<host>,8089,ssl
 #     PNG <base64 of a PNG QR of the URL line>
 set -euo pipefail
 
@@ -49,10 +49,17 @@ pass=$(awk '$1=="PASS"{print $2}' <<<"$out")
 url="tak://com.atakmap.app/enroll?host=${host}&username=${user}&token=${pass}"
 png=$(qrencode -t PNG -o - -m 3 -s 6 "$url" | base64 | tr -d '\n') || deny "QR render failed"
 
+# iTAK reads a connect string of "<name>,<host>,<port>,<protocol>" - four fields, no
+# credentials in it. We were emitting "<host>,<user>,<pass>", which iTAK cannot parse
+# and which put the password on screen to no purpose. common/generate_tak_qr.py has
+# had the right shape since it was written; this line had drifted from it.
+name=$(printf '%s' "$host" | cut -d. -f1)
+[[ -n "$name" ]] || name="$host"
+
 echo "OK $user"
 echo "PASS $pass"
 echo "URL $url"
-echo "ITAK ${host},${user},${pass}"
+echo "ITAK ${name},${host},8089,ssl"
 echo "PNG $png"
 # The data package, when the privileged half could build one. A box using a public
 # certificate does not need it; a box using its own cannot enrol a device without it.

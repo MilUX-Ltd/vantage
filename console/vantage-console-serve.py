@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.44.3"
+VERSION = "2.45.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.42-beta"
+VANTAGE_RELEASE = "0.9.43-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -116,7 +116,11 @@ _SESSIONS = {}          # token -> expiry epoch
 _LOGIN_FAIL = {}        # ip -> [epoch, ...] sliding window
 _AUTH_LOCK = threading.Lock()
 
-AUTH_OPEN_PREFIXES = ("/store/file/", "/eud", "/fonts/")
+AUTH_OPEN_PREFIXES = ("/store/file/", "/eud", "/fonts/",
+                      # the enrolment package a phone pulls for itself. The phone
+                      # has no session and cannot get one; the unguessable one-shot
+                      # token in the path is the credential, and it expires.
+                      "/enrol/")
 AUTH_OPEN_PATHS = ("/login", "/healthz", "/api/health.json", "/favicon.svg",
                    "/favicon.ico", "/api/propose", "/mcp",
                    # the kiosk exit: loopback-gated in the handler, so the box's own
@@ -192,6 +196,51 @@ def login_throttled(ip):
 def login_failed(ip):
     with _AUTH_LOCK:
         _LOGIN_FAIL.setdefault(ip, []).append(_time.time())
+
+
+# ---------------------------------------------------------------------------------
+# Enrolment packages waiting to be collected by a device.
+#
+# A phone cannot sign in to the console, so the package it needs has to be reachable
+# without a session. It holds the device password and the truststore password, so it is
+# held in memory only, never written to disk, addressed by 128 bits of urandom, expires
+# on its own, and can be collected only a few times. ATAK fetches it over plain HTTP,
+# which it permits (usesCleartextTraffic=true in the shipping APK, no network security
+# config), and which it has to here: the box's own TLS is signed by the very CA the
+# device has not got yet.
+ENROL_PKG_TTL = 900          # seconds; long enough to walk to the phone, not to a shift
+ENROL_PKG_MAX_FETCH = 3      # a retried download is normal, a harvested one is not
+_ENROL_LOCK = threading.Lock()
+_ENROL_PKGS = {}
+
+
+def stash_enrol_package(blob, name):
+    """Hold a built package for collection and return the token that addresses it."""
+    tok = secrets.token_hex(16)
+    now = _time.time()
+    with _ENROL_LOCK:
+        for k in [k for k, v in _ENROL_PKGS.items() if v["expires"] <= now]:
+            _ENROL_PKGS.pop(k, None)
+        _ENROL_PKGS[tok] = {"blob": blob, "name": name,
+                            "expires": now + ENROL_PKG_TTL, "fetches": 0}
+    return tok
+
+
+def take_enrol_package(tok, consume=True):
+    """The package for this token, or None if it never existed, expired or is used up."""
+    now = _time.time()
+    with _ENROL_LOCK:
+        rec = _ENROL_PKGS.get(tok)
+        if not rec:
+            return None
+        if rec["expires"] <= now:
+            _ENROL_PKGS.pop(tok, None)
+            return None
+        if consume:
+            rec["fetches"] += 1
+            if rec["fetches"] >= ENROL_PKG_MAX_FETCH:
+                _ENROL_PKGS.pop(tok, None)
+        return rec
 
 
 def auth_required(path):
@@ -1373,8 +1422,18 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         # without this the QR fails with "the TAK server's identity could not be
         # verified" and there is nothing on the page to fix it with.
         out["pkg"] = parsed.get("PKG", "")
+        # Held for collection so the device can fetch it itself. Downloading the zip to
+        # the operator's laptop and then getting it onto a phone by hand was the step
+        # that made this "works, once you have a cable"; the token turns it into a scan.
+        if out["pkg"]:
+            try:
+                out["pkg_token"] = stash_enrol_package(
+                    base64.b64decode(out["pkg"]), f"{out['name'] or 'device'}-enrolment.zip")
+            except Exception:
+                out["pkg_token"] = ""
         out["message"] = (f"Enrolment credential ready for {out['name']}. "
-                          + ("Import the data package on the device first, then scan the QR."
+                          + ("Scan the import code with ATAK: it carries the certificate "
+                             "authority, the server and the credential together."
                              if out["pkg"] else "Scan with ATAK, or use the iTAK line."))
     elif a["result"] == "capass":
         if "CAPASS" in parsed:
@@ -7834,10 +7893,27 @@ root.querySelectorAll('form.action').forEach(function(f){
               // Lead with it, and say why, rather than leaving it as a download.
               if(j.pkg){
                 var why=document.createElement('div'); why.className='cred-pkg-why';
-                why.innerHTML='<b>Import this on the device first.</b> This server uses '+
-                  'its own certificate authority, which the device has never seen, so it '+
-                  'cannot verify the server until it has this. Then scan the QR.';
+                why.innerHTML='<b>Scan this one, not the one above.</b> This server signs '+
+                  'its own certificates, so a device cannot verify it until it has the '+
+                  'certificate authority. This code carries the authority, the server and '+
+                  'the credential together, and the device fetches them itself.';
                 res.appendChild(why);
+                if(j.pkg_token){
+                  var qi=document.createElement('img');
+                  qi.className='cred-qr';qi.alt='Enrolment import code';
+                  qi.src='/enrol/'+j.pkg_token+'.png';
+                  // qrencode is best-effort on a console box. If it is not there the
+                  // code cannot render, and the download below is the way through.
+                  qi.onerror=function(){qi.remove();
+                    why.innerHTML='<b>Import this on the device first.</b> This server '+
+                      'signs its own certificates, so a device cannot verify it until it '+
+                      'has the certificate authority. Put this file on the device and '+
+                      'import it, then scan the QR above.';};
+                  res.appendChild(qi);
+                  var ex=document.createElement('div');ex.className='cred-pkg-why';
+                  ex.textContent='The code is good for 15 minutes. The device must be on '+
+                    'the same network as this console.';
+                  res.appendChild(ex);}
                 var sp=document.createElement('button');sp.type='button';
                 sp.className='a-go primary';
                 sp.textContent='Download the data package (.zip)';
@@ -17058,6 +17134,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if not err else 503,
                        render_error(err, "vault") if err else render_vault(state),
                        "text/html; charset=utf-8")
+        elif path.startswith("/enrol/"):
+            self._send_enrol(path[len("/enrol/"):])
         elif path.startswith("/store/file/"):
             from urllib.parse import unquote
             self._send_store_file(unquote(path[len("/store/file/"):]), "store")
@@ -17077,6 +17155,63 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, page, "text/html; charset=utf-8")
         else:
             self._send(404, "not found\n", "text/plain")
+
+    def _send_enrol(self, rest):
+        """Serve an enrolment package, or the QR a device scans to come and get it.
+
+        <token>.zip is the package itself, fetched by the phone with no session. The
+        token is the only thing guarding it, so a miss is a flat 404 with nothing in it
+        that says whether the token was wrong or merely late.
+
+        <token>.png is the QR, fetched by the operator's own signed-in browser. It is
+        built from the Host header of THIS request, which is the address that browser
+        used to reach the console - so it is an address that resolves on this network,
+        rather than a hostname the box calls itself and nothing else can find.
+        """
+        m = re.match(r"^([0-9a-f]{32})\.(zip|png)$", rest or "")
+        if not m:
+            self._send(404, "not found\n", "text/plain")
+            return
+        tok, kind = m.group(1), m.group(2)
+        rec = take_enrol_package(tok, consume=(kind == "zip"))
+        if not rec:
+            self._send(404, "not found\n", "text/plain")
+            return
+
+        if kind == "zip":
+            audit({"action": "enrol-package-collected", "target": rec["name"],
+                   "result": "OK"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(len(rec["blob"])))
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{rec["name"]}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(rec["blob"])
+            return
+
+        host = (self.headers.get("Host", "") or "").strip()
+        if not re.match(r"^[A-Za-z0-9._-]+(:[0-9]{1,5})?$", host):
+            self._send(404, "not found\n", "text/plain")
+            return
+        url = (f"tak://com.atakmap.app/import?url=http://{host}/enrol/{tok}.zip"
+               f"&filename={rec['name']}")
+        try:
+            png = subprocess.run(["qrencode", "-t", "PNG", "-o", "-", "-m", "3", "-s", "6",
+                                  url], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            png = None
+        if not png or png.returncode != 0 or not png.stdout:
+            # qrencode is best-effort on a console box. The URL still works typed in.
+            self._send(404, "not found\n", "text/plain")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(png.stdout)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(png.stdout)
 
     def do_GET_peer(self, path):
         """Peer-token reads: the estate snapshot and vault folder bundles. Bearer only -

@@ -28,7 +28,14 @@ import uuid
 import zipfile
 from xml.sax.saxutils import quoteattr
 
-CERT_DIR = "certs"
+# An enrolment package is FLAT: MANIFEST.xml, config.pref and the truststore all sit at
+# the root of the zip. That is what the reference implementation produces (installTAK's
+# create-datapackage, which ends in `zip -j`, junking every path), and it is the shape
+# ATAK's importer expects for this package type. A mission package is the opposite
+# shape - MANIFEST/manifest.xml in a subdirectory - and building one of those here is
+# what the lessons log 8 warned about. caLocation0 still carries a "cert/" prefix because
+# ATAK relocates the certificate into its own cert directory as it imports.
+CERT_REF_DIR = "cert"
 
 
 def pref_xml(host, user, password, ca_entry, ca_pass, label):
@@ -53,13 +60,22 @@ def pref_xml(host, user, password, ca_entry, ca_pass, label):
         + s("description0", label) + "\n"
         + b("enabled0", True) + "\n"
         + s("connectString0", f"{host}:8089:ssl") + "\n"
-        + s("caLocation0", f"cert/{ca_entry}") + "\n"
+        + s("caLocation0", f"{CERT_REF_DIR}/{ca_entry}") + "\n"
         + s("caPassword0", ca_pass) + "\n"
         + b("enrollForCertificateWithTrust0", True) + "\n"
         + b("useAuth0", True) + "\n"
         + s("username0", user) + "\n"
         + s("password0", password) + "\n"
         + s("cacheCreds0", "Cache credentials") + "\n"
+        "  </preference>\n"
+        # Trust alone is not enough: the device also has to know which port to ask for
+        # its certificate on. 8446 is the cert_https connector, 8443 the web and API
+        # one. Without these the CA imports, the server verifies, and enrolment still
+        # does not complete.
+        '  <preference version="1" name="com.atakmap.app_preferences">\n'
+        + b("displayServerConnectionWidget", True) + "\n"
+        + s("apiSecureServerPort", "8443") + "\n"
+        + s("apiCertEnrollmentPort", "8446") + "\n"
         "  </preference>\n"
         "</preferences>\n")
 
@@ -89,11 +105,24 @@ def build(host, user, password, truststore, ca_pass, name=None):
     pkg_name = f"{label}-enrolment"
     uid = str(uuid.uuid4())
     pref = pref_xml(host, user, password, ca_entry, ca_pass, label)
-    entries = [f"{CERT_DIR}/{ca_entry}", f"{CERT_DIR}/config.pref"]
+    entries = [ca_entry, "config.pref"]
+
+    man = manifest_xml(uid, pkg_name, entries)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("MANIFEST/manifest.xml", manifest_xml(uid, pkg_name, entries))
+        # Both spellings, deliberately, and it is worth saying why rather than leaving
+        # someone to tidy one away. ATAK finds a manifest by walking the zip and taking
+        # the first entry whose name ENDS WITH its manifest constant
+        # (MissionPackageExtractorFactory.GetManifest), so the match is by suffix and
+        # by case. The reference implementation every TAK operator uses writes
+        # MANIFEST.xml; our own notes record manifest.xml working. The uppercase
+        # literal appears nowhere in the 5.8 SDK, so the two cannot both be read off
+        # the evidence, and guessing wrong produces a package that imports without a
+        # word of complaint and does nothing - the lessons log 8, the failure with no
+        # symptom. Two identical entries cost 400 bytes and end the question.
+        z.writestr("MANIFEST.xml", man)
+        z.writestr("manifest.xml", man)
         z.writestr(entries[0], ts)
         z.writestr(entries[1], pref)
     return buf.getvalue()
