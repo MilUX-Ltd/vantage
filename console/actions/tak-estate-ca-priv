@@ -20,11 +20,38 @@ set -euo pipefail
 
 deny() { echo "ERR $*" >&2; exit 2; }
 
-TS=/opt/tak/certs/files/truststore-root.p12
+# The truststore a DEVICE needs is the one the SERVER trusts, and that is not the root.
+# Enrolment signs device certificates with the ISSUING CA, so a store holding only the
+# root cannot build a path to the server's certificate: the device imports the package
+# without complaint and then says "remote host certificate not trusted, check truststore".
+# The provisioner learned this on 28 Aug and fixed it for the server's own truststore;
+# the packages handed to devices kept shipping the root-only one. Read it out of
+# CoreConfig rather than guessing a name, so whatever the server trusts is what the
+# device is given.
+estate_truststore() {
+    local cc=/opt/tak/CoreConfig.xml ts=""
+    if [[ -r "$cc" ]]; then
+        ts=$(sed -n 's#.*truststoreFile="certs/files/\(truststore-[^"]*\)\.jks".*#\1#p' "$cc" \
+             | head -1)
+    fi
+    if [[ -n "$ts" && -s "/opt/tak/certs/files/$ts.p12" ]]; then
+        echo "/opt/tak/certs/files/$ts.p12"; return 0
+    fi
+    # Nothing in CoreConfig: take any issuing-CA store over the root one.
+    local c
+    for c in /opt/tak/certs/files/truststore-*.p12; do
+        [[ -s "$c" && "$c" != */truststore-root.p12 ]] && { echo "$c"; return 0; }
+    done
+    [[ -s /opt/tak/certs/files/truststore-root.p12 ]] \
+        && echo /opt/tak/certs/files/truststore-root.p12
+}
+TS=$(estate_truststore)
 CAPASS_FILE=/opt/tak/certs/.milux-capass
 BUILDER=/usr/local/bin/build-enrollment-dp.py
 
-[[ -s "$TS" ]]           || deny "no truststore on this box - has TAK been provisioned?"
+[[ -n "$TS" && -s "$TS" ]] || deny "no truststore on this box - has TAK been provisioned?"
+# Say which one, because "check truststore" on a handset is otherwise unattributable.
+echo "TRUSTSTORE $(basename "$TS")"
 [[ -r "$CAPASS_FILE" ]]  || deny "no certificate password on this box"
 [[ -x "$BUILDER" ]]      || deny "the package builder is not on this box; update Vantage here first"
 capass=$(head -1 "$CAPASS_FILE")

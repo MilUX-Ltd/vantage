@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.50.0"
+VERSION = "2.51.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.51-beta"
+VANTAGE_RELEASE = "0.9.52-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -7959,72 +7959,72 @@ root.querySelectorAll('form.action').forEach(function(f){
           if(j.p12&&j.name){var a=document.createElement('a');a.href='data:application/x-pkcs12;base64,'+j.p12;
             a.download=j.name+'.p12';a.textContent='Download '+j.name+'.p12';a.className='dl';
             res.appendChild(document.createElement('br'));res.appendChild(a);}
-          if(j.png){var im=document.createElement('img');im.src='data:image/png;base64,'+j.png;
-            im.alt='Enrolment QR for '+(j.name||'device');im.className='qr';res.appendChild(im);
-            var cred=document.createElement('div');cred.textContent='Password: '+(j.password||'?');res.appendChild(cred);
-            if(j.itak){var it=document.createElement('div');it.textContent='iTAK quick connect: '+j.itak;res.appendChild(it);}
-            var sv=document.createElement('button');sv.type='button';sv.className='cred-refresh';
-            sv.textContent='Save QR';sv.onclick=function(){
-              var a=document.createElement('a');a.href='data:image/png;base64,'+j.png;
-              a.download=(j.name||'device')+'-enrol-qr.png';document.body.appendChild(a);a.click();a.remove();};
-            res.appendChild(sv);
-            if(j.itak){var si=document.createElement('button');si.type='button';si.className='cred-refresh';
-              si.style.marginLeft='8px';si.textContent='Save iTAK line';si.onclick=function(){
-                var a=document.createElement('a');a.href='data:text/plain;base64,'+btoa(j.itak);
-                a.download=(j.name||'device')+'-itak.txt';document.body.appendChild(a);a.click();a.remove();};
-              res.appendChild(si);}
-              // The data package. On a box using its own certificates this is not
-              // optional: the device has no way to verify the server without it, and
-              // the QR fails with "the TAK server's identity could not be verified".
-              // Lead with it, and say why, rather than leaving it as a download.
+          // ONE artefact per device. Deciding this once, here, is the whole point:
+          // a box with its own authority needs the package and the plain code is
+          // meaningless on it; a box with a trusted certificate needs only the plain
+          // code. Showing both is how an operator scans both and learns by luck.
+          if(j.png||j.pkg_token){
+            var oneScan = j.pkg_token && j.pkg_kind==='cert';
+            var why=document.createElement('div'); why.className='cred-pkg-why';
+            why.innerHTML = oneScan
+              ? '<b>Scan this once, with the camera in ATAK.</b> It brings down the '+
+                'authority that lets the device trust this server, the server itself, '+
+                'and the certificate that identifies this device. Nothing to type.'
+              : (j.pkg_token
+                 ? '<b>Two steps, in this order.</b> <b>1.</b> Scan the code - it gives '+
+                   'the device the authority it needs to trust this server. <b>2.</b> '+
+                   'The device then asks you to sign in, with the account below.'
+                 : '<b>Scan this once, with the camera in ATAK.</b> This server has a '+
+                   'certificate the device already trusts, so the code is the whole join.');
+            res.appendChild(why);
+
+            var im=document.createElement('img');
+            im.alt='Join code for '+(j.name||'device');
+            if(j.pkg_token){ im.className='cred-qr import';
+              im.src='/enrol/'+j.pkg_token+'.png'; im.onerror=function(){im.remove();}; }
+            else { im.className='cred-qr'; im.src='data:image/png;base64,'+j.png; }
+            res.appendChild(im);
+
+            if(j.pkg_token){
+              var ex=document.createElement('div'); ex.className='cred-pkg-why';
+              ex.textContent='Good for an hour, and the device has to be on the same '
+                +'network as this console. If no code appeared, use the file below - it '
+                +'does the same job.';
+              res.appendChild(ex);
               if(j.pkg){
-                var why=document.createElement('div'); why.className='cred-pkg-why';
-                why.innerHTML=(j.pkg_kind==='cert')
-                  ? '<b>Scan this one, not the one above. That is the whole join.</b> It '+
-                    'carries the certificate authority, the server, and the certificate '+
-                    'issued to this device. '+
-                    'certificate. There is nothing to type: no username, no password.'
-                  : '<b>Scan this one, not the one above.</b> This server signs its own '+
-                    'certificates, so a device cannot verify it until it has the certificate '+
-                    'authority. This code carries the authority and the server; the device '+
-                    'will then ask you to sign in.';
-                res.appendChild(why);
-                if(j.pkg_token){
-                  var qi=document.createElement('img');
-                  qi.className='cred-qr import';qi.alt='Enrolment import code';
-                  qi.src='/enrol/'+j.pkg_token+'.png';
-                  // qrencode is best-effort on a console box. If it is not there the
-                  // code cannot render, and the download below is the way through.
-                  qi.onerror=function(){qi.remove();
-                    why.innerHTML='<b>Import this on the device first.</b> This server '+
-                      'signs its own certificates, so a device cannot verify it until it '+
-                      'has the certificate authority. Put this file on the device and '+
-                      'import it, then scan the QR above.';};
-                  res.appendChild(qi);
-                  var ex=document.createElement('div');ex.className='cred-pkg-why';
-                  ex.textContent='The code is good for an hour. The device must be on '+
-                    'the same network as this console.';
-                  res.appendChild(ex);}
-                var sp=document.createElement('button');sp.type='button';
-                sp.className='a-go primary';
-                sp.textContent='Download the data package (.zip)';
-                sp.onclick=function(){
-                  var a=document.createElement('a');
-                  a.href='data:application/zip;base64,'+j.pkg;
-                  a.download=(j.name||'device')+'-enrolment.zip';
-                  document.body.appendChild(a);a.click();a.remove();};
-                res.appendChild(sp);}}
-          // The estate authority package: no QR, no credential, one import per device
-          // for life. It is the only result that carries a package and nothing else.
+                var dl=document.createElement('a'); dl.className='cred-refresh';
+                dl.href='data:application/zip;base64,'+j.pkg;
+                dl.download=(j.name||'device')+(oneScan?'-join.zip':'-trust.zip');
+                dl.textContent='Download the same thing as a file';
+                res.appendChild(dl);
+              }
+            }
+
+            var cred=document.createElement('div'); cred.className='cred-lines';
+            var willAsk = j.pkg_token && j.pkg_kind!=='cert';
+            cred.textContent = willAsk
+              ? 'When it asks, sign in as '+(j.name||'')+' with '+(j.password||'?')
+              : 'Server account '+(j.name||'')+', password '+(j.password||'?')
+                +' - for your records. The device will not ask.';
+            res.appendChild(cred);
+
+            if(j.itak){var it=document.createElement('div'); it.className='cred-lines';
+              it.textContent='iTAK on iPhone has no camera import, so type this in by '
+                +'hand instead: '+j.itak;
+              res.appendChild(it);}
+          }
+          // The estate authority package: no code, no credential, one import per device
+          // for life. The only result that is a package and nothing else.
           if(j.pkg && !j.pkg_token && !j.png){
-            var ep=document.createElement('button');ep.type='button';
-            ep.className='a-go primary';
-            ep.textContent='Download the estate authority (.zip)';
-            ep.onclick=function(){
-              var a=document.createElement('a');
-              a.href='data:application/zip;base64,'+j.pkg;
-              a.download=(j.name||'estate')+'-authority.zip';
-              document.body.appendChild(a);a.click();a.remove();};
+            var ew2=document.createElement('div'); ew2.className='cred-pkg-why';
+            ew2.innerHTML='<b>Put this on each device once.</b> A memory stick or your '+
+              'file store, then open it on the handset. After that the device trusts '+
+              'every box this authority signed, and joining one is a single scan.';
+            res.appendChild(ew2);
+            var ep=document.createElement('a'); ep.className='cred-refresh';
+            ep.href='data:application/zip;base64,'+j.pkg;
+            ep.download=(j.name||'estate')+'-authority.zip';
+            ep.textContent='Download the estate authority';
             res.appendChild(ep);}
           if(j.credentials){var ul=document.createElement('div');ul.className='credrows';
             j.credentials.forEach(function(c){var d=document.createElement('div');
@@ -14860,64 +14860,67 @@ SETUP_JS = """
     });
   };
   function showCreds(j){
-    if(j.creds&&j.creds.length){
-      var out=j.creds.map(function(c){
-        // A box that signs its own certificates presents a CA no device has seen, so the
-        // enrolment QR alone cannot complete and the device says the server's identity
-        // could not be verified. Where the build produced a package, IT is the join: it
-        // carries the authority, the server and the credential together. Lead with it and
-        // say plainly which of the two codes to point the camera at.
-        var h='<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>';
-        // ATAK asks for the username and password at the end of enrolment even when the
-        // package carries them, so the operator needs them ON THIS SCREEN. They were in
-        // the data all along and simply never printed: the build finished, the device
-        // asked, and the answer existed nowhere the operator could see it.
-        if(c.pkg_token){
-          // Say which of the two packages this actually is. Promising a one-scan join
-          // and then shipping the enrolment package is how the operator ends up staring
-          // at a login prompt whose answer is nowhere on the screen.
-          h+='<div class=cred-pkg-why>'+(c.pkg_kind==='cert'
-            ? '<b>Scan this code. That is the whole join.</b> It carries the certificate '
-              +'authority, the server, and the certificate issued to this device. There is '
-              +'nothing to type: no username, no password.'
-            : '<b>Scan this code.</b> This server signs its own certificates, so a device '
-              +'cannot verify it until it has the certificate authority. This code carries '
-              +'the authority and the server. The device will then ask you to sign in with '
-              +'the credential below.')+'</div>'
-            +'<img class="cred-qr import" alt="Enrolment import code for '+esc(c.user)+'" '
-            +'src="/enrol/'+esc(c.pkg_token)+'.png" '
-            +'onerror="this.remove()">'
-            +'<div class=cred-pkg-why>Good for an hour, and the device must be on the '
-            +'same network as this console. If the code did not render, use the download '
-            +'below and import the file on the device.</div>';
-          if(c.pkg){
-            h+='<div class=cred-lines><a class=cred-refresh download="'+esc(c.user)
-              +'-enrolment.zip" href="data:application/zip;base64,'+c.pkg
-              +'">Download the data package (.zip)</a></div>';
-          }
-          h+='<details class=cred-lines><summary>The plain enrolment QR (needs a publicly '
-            +'trusted certificate)</summary>'
-            +(c.png?'<img class=cred-qr alt="QR for '+esc(c.user)+'" src="data:image/png;base64,'+c.png+'">':'')
-            +'</details>';
-        } else if(c.png){
-          h+='<img class=cred-qr alt="QR for '+esc(c.user)+'" src="data:image/png;base64,'+c.png+'">';
+    if(!j.creds||!j.creds.length) return;
+    // ONE artefact per device, never a menu. Two codes on a screen with no stated order
+    // is how an operator scans both and finds out by luck which one mattered. What the
+    // device needs depends entirely on whether this server has a certificate the device
+    // already trusts, so decide that here and show the one thing that applies.
+    var out=j.creds.map(function(c){
+      var h='<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>';
+      var oneScan = c.pkg_token && c.pkg_kind==='cert';
+
+      if(oneScan){
+        h+='<div class=cred-pkg-why><b>Scan this once, with the camera in ATAK.</b> '
+          +'It brings down everything the device needs: the authority that lets it trust '
+          +'this server, the server itself, and the certificate that identifies this '
+          +'device. Nothing to type, and nothing else to scan.</div>';
+      }else if(c.pkg_token){
+        h+='<div class=cred-pkg-why><b>Two steps, in this order.</b> '
+          +'<b>1.</b> Scan the code - it gives the device the authority it needs to trust '
+          +'this server. <b>2.</b> The device then asks you to sign in, with the account '
+          +'shown below the code.</div>';
+      }else if(c.png){
+        h+='<div class=cred-pkg-why><b>Scan this once, with the camera in ATAK.</b> '
+          +'This server has a certificate the device already trusts, so the code is the '
+          +'whole join.</div>';
+      }
+
+      if(c.pkg_token){
+        h+='<img class="cred-qr import" alt="Join code for '+esc(c.user)+'" '
+          +'src="/enrol/'+esc(c.pkg_token)+'.png" onerror="this.remove()">'
+          +'<div class=cred-pkg-why>Good for an hour, and the device has to be on the '
+          +'same network as this console. If no code appeared above, use the file below '
+          +'instead - open it on the device and it does the same job.</div>';
+        if(c.pkg){
+          h+='<div class=cred-lines><a class=cred-refresh download="'+esc(c.user)
+            +(oneScan?'-join.zip':'-trust.zip')+'" href="data:application/zip;base64,'
+            +c.pkg+'">Download the same thing as a file</a></div>';
         }
-        // The credential is only an instruction when the device will actually ask for
-        // it. With a certificate package it is the server account behind the identity,
-        // worth recording and not worth typing.
-        if(c.password){
-          h+='<div class=cred-lines>'+(c.pkg_kind==='cert'
-            ? 'Server account <code>'+esc(c.user)+'</code>, password <code>'
-              +esc(c.password)+'</code> (kept for the record; the device does not ask)'
-            : 'Sign in on the device as <code>'+esc(c.user)+'</code> with <code>'
-              +esc(c.password)+'</code>')+'</div>';
-        }
-        h+='<div class=cred-lines><code>'+esc(c.itak||'')+'</code></div></div>';
-        return h;
-      }).join('');
-      $('#wz-credout').innerHTML=out;
-    }
+      }else if(c.png){
+        h+='<img class=cred-qr alt="Join code for '+esc(c.user)+'" '
+          +'src="data:image/png;base64,'+c.png+'">';
+      }
+
+      // The account. An instruction when the device is going to ask for it, a record
+      // when it is not - and never a bare password with no word about what it is for.
+      var willAsk = c.pkg_token && c.pkg_kind!=='cert';
+      if(c.password){
+        h+='<div class=cred-lines>'+(willAsk
+          ? 'When it asks, sign in as <code>'+esc(c.user)+'</code> with <code>'
+            +esc(c.password)+'</code>'
+          : 'Server account <code>'+esc(c.user)+'</code>, password <code>'
+            +esc(c.password)+'</code> - for your records. The device will not ask.')
+          +'</div>';
+      }
+      if(c.itak){
+        h+='<div class=cred-lines>iTAK on iPhone has no camera import, so type this in '
+          +'by hand instead: <code>'+esc(c.itak)+'</code></div>';
+      }
+      return h+'</div>';
+    }).join('');
+    $('#wz-credout').innerHTML=out;
   }
+
   function jobVerdict(j){
     if(j.status!=='done')return ['error','Failed (rc '+j.rc+') - the log says where. The bootstrap key is kept for the retry.'];
     if(j.dry)return ['ok','Dry run finished cleanly. Read the log, untick dry run, run again - the key is held for the live run.'];

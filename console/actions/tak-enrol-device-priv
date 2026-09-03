@@ -84,13 +84,38 @@ echo "PASS $pass"
 #
 # We take the certificate route whenever the box can mint one, and fall back rather
 # than fail: a box that cannot issue a certificate still gets its operator joined.
-TS=/opt/tak/certs/files/truststore-root.p12
+# The truststore a DEVICE needs is the one the SERVER trusts, and that is not the root.
+# Enrolment signs device certificates with the ISSUING CA, so a store holding only the
+# root cannot build a path to the server's certificate: the device imports the package
+# without complaint and then says "remote host certificate not trusted, check truststore".
+# The provisioner learned this on 28 Aug and fixed it for the server's own truststore;
+# the packages handed to devices kept shipping the root-only one. Read it out of
+# CoreConfig rather than guessing a name, so whatever the server trusts is what the
+# device is given.
+estate_truststore() {
+    local cc=/opt/tak/CoreConfig.xml ts=""
+    if [[ -r "$cc" ]]; then
+        ts=$(sed -n 's#.*truststoreFile="certs/files/\(truststore-[^"]*\)\.jks".*#\1#p' "$cc" \
+             | head -1)
+    fi
+    if [[ -n "$ts" && -s "/opt/tak/certs/files/$ts.p12" ]]; then
+        echo "/opt/tak/certs/files/$ts.p12"; return 0
+    fi
+    # Nothing in CoreConfig: take any issuing-CA store over the root one.
+    local c
+    for c in /opt/tak/certs/files/truststore-*.p12; do
+        [[ -s "$c" && "$c" != */truststore-root.p12 ]] && { echo "$c"; return 0; }
+    done
+    [[ -s /opt/tak/certs/files/truststore-root.p12 ]] \
+        && echo /opt/tak/certs/files/truststore-root.p12
+}
+TS=$(estate_truststore)
 CAPASS_FILE=/opt/tak/certs/.milux-capass
 CERTBUILDER=/usr/local/bin/build-enrollment-dp.py
 CERTS=/opt/tak/certs
 
 pkg=""
-if [[ -n "$host" && -s "$TS" && -r "$CAPASS_FILE" && -x "$CERTBUILDER" && -x "$CERTS/makeCert.sh" ]]; then
+if [[ -n "$host" && -n "$TS" && -s "$TS" && -r "$CAPASS_FILE" && -x "$CERTBUILDER" && -x "$CERTS/makeCert.sh" ]]; then
     capass=$(head -1 "$CAPASS_FILE")
     P12="$CERTS/files/$user.p12"
     # Re-enrolling a device reuses the certificate it already has. makeCert.sh
@@ -121,7 +146,7 @@ fi
 # modes, and the mode is the presence of --client-cert. The second implementation
 # written for this was never proven on a device and wrote two manifests into the zip
 # where the proven one writes exactly one; the device answered with an IO error.
-if [[ -z "$pkg" && -n "$host" && -s "$TS" && -r "$CAPASS_FILE" && -x "$CERTBUILDER" ]]; then
+if [[ -z "$pkg" && -n "$host" && -n "$TS" && -s "$TS" && -r "$CAPASS_FILE" && -x "$CERTBUILDER" ]]; then
     capass=$(head -1 "$CAPASS_FILE")
     tmpz=$(mktemp -u /tmp/.enrolpkg.$$.XXXXXX.zip)
     if timeout 60 "$CERTBUILDER" --host "$host" --port 8089 \
