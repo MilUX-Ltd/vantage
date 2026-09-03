@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.41-beta"
+VANTAGE_RELEASE = "0.9.42-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -307,6 +307,39 @@ def load_instance():
         pass
     return inst
 ARTIFACTS = os.environ.get("VANTAGE_CONSOLE_ARTIFACTS", "/var/lib/vantage-console/artifacts")
+
+
+# What a box can carry. ONE definition: the wizard's picker and the box's own modules
+# panel both read it, so the name an operator ticks at build time is the name they see
+# later when it needs attention.
+#
+# Each entry carries the PRODUCT NAME as well as what it is for. The picker had drifted to
+# use-case labels alone - "Web map", "Time source", "Sensor messaging" - which reads as
+# marketing to anyone who knows the stack, and leaves them nothing to search for when it
+# breaks at 3am. The name is the thing you type into a search box; the purpose is the
+# thing you decide with. Both, not either.
+#
+#   token, product name, what it is for, the technical note, offered in the wizard
+COMPONENTS = [
+    ("takserver", "TAK Server", "the server itself",
+     "installed by the Deploy wizard", False),
+    ("cloudtak", "CloudTAK", "the map and missions in a browser, for people without ATAK",
+     "web map and missions stack (Docker, pinned; needs internet or a staged image)", True),
+    ("mediamtx", "MediaMTX", "drone and camera feeds relayed onto the map",
+     "video relay for drone and camera feeds (pinned fetch; needs internet)", True),
+    ("maps", "mbtileserver", "map tiles served from this box, so devices have maps with no internet",
+     "mbtileserver tile service (pinned fetch; needs internet). Tiles arrive from the Store shelf afterwards", True),
+    ("lanntp", "chrony", "this box gives the network its clock, which matters when nothing can reach the internet",
+     "chrony serves time to the kit LAN so device clocks hold offline (no internet needed)", True),
+    ("mosquitto", "Mosquitto MQTT", "for sensors and other systems feeding the picture",
+     "loopback broker for box integrations (distribution package; needs internet or an apt mirror)", True),
+    ("nodered", "Node-RED", "wiring other systems into TAK without writing code",
+     "flows as a pinned container on loopback (needs internet, or a staged image via Offline deploy)", True),
+    ("ollama", "Ollama", "a model on the box itself, so an assistant works with no internet at all",
+     "local models on loopback (needs internet: the archive is ~1.4GB; models pulled deliberately later)", True),
+    ("takbot", "TAKBOT", "positions and messages posted onto the map on their own",
+     "CoT chat bot; needs the MilUX-vendored artefact staged from the Store first", True),
+]
 
 
 def artifacts_release():
@@ -6535,8 +6568,17 @@ form.action{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;
 /* Nothing in the updates card is a labelled field pair, so the depcard grid put a
    paragraph of prose in a 240px column beside an empty half. Every child takes the full
    width; the grid then supplies the row gaps and the card keeps its own frame. */
-#upwrap>p.meta,#upwrap>.a-act,#upwrap>.cred-pass{grid-column:1/-1}
+/* .depcard is an auto-fit grid of 240px columns, so ANYTHING added to this panel without
+   being told to span lands in a narrow ribbon with the rest of a very wide page empty
+   beside it. That is what happened to the stale-scripts warning: forty characters wide and
+   twelve lines tall next to two thirds of an empty screen. Spanning is the right default
+   here, because this panel is prose and full-width controls, not columns. Naming each new
+   child individually is what let one slip through. */
+#upwrap>*{grid-column:1/-1}
 #upwrap>p.meta{max-width:74ch}
+/* Readable measure, not the full 2000px: prose that runs the whole width of a wide screen
+   is as hard to read as prose squeezed into a ribbon. */
+.up-stale{max-width:82ch}
 .vband{padding:11px 22px;font-family:var(--font-display);font-weight:600;font-size:14px;
  display:flex;align-items:center;gap:10px;color:var(--chip-fg)}
 .vband .vdot{width:9px;height:9px;border-radius:50%;background:currentColor;flex:0 0 auto}
@@ -6906,6 +6948,19 @@ form.action.flash{outline:2px solid var(--gold);outline-offset:3px}
 /* Two columns from 560px. Eight options in one tall column made the step scroll for no
    reason, and it sits in a .fl column that uppercases its children, so the labels came out
    shouting - reset here rather than relying on each element opting out. */
+/* The target choice: the first decision, so it looks like one. Two equal cards, the
+   chosen one marked, each naming the machine it means rather than the action it takes. */
+.wz-target{grid-column:1/-1;margin:0 0 12px}
+.wz-target-q{font-family:var(--font-display);font-weight:600;font-size:13px;margin:0 0 8px}
+.wz-target-opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
+.wz-tbtn{text-align:left;cursor:pointer;padding:12px 14px;border-radius:var(--r-sm);
+  background:var(--card);border:1px solid var(--btn-edge);color:var(--fg);font:inherit}
+.wz-tbtn b{display:block;font-family:var(--font-display);font-size:14px;margin:0 0 3px}
+.wz-tbtn span{display:block;font-size:12.5px;color:var(--muted);line-height:1.45}
+.wz-tbtn.on{border-color:var(--accent);border-width:2px;padding:11px 13px;
+  background:var(--sunk,var(--bh))}
+.wz-target-note{margin:8px 0 0;font-size:12.5px;color:var(--muted)}
+.wz-tbtn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .wz-plan{grid-column:1/-1;padding:12px 14px;background:var(--bh);border:1px dashed var(--gold);border-radius:var(--r-sm);margin:0 0 6px}
 .wz-plan #wz-planres{white-space:pre-line;font-size:13px}
 .wz-comps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px;
@@ -11019,17 +11074,7 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
     # 1.32.0 Modules: the per-box marketplace. Each installable component as a card:
     # its state from the health inventory, Update when behind the baseline, Install
     # (the provisioner's components stage, as a gated job) when absent.
-    MODULES = [
-        ("takserver", "TAK Server", "the server itself - installed by the Deploy wizard"),
-        ("cloudtak", "CloudTAK", "web map and missions stack (Docker, pinned; needs internet or a staged image)"),
-        ("mediamtx", "MediaMTX", "video relay for drone and camera feeds (pinned fetch; needs internet)"),
-        ("maps", "Offline maps", "mbtileserver tile service (pinned fetch; needs internet). Tiles arrive from the Store shelf afterwards"),
-        ("mosquitto", "Mosquitto MQTT", "loopback broker for box integrations (distribution package; needs internet or an apt mirror)"),
-        ("nodered", "Node-RED", "flows as a pinned container on loopback (needs internet, or a staged image via Offline deploy)"),
-        ("ollama", "Ollama", "local models on loopback (needs internet: the archive is ~1.4GB; models pulled deliberately later)"),
-        ("takbot", "TAKBOT", "CoT chat bot; needs the MilUX-vendored artefact staged from the Store first"),
-        ("lanntp", "LAN time (NTP)", "chrony serves time to the kit LAN so device clocks hold offline (no internet needed)"),
-    ]
+    MODULES = [(t, n, d) for t, n, _p, d, _w in COMPONENTS]
     # Inventory rows are named by SERVICE; three module tokens differ, and for the
     # shared-substrate ones presence is not fittedness (chrony exists on every
     # Ubuntu box without serving the LAN). The declared loadout, where one exists,
@@ -14391,7 +14436,7 @@ SETUP_JS = """
     }
     adoptKey(t,'Key adopted (pasted text cleared, server copy shredded).');
   };
-  $('#wz-selfbox').onclick=function(){
+  function wzSelfFill(){
     var host=location.hostname||'this-box';
     $('#wz-name').value=$('#wz-name').value.trim()||'first-server';
     var r=$('#wz-keyres');
@@ -14408,8 +14453,30 @@ SETUP_JS = """
       msg(r,'ok','This box is the target. Testing\u2026');
       $('#wz-test').onclick();
     });
+  }
+  // Which machine is being built is the first decision on the page. It used to be a
+  // button buried below the plan box: pasting a plan and then pressing it silently
+  // threw the plan away. It is a choice now, and it asks before overwriting.
+  function wzFormHasContent(){
+    return ['wz-addr','wz-user','wz-fqdn','wz-label'].some(function(id){
+      var el=$('#'+id); return el && el.value.trim(); });
+  }
+  function wzPickTarget(self){
+    var bs=$('#wz-t-self'), br=$('#wz-t-remote');
+    if(bs) bs.className='wz-tbtn'+(self?' on':'');
+    if(br) br.className='wz-tbtn'+(self?'':' on');
+    msg($('#wz-targetres'),'', self
+      ? 'Building THIS computer. Its address and admin user are filled in for you.'
+      : 'Building another box. Give its address below, then place the key at step 1.');
+  }
+  if($('#wz-t-remote')) $('#wz-t-remote').onclick=function(){ wzPickTarget(false); };
+  if($('#wz-t-self')) $('#wz-t-self').onclick=function(){
+    if(wzFormHasContent() && !confirm('Build THIS computer instead?\\n\\n'+
+        'The address, admin user and name below are replaced with this machine\\u2019s '+
+        'own. Anything you pasted from a build plan is lost.')) return;
+    wzPickTarget(true); wzSelfFill();
   };
-  if(/[?&]self=1/.test(location.search)) setTimeout(function(){$('#wz-selfbox').onclick();},300);
+  if(/[?&]self=1/.test(location.search)) setTimeout(function(){ wzPickTarget(true); wzSelfFill(); },300);
 
   $('#wz-test').onclick=function(){
     var dest=($('#wz-user').value.trim()||'root')+'@'+$('#wz-addr').value.trim();
@@ -16265,6 +16332,23 @@ def render_deploy(state):
                # gets in - a kit LAN address went into this form when a VPN address was
                # needed, because both were true of the same box. It carries settings only,
                # never a secret, and what it decodes is shown before anything is saved.
+               # Which machine is being built is the first decision, and it used to be a
+               # button buried BELOW the plan box, in the input column. Pasting a plan and
+               # then pressing it silently overwrote everything the plan had just filled in.
+               # It is a choice now, made before anything is typed, and each option says
+               # which machine it means in plain words.
+               "<div class=wz-target role=group aria-label='Which machine are you building'>"
+               "<div class=wz-target-q>Which machine are you building?</div>"
+               "<div class=wz-target-opts>"
+               "<button type=button id=wz-t-remote class='wz-tbtn on'>"
+               "<b>Another box</b><span>a machine somewhere else. You give its address and "
+               "the console reaches it over SSH.</span></button>"
+               "<button type=button id=wz-t-self class=wz-tbtn>"
+               "<b>This computer</b><span>the machine this console runs on becomes the "
+               "server. No address, no keys to place.</span></button>"
+               "</div><div id=wz-targetres class=a-res role=status></div>"
+               "<p class=wz-target-note>Choosing here only fills the form in. Nothing is "
+               "built until you press the button at step 5.</p></div>"
                "<div class=wz-plan>"
                "<label class=fl>Paste your build plan, if you made one"
                "<input id=wz-plan placeholder='VANTAGE-PLAN-1...' autocomplete=off></label>"
@@ -16289,10 +16373,7 @@ def render_deploy(state):
                # a different server entirely. It is a shortcut, not an action: it fills the
                # form in. So it reads as one now, out of the input column and in the plan
                # strip where the other "fill this in for me" control already lives.
-               "<div class=wz-selfrow><button type=button id=wz-selfbox class='cred-dl'>"
-               "Use this box as the server</button><span class=hint>fills the form in for "
-               "the console's own box - no keys to paste, no addresses. Nothing is built "
-               "until you press the button at step 5.</span></div>"
+               # (the old mid-form "use this box" button lived here; it is the chooser above now)
                "<label class=fl>Estate name<input id=wz-name maxlength=24 placeholder='dev-cloud'>"
                "<span class=hint>short, [a-z0-9-] - how the console will know the box</span></label>"
                "<label class=fl>Label<input id=wz-label maxlength=40 placeholder='Dev TAK'>"
@@ -16393,31 +16474,14 @@ def render_deploy(state):
                "exactly this, and its health checks then expect exactly this - no more, no "
                "less. Changeable later from the box's own page.</span>"
                "<div class=wz-comps>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=cloudtak>"
-               "<span><b>Web map</b><small>the map and missions in a browser, for people "
-               "without ATAK</small></span></label>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=mediamtx>"
-               "<span><b>Video</b><small>drone and camera feeds relayed onto the "
-               "map</small></span></label>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=maps>"
-               "<span><b>Offline maps</b><small>map tiles served from this box, so devices "
-               "have maps with no internet</small></span></label>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=lanntp>"
-               "<span><b>Time source</b><small>this box gives the network its clock, which "
-               "matters when nothing can reach the internet</small></span></label>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=mosquitto>"
-               "<span><b>Sensor messaging</b><small>for sensors and other systems feeding "
-               "the picture</small></span></label>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=nodered>"
-               "<span><b>Integrations</b><small>wiring other systems into TAK without "
-               "writing code</small></span></label>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=ollama>"
-               "<span><b>Local AI</b><small>a model on the box itself, so an assistant "
-               "works with no internet at all</small></span></label>"
-               "<label class=wz-comp><input type=checkbox class=wzcomp value=takbot>"
-               "<span><b>Automated feeds</b><small>positions and messages posted onto the "
-               "map on their own</small></span></label>"
-               "</div><input type=hidden id=wz-components value=''></div></fieldset>")
+               # Generated from COMPONENTS, not written out again: these eight cards were a
+               # second copy of the list and had drifted to use-case labels with the product
+               # names dropped. The name is what you search for when it breaks.
+               + "".join(
+                   f"<label class=wz-comp><input type=checkbox class=wzcomp value={e(tok)}>"
+                   f"<span><b>{e(name)}</b><small>{e(purpose)}</small></span></label>"
+                   for tok, name, purpose, _tech, in_wizard in COMPONENTS if in_wizard)
+               + "</div><input type=hidden id=wz-components value=''></div></fieldset>")
     doc.append("<fieldset class='wz-step depcard locked'><legend>4 · First users (optional)</legend>"
                "<p class=meta>Each row mints an enrolment credential once the server is up: a QR "
                "for ATAK and an iTAK line, downloadable at the end and re-downloadable later "
