@@ -232,8 +232,14 @@ echo "[2/6] users and action scripts"
 # the payload rides in it, and the box is asked afterwards what it actually has.
 SCRIPT_LIST=$(for k in "${!ACTION_SCRIPTS[@]}"; do s="${ACTION_SCRIPTS[$k]}"; printf '%s ' "$s"; [[ -z "${NO_PRIV[$s]:-}" ]] && printf '%s-priv ' "$s"; done)
 # tak-enrol-device-priv shells out to this to build the enrolment data package, so it
-# has to travel with the action scripts or the package is silently never built.
-EXTRA_SCRIPTS+=(build-enrolment-package.py)
+# travels with the action scripts. ONLY IF IT IS HERE: adding it unconditionally made tar
+# exit non-zero on a console that had not got it yet, which killed enrolment outright at
+# step 2 on a box that was otherwise fine. An optional extra must never be able to stop
+# the thing it is optional to; the package is simply not built, and the QR still works on
+# a box with a public certificate. Live failure, 3 Sep 2026, of my own making.
+for _x in build-enrolment-package.py; do
+    [[ -f "/usr/local/bin/$_x" ]] && EXTRA_SCRIPTS+=("$_x")
+done
 # shellcheck disable=SC2086
 SCRIPTS_B64=$(tar -C /usr/local/bin -cf - $SCRIPT_LIST "${EXTRA_SCRIPTS[@]}" | base64 | tr -d '\n')
 $SSH "$RSUDO bash -s" <<EOF || die "could not unpack the action scripts on the box"
