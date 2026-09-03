@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# tak-public-cert - get a publicly trusted certificate onto this box's enrolment port.
+#
+# The unprivileged half: validates hard, then hands the token to the privileged half
+# over the argument list. The token never reaches a log line here.
+#
+#   Emits on success:
+#     OK <fqdn>
+#     PUBLICCERT yes
+set -uo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+
+tokb64="${1:-}"; email="${2:-}"
+[[ -n "$tokb64" ]] || deny "usage: public-cert <token_b64> [email]"
+[[ "$tokb64" =~ ^[A-Za-z0-9+/=]{20,512}$ ]] || deny "bad token encoding"
+[[ -z "$email" || "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] \
+    || deny "that is not an email address"
+
+out=$(sudo -n /usr/local/bin/tak-public-cert-priv "$tokb64" "$email") || exit 2
+printf '%s\n' "$out"

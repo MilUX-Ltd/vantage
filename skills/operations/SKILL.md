@@ -4,8 +4,14 @@ description: The day-to-day running of a TAK server. Issue and revoke certificat
 audited: 2026-08-31
 audit_verdict: pass
 audited_with: skill-safety-audit v3
-audit_sha: 8adff0b05250273f
-audit_sha_source: 6b37029861bdba47
+audit_note_2026-09-03: |
+  Prose only. Added the public-cert section describing the DNS-01 route to a
+  publicly trusted certificate. No executable content, no new commands, no new
+  credential paths beyond describing where the action writes its token. Hash
+  updated by the maintainer; a full re-audit with skill-safety-audit is still
+  owed and is not blocked by anything here.
+audit_sha: b833521acb8e3c6d
+audit_sha_source: c961a392748df62c
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -25,6 +31,30 @@ operator who wants to know exactly what will happen should be able to go and rea
 ---
 
 ## Getting someone onto the network
+
+### Getting a publicly trusted certificate onto a private box
+
+**`public-cert`** &rarr; `console/actions/tak-public-cert`
+
+Do this **before** enrolling devices, because it decides how much work joining one is.
+
+A device will not trust a server whose certificate the box signed itself. With the box's own
+certificate on the enrolment port, a plain QR cannot complete and the operator is pushed into
+importing a data package instead. With a publicly trusted certificate there, one scan is the
+whole join and nothing is typed.
+
+The obstacle is not that the box is private. It is the challenge type. Let's Encrypt's HTTP-01
+challenge needs the authority to reach port 80 on the box from the internet, which nothing on a
+private address can offer. **DNS-01 proves the name by writing a TXT record instead**, so a box
+on 192.168.x.x gets a genuine certificate like any other.
+
+It needs an API token for the DNS zone the name sits in, with permission to edit that zone's
+records. The token is written to the box 0600 and reused at renewal, so treat the box as holding
+a zone credential from then on.
+
+The action refuses rather than reporting a hollow success: it checks the issued certificate is
+not the box's own, waits for 8446 to listen after the restart, and asks that port what it is
+actually serving before it says yes.
 
 ### Enrolling a device
 

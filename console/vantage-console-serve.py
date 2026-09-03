@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.46.0"
+VERSION = "2.47.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.46-beta"
+VANTAGE_RELEASE = "0.9.48-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -782,6 +782,25 @@ ACTIONS = {
                             "(! . _ ~ -)"}],
         "confirm": "Create enrolment credential \u201c{user}\u201d in group \u201c{group}\u201d on {target}. This mints a device credential; an existing user\u2019s groups and password are replaced.",
     },
+    "public-cert": {
+        "label": "Get a public certificate (DNS)", "verb": "public-cert",
+        "key": "id_action_publiccert", "group": "tak", "needs": "takserver",
+        "desc": "Proves this name through DNS and puts a publicly trusted certificate on "
+                "the enrolment port, so a device joins from the plain QR with nothing typed.",
+        "risk": "write", "tag": "Certificate", "needs_passphrase": True, "result": "text",
+        "inputs": [{"name": "token_b64", "label": "Cloudflare API token",
+                    "pattern": r"^[A-Za-z0-9+/=]{20,512}$",
+                    "secret": True, "encode": "b64", "input_type": "password",
+                    "help": "a token with Zone:DNS:Edit on the zone this box's name sits "
+                            "in. Cloudflare > My Profile > API Tokens > Create. It is "
+                            "written to the box 0600 and used again at renewal."},
+                   {"name": "email", "label": "Contact email", "optional": True,
+                    "pattern": r"^[A-Za-z0-9._%+-]*@?[A-Za-z0-9.-]*\.?[A-Za-z]*$",
+                    "help": "where Let's Encrypt sends expiry warnings; optional"}],
+        "confirm": "Obtain a publicly trusted certificate for {target} by writing a DNS "
+                   "record in your zone, then restart TAK Server. The enrolment port stops "
+                   "serving this box\u2019s own certificate.",
+    },
     "deploy-console": {
         "label": "Install a console on this box", "verb": "install-console",
         "key": "id_action_install_console", "group": "network", "needs": "",
@@ -1199,6 +1218,10 @@ def service_links(t):
                     "TAK's own cert (expect a warning); needs the admin client cert"))
     if "cloudtak" in sw:
         out.append(("CloudTAK", f"http://{host}:5000", "browser-based TAK client"))
+    if "mesh-manager-web" in sw:
+        # Mesh Manager: the Meshtastic mesh and its devices, managed on the box that carries
+        # the radio (the development repository ADR-005). Its own product; Vantage links to it and never links it.
+        out.append(("Mesh Manager", f"http://{host}:8093", "the Meshtastic mesh and its devices"))
     if "mediamtx" in sw:
         out.append(("Media player (HLS)", f"http://{host}:8888", "video restreamer"))
     return out

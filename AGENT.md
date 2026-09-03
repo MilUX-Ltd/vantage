@@ -93,6 +93,7 @@ changes something recoverable, `destructive` changes something that is not trivi
 | `view-coreconfig` | read | A redacted view of the server's configuration; never shows passwords |
 | `issue-cert` | write | Create a client certificate |
 | `enrol-device` | write | Create an enrolment credential and a QR code a phone scans |
+| `public-cert` | write | Prove the name through DNS and put a publicly trusted certificate on the enrolment port |
 | `set-group` | write | Add a user to a group |
 | `revoke-cert` | destructive | Revoke a certificate and add it to the CRL |
 | `show-cert-password` | write | Reveal the box's certificate password |

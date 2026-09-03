@@ -113,8 +113,6 @@ install -m 0755 "$SRC/vantage-apply-release" /usr/local/bin/vantage-apply-releas
 # Builds the enrolment data package. It lives in /usr/local/bin because console-enrol-server
 # tars this directory to push the action scripts to a box, and tak-enrol-device-priv shells
 # out to it there. Without it a private box hands out a QR no device can act on.
-[[ -r "$SRC/../common/build-enrolment-package.py" ]] && \
-    install -m 0755 "$SRC/../common/build-enrolment-package.py" /usr/local/bin/
 # the certificate-bearing package: the device joins with an identity it already
 # holds, so there is nothing to log in to and one scan is the whole join
 [[ -r "$SRC/../common/build-enrollment-dp.py" ]] && \

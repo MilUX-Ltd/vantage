@@ -153,8 +153,6 @@ fi
 [[ -f "$ROOT/console/vantage-apply-release" ]] && \
     install -m 0755 "$ROOT/console/vantage-apply-release" "$BIN/vantage-apply-release"
 # and the enrolment package builder, for the same reason as the provisioners above
-[[ -f "$ROOT/common/build-enrolment-package.py" ]] && \
-    install -m 0755 "$ROOT/common/build-enrolment-package.py" "$BIN/build-enrolment-package.py"
 [[ -f "$ROOT/common/build-enrollment-dp.py" ]] && \
     install -m 0755 "$ROOT/common/build-enrollment-dp.py" "$BIN/build-enrollment-dp.py"
 

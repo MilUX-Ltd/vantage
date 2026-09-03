@@ -35,7 +35,7 @@ set -uo pipefail
 # which version was actually running on which box, and the deployable kit is away with the
 # first one on it. A checker you cannot version is a checker you cannot trust
 # across an estate.
-VERSION="1.10.0"
+VERSION="1.12.0"
 SCHEMA="milux.tak-health/2"
 PROFILE=""
 JSON=0
@@ -328,7 +328,7 @@ load_profile() {
         P_FQDN=""
         P_HOSTMATCH=""                 # set per box by enrolment (/etc/tak-health.conf HOSTMATCH=)
         P_PROBE="127.0.0.1"
-        P_SERVICES="takserver mediamtx mbtileserver chrony postgresql takbot mosquitto node-red ollama tailscaled docker tak-meshtastic-gateway"
+        P_SERVICES="takserver mediamtx mbtileserver chrony postgresql takbot mosquitto node-red ollama tailscaled docker $(mesh_unit)"
         P_TCP="8089 8443 8446 1935 8554 8888 8080"
         P_UDP="123"
         P_PUBLIC=0
@@ -357,6 +357,13 @@ load_profile() {
 # nothing operator-typed may reach it except through this map's fixed outputs.
 # The token/unit translation (nodered -> node-red) lives here and only here.
 # ---------------------------------------------------------------------------
+# The mesh radio is owned by ONE unit: Mesh Manager's bridge where Mesh Manager is installed
+# (ADR-005; it stops and disables the old gateway and keeps that unit file as the rollback),
+# the the development repository gateway otherwise. Judging the old unit on a box that runs the bridge reported
+# a FAIL for a service that was stopped on purpose (3 Sep 2026, the first real install).
+mesh_unit() {
+    if systemctl cat mesh-manager-bridge >/dev/null 2>&1; then echo "mesh-manager-bridge"; else echo "tak-meshtastic-gateway"; fi
+}
 component_services() { # token -> service names, or rc 1 for an unknown token
     case "$1" in
       takserver) echo "takserver postgresql" ;;
@@ -368,7 +375,7 @@ component_services() { # token -> service names, or rc 1 for an unknown token
       nodered)   echo "node-red" ;;
       ollama)    echo "ollama" ;;
       lanntp)    echo "chrony" ;;
-      mesh)      echo "tak-meshtastic-gateway" ;;
+      mesh)      mesh_unit ;;
       tailscale) echo "tailscaled" ;;
       docker)    echo "docker" ;;
       # infra-TAK (takwerx) is a stack CHOICE alongside the MilUX TAK Server: its own
@@ -940,9 +947,10 @@ gather_software() {
     # not process - the unit being active proves nothing about the mesh, so the
     # heartbeat (written by the gateway on each forwarded packet) is the evidence,
     # and its absence renders honestly as "quiet".
-    if systemctl cat tak-meshtastic-gateway >/dev/null 2>&1; then
-        s=$(systemctl is-active tak-meshtastic-gateway 2>/dev/null || true)
-        sw_record tak-meshtastic-gateway "" "${s:-unknown}"
+    if systemctl cat mesh-manager-bridge >/dev/null 2>&1 || systemctl cat tak-meshtastic-gateway >/dev/null 2>&1; then
+        mu=$(mesh_unit)
+        s=$(systemctl is-active "$mu" 2>/dev/null || true)
+        sw_record "$mu" "" "${s:-unknown}"
         MESH_GATEWAY="${s:-unknown}"
         MESH_RADIO=""; MESH_RADIO_PRESENT=false
         if [[ -r /etc/vantage-mesh.conf ]]; then
@@ -1019,7 +1027,9 @@ PYEOF
     # The kit modules (Spec 002): presence rows for everything in the component
     # vocabulary not already covered above, so the console's Modules panel and
     # the loadout cross-check see what is actually fitted.
-    for s in mosquitto node-red ollama mbtileserver chrony tailscaled; do
+    # Mesh Manager (its own product, GPL, installed as a module the way CloudTAK is): the
+    # bridge that owns the radio and the screen. Presence rows so the console can link to it.
+    for s in mosquitto node-red ollama mbtileserver chrony tailscaled mesh-manager-bridge mesh-manager-web; do
         if systemctl cat "$s" >/dev/null 2>&1; then
             sw_record "$s" "" "$(systemctl is-active "$s" 2>/dev/null || echo unknown)"
         fi
