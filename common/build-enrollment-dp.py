@@ -80,7 +80,7 @@ MANIFEST = """<MissionPackageManifest version="2">
 
 def build_pref(host: str, port: str, description: str, username: str,
                password: str, ca_password: str, team: str, role: str,
-               client_password: str | None) -> str:
+               client_password: str | None, ca_only: bool = False) -> str:
     """The cot_streams preference block the client reads on import.
 
     Two modes, and the choice matters:
@@ -101,6 +101,26 @@ def build_pref(host: str, port: str, description: str, username: str,
     package). Values are XML text, so anything user-supplied is escaped.
     """
     e = escape
+    if ca_only:
+        # The estate authority on its own, and deliberately nothing else. No server, no
+        # credential, no client certificate: this package exists to put the CA into the
+        # device's trust store ONCE, so that afterwards every box that authority signed
+        # is trusted and joins from a plain QR with nothing typed.
+        #
+        # Scope is the whole point. caLocation with NO index suffix is the default
+        # entry, which ATAK stores against the type rather than against one server
+        # (AtakCertificateDatabaseIFace: getCertificateForType, alongside the
+        # ...AndServer and ...AndServerAndPort forms). Writing caLocation0 instead
+        # would bind the authority to stream 0 of one connection and the next box would
+        # be a stranger again.
+        return f"""<?xml version='1.0' encoding='ASCII' standalone='yes'?>
+<preferences>
+<preference version="1" name="com.atakmap.app_preferences">
+    <entry key="caLocation" class="class java.lang.String">{CERT_RUNTIME_PATH}</entry>
+    <entry key="caPassword" class="class java.lang.String">{e(ca_password)}</entry>
+</preference>
+</preferences>
+"""
     if client_password is None:
         # Enrolment: trust only, credentials, no client certificate yet.
         auth = f"""    <entry key="caLocation" class="class java.lang.String">{CERT_RUNTIME_PATH}</entry>
@@ -137,11 +157,11 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--host", required=True, help="Server FQDN")
+    ap.add_argument("--host", default="", help="Server FQDN (not used with --ca-only)")
     ap.add_argument("--port", default="8089", help="Streaming port (default 8089)")
-    ap.add_argument("--description", required=True,
+    ap.add_argument("--description", default="",
                     help="Server name shown in the client's server list")
-    ap.add_argument("--username", required=True)
+    ap.add_argument("--username", default="", help="(not used with --ca-only)")
     ap.add_argument("--password", default="",
                     help="Account password. Required unless --client-cert is given.")
     ap.add_argument("--ca", type=Path, required=True,
@@ -160,11 +180,23 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--name", default=None,
                     help="Package name shown on import (default: the zip filename)")
     ap.add_argument("--uid", default=None, help="Stable UID (default: random)")
+    ap.add_argument("--ca-only", action="store_true",
+                    help="the estate authority alone, scoped to every server: import "
+                         "once per device, then plain QRs work for any box this CA signed")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
+    if not args.ca_only:
+        missing = [f"--{n}" for n in ("host", "description", "username")
+                   if not getattr(args, n)]
+        if missing:
+            sys.exit("required unless --ca-only: " + ", ".join(missing))
+
     if not args.ca.is_file():
         sys.exit(f"truststore not found: {args.ca}")
+
+    if args.ca_only and args.client_cert:
+        sys.exit("--ca-only carries no client certificate; drop one or the other")
 
     client_password = None
     if args.client_cert:
@@ -173,12 +205,12 @@ def main(argv: list[str] | None = None) -> int:
         # makeCert.sh protects the client .p12 with the server's CERT_PASSWORD,
         # the same value that opens the truststore, so default to it.
         client_password = args.client_password or args.ca_password
-    elif not args.password:
-        sys.exit("--password is required unless --client-cert is given")
+    elif not args.password and not args.ca_only:
+        sys.exit("--password is required unless --client-cert or --ca-only is given")
 
     pref = build_pref(args.host, args.port, args.description, args.username,
                       args.password, args.ca_password, args.team, args.role,
-                      client_password)
+                      client_password, args.ca_only)
 
     entries = [CERT_ENTRY] + ([CLIENT_ENTRY] if args.client_cert else [])
     contents = '    <Content ignore="false" zipEntry="server.pref"/>\n' + "".join(
@@ -200,10 +232,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # The package is a credential; keep it off other accounts on this machine.
     args.out.chmod(0o600)
-    mode = "client certificate" if args.client_cert else "enrolment"
-    print(f"wrote {args.out} ({args.out.stat().st_size} bytes, {mode}) "
-          f"for {args.username}@{args.host}:{args.port}")
-    print("This embeds a live credential — keep it in secrets/, never commit it.")
+    mode = ("estate authority" if args.ca_only
+            else "client certificate" if args.client_cert else "enrolment")
+    if args.ca_only:
+        print(f"wrote {args.out} ({args.out.stat().st_size} bytes, {mode})")
+        print("Import once per device. It holds no credential, but it decides what that "
+              "device will trust, so hand it over as deliberately as one.")
+    else:
+        print(f"wrote {args.out} ({args.out.stat().st_size} bytes, {mode}) "
+              f"for {args.username}@{args.host}:{args.port}")
+        print("This embeds a live credential — keep it in secrets/, never commit it.")
     return 0
 
 

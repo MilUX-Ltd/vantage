@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# tak-estate-ca - hand back this estate's certificate authority, packaged for a device.
+#
+#   Emits:
+#     OK <authority name>
+#     SIZE <bytes>
+#     PKG <base64 of the data package>
+set -uo pipefail
+deny() { echo "ERR $*" >&2; exit 2; }
+out=$(sudo -n /usr/local/bin/tak-estate-ca-priv) || exit 2
+printf '%s\n' "$out"

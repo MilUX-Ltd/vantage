@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# tak-estate-ca-priv - the estate's certificate authority, packaged for a device.
+#
+#     takadmin ALL=(root) NOPASSWD: /usr/local/bin/tak-estate-ca-priv
+#
+# What this is for. A box that signs its own certificates is not trusted by any device
+# until that device holds its authority, and a QR code cannot carry one: ATAK's three
+# QR schemes take a host and credential, a URL, or preferences, and none takes a
+# certificate. So the authority travels out of band exactly once per device - a file
+# store, a memory stick, an MDM push - and after that every box that authority signed
+# is trusted and joins from a plain QR with nothing typed.
+#
+# That is the whole trade for a private estate: one deliberate step per device, in
+# exchange for never publishing a box name in public certificate transparency logs.
+#
+# It carries NO credential and NO client certificate. It holds the authority and the
+# password that opens it, which is the same password that opens this box's client
+# certificates - so it is not a public document. Hand it over as deliberately as a key.
+set -euo pipefail
+
+deny() { echo "ERR $*" >&2; exit 2; }
+
+TS=/opt/tak/certs/files/truststore-root.p12
+CAPASS_FILE=/opt/tak/certs/.milux-capass
+BUILDER=/usr/local/bin/build-enrollment-dp.py
+
+[[ -s "$TS" ]]           || deny "no truststore on this box - has TAK been provisioned?"
+[[ -r "$CAPASS_FILE" ]]  || deny "no certificate password on this box"
+[[ -x "$BUILDER" ]]      || deny "the package builder is not on this box; update Vantage here first"
+capass=$(head -1 "$CAPASS_FILE")
+[[ -n "$capass" ]]       || deny "the certificate password is empty"
+
+# Name it after the authority, not the box: it is the estate's, and it is imported once
+# per device rather than once per server.
+ca_cn=$(openssl pkcs12 -in "$TS" -nokeys -passin pass:"$capass" 2>/dev/null \
+        | openssl x509 -noout -subject 2>/dev/null | sed 's/.*CN *= *//; s/,.*//' || echo "")
+[[ -n "$ca_cn" ]] || ca_cn="estate"
+
+tmpz=$(mktemp -u /tmp/.estateca.$$.XXXXXX.zip)
+if ! timeout 60 "$BUILDER" --ca-only --ca "$TS" --ca-password "$capass" \
+        --name "$ca_cn" --out "$tmpz" >/dev/null 2>&1 || [[ ! -s "$tmpz" ]]; then
+    rm -f "$tmpz"
+    deny "could not build the authority package"
+fi
+
+# It must carry the authority and nothing that identifies one device or one server: a
+# package with a client certificate in it is a credential for somebody, and this is
+# handed to everybody.
+if unzip -l "$tmpz" 2>/dev/null | grep -q "clientCert.p12"; then
+    rm -f "$tmpz"; deny "refusing: that package carries a client certificate"
+fi
+
+b64=$(base64 -w0 "$tmpz" 2>/dev/null || base64 "$tmpz" | tr -d '\n')
+size=$(wc -c < "$tmpz" | tr -d ' ')
+rm -f "$tmpz"
+
+echo "OK $ca_cn"
+echo "SIZE $size"
+echo "PKG $b64"

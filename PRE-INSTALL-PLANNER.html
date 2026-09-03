@@ -311,7 +311,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
   </div>
   <div class="field kit-only">
     <label>Do you want a publicly-trusted certificate?</label>
-    <span class="hint">It makes no difference to whether the box works, or to enrolling devices by QR. It decides whether browsers and handsets warn the first time they connect, and how much you publish about this box.</span>
+    <span class="hint">It makes no difference to whether the box works. It decides two things: how much you publish about this box, and what a device has to do before it can join. With a public certificate, a handset joins from the QR alone. Without one, each handset takes this estate&rsquo;s certificate authority once &mdash; from a memory stick or your file store &mdash; and every box in the estate is a plain QR after that. Neither is worse; they publish different amounts.</span>
     <div class="choice">
       <label><input type="radio" name="cert" value="none"> No, keep it private</label>
       <label><input type="radio" name="cert" value="laptop" checked> Yes, from my laptop</label>

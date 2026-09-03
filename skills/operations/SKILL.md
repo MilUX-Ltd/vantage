@@ -10,8 +10,8 @@ audit_note_2026-09-03: |
   credential paths beyond describing where the action writes its token. Hash
   updated by the maintainer; a full re-audit with skill-safety-audit is still
   owed and is not blocked by anything here.
-audit_sha: b833521acb8e3c6d
-audit_sha_source: c961a392748df62c
+audit_sha: 728284bebb1e7d5e
+audit_sha_source: fa5017602455f47d
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -31,6 +31,31 @@ operator who wants to know exactly what will happen should be able to go and rea
 ---
 
 ## Getting someone onto the network
+
+### Provisioning a device to the estate
+
+**`estate-ca`** &rarr; `console/actions/tak-estate-ca`
+
+The private-estate route, and the one to reach for when a customer will not have their box
+names published.
+
+A device will not talk to a server whose certificate the box signed itself, and **a QR code
+cannot carry a certificate authority**: ATAK's QR schemes take a host and credential, a URL, or
+preferences, and none of them takes a certificate. So the authority travels out of band, once
+per device: this action packages it, you put it on a memory stick or in your file store, and the
+handset imports it.
+
+That import is once per device for life, not once per box. The package sets the authority at
+the default scope rather than against one server, so every box that authority signed is trusted
+afterwards, and joining any of them is a plain QR with nothing typed.
+
+The trade, plainly: one deliberate step per handset, in exchange for publishing nothing. A
+publicly trusted certificate removes that step but writes the box's name permanently into public
+certificate transparency logs, which is rarely acceptable for a customer's deployment.
+
+The package carries no credential and no client certificate, but it does carry the password that
+opens the authority, which is the same password that opens this box's client certificates. Hand
+it over as deliberately as a key.
 
 ### Getting a publicly trusted certificate onto a private box
 

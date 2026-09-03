@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.47.0"
+VERSION = "2.48.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.48-beta"
+VANTAGE_RELEASE = "0.9.49-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -504,9 +504,14 @@ ACTIONS = {
             {"name": "fqdn", "label": "Server FQDN",
              "pattern": r"^[a-z0-9][a-z0-9-]{0,62}(\.[a-z0-9][a-z0-9-]{0,62}){1,10}$",
              "help": "e.g. tak.example.org - must already resolve to the box for Let's Encrypt"},
-            {"name": "le_email", "label": "Let's Encrypt email",
-             "pattern": r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$",
-             "help": "expiry notices go here"},
+            {"name": "le_email", "label": "Let's Encrypt email", "optional": True,
+             "pattern": r"^$|^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$",
+             "help": "expiry notices go here; not needed on a private build"},
+            {"name": "public_cert", "label": "Publicly trusted certificate",
+             "pattern": r"^(yes|no)?$", "optional": True, "choices": ["yes", "no"],
+             "help": "no keeps the box off public certificate transparency logs, and "
+                     "devices then need this estate's authority once before they can "
+                     "join by QR"},
             {"name": "org", "label": "Organisation", "pattern": r"^[A-Za-z0-9._ -]{1,40}$",
              "help": "PKI organisation, e.g. MilUX"},
             {"name": "org_unit", "label": "Org unit", "pattern": r"^[A-Za-z0-9._ -]{1,40}$",
@@ -781,6 +786,18 @@ ACTIONS = {
                             "your own: 15+ chars with an upper, lower, digit and symbol "
                             "(! . _ ~ -)"}],
         "confirm": "Create enrolment credential \u201c{user}\u201d in group \u201c{group}\u201d on {target}. This mints a device credential; an existing user\u2019s groups and password are replaced.",
+    },
+    "estate-ca": {
+        "label": "Provision a device to this estate", "verb": "estate-ca",
+        "key": "id_action_estateca", "group": "tak", "needs": "takserver",
+        "desc": "The estate's certificate authority, packaged for a device. Import it "
+                "once per handset and every box this authority signed is then trusted, "
+                "so joining is a plain QR with nothing typed.",
+        "risk": "write", "tag": "Trust", "needs_passphrase": True, "result": "capkg",
+        "inputs": [],
+        "confirm": "Export this estate\u2019s certificate authority as a device package "
+                   "from {target}. It carries no credential, but it decides what a device "
+                   "will trust; hand it over as deliberately as a key.",
     },
     "public-cert": {
         "label": "Get a public certificate (DNS)", "verb": "public-cert",
@@ -1469,6 +1486,16 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         else:
             tail = "Scan with ATAK, or use the iTAK line."
         out["message"] = f"Enrolment credential ready for {out['name']}. " + tail
+    elif a["result"] == "capkg":
+        out["name"] = parsed.get("OK", "")
+        out["pkg"] = parsed.get("PKG", "")
+        out["size"] = parsed.get("SIZE", "")
+        out["message"] = (
+            f"The authority for {out['name']} is ready. Import it once on each device: "
+            "put it on a memory stick or your file store, open it on the handset, and "
+            "ATAK takes the authority. After that every box this authority signed is "
+            "trusted, and joining one is a plain QR with nothing typed. It publishes "
+            "nothing on the internet.")
     elif a["result"] == "capass":
         if "CAPASS" in parsed:
             out["message"] = ("Certificate password: " + parsed["CAPASS"] + "\n"
@@ -2972,7 +2999,7 @@ DEPLOYMENTS_FILE = os.environ.get("VANTAGE_CONSOLE_DEPLOYMENTS",
                                   "/var/lib/vantage-console/agent/deployments.json")
 
 _DEP_FIELDS = ("name", "label", "address", "user", "profile", "deb_file", "deb_sha256",
-               "fqdn", "le_email", "org", "org_unit", "country", "state", "city",
+               "fqdn", "le_email", "public_cert", "org", "org_unit", "country", "state", "city",
                "components", "cred_rows")
 
 
@@ -7983,6 +8010,18 @@ root.querySelectorAll('form.action').forEach(function(f){
                   a.download=(j.name||'device')+'-enrolment.zip';
                   document.body.appendChild(a);a.click();a.remove();};
                 res.appendChild(sp);}}
+          // The estate authority package: no QR, no credential, one import per device
+          // for life. It is the only result that carries a package and nothing else.
+          if(j.pkg && !j.pkg_token && !j.png){
+            var ep=document.createElement('button');ep.type='button';
+            ep.className='a-go primary';
+            ep.textContent='Download the estate authority (.zip)';
+            ep.onclick=function(){
+              var a=document.createElement('a');
+              a.href='data:application/zip;base64,'+j.pkg;
+              a.download=(j.name||'estate')+'-authority.zip';
+              document.body.appendChild(a);a.click();a.remove();};
+            res.appendChild(ep);}
           if(j.credentials){var ul=document.createElement('div');ul.className='credrows';
             j.credentials.forEach(function(c){var d=document.createElement('div');
               d.textContent=(c.ctype==='cert'?'certificate  ':'enrolment    ')+c.name
@@ -14691,9 +14730,34 @@ SETUP_JS = """
   $('#wz-onbox').onchange=function(){
     S.debOnBox=this.checked; if(this.checked){S.pkg=null;unlock(3);} };
 
+  // The choice decides how a device joins, which is the part nobody expects and the
+  // part that cost a night. Say it here, where the choice is made.
+  function pubcertNote(){
+    var sel=$('#wz-pubcert'), note=$('#wz-pubcert-note'), ew=$('#wz-emailwrap');
+    if(!sel||!note) return;
+    if(sel.value==='no'){
+      note.innerHTML='<b>Devices need the estate authority once.</b> Nothing about '+
+        'this box is published, and no certificate authority is asked for anything. In '+
+        'exchange, each handset imports the estate authority once - Actions > Provision '+
+        'a device to this estate - and after that joining any box in the estate is a '+
+        'plain QR with nothing typed.';
+      if(ew) ew.hidden=true;
+    }else{
+      note.innerHTML='<b>Devices join from the QR alone.</b> The box must already be '+
+        'reachable from the internet on port 80 for the name you gave. Its name is then '+
+        'published permanently in public certificate transparency logs.';
+      if(ew) ew.hidden=false;
+    }
+  }
+  if($('#wz-pubcert')) $('#wz-pubcert').onchange=pubcertNote;
+  pubcertNote();
+
   // step 3 unlocks step 4+5 when the required fields hold
   wiz.addEventListener('input',function(){
-    var need=['wz-fqdn','wz-email'], ok=true;
+    // A private build asks Let's Encrypt for nothing, so it has no expiry notice to
+    // receive. Requiring an address for one blocked step 5 on a field with no purpose.
+    var pubcert=($('#wz-pubcert')?$('#wz-pubcert').value:'yes');
+    var need = pubcert==='no' ? ['wz-fqdn'] : ['wz-fqdn','wz-email'], ok=true;
     need.forEach(function(id){if(!$('#'+id).value.trim())ok=false;});
     if(ok&&(S.pkg||S.debOnBox)) unlock(5);
   });
@@ -14745,6 +14809,7 @@ SETUP_JS = """
       deb_file:S.pkg?S.pkg.file:'', deb_sha256:S.pkg?S.pkg.sha:'',
       provision:{fqdn:$('#wz-fqdn').value.trim(),ca_pass:($('#wz-capass')?$('#wz-capass').value:''),
         le_email:$('#wz-email').value.trim(),
+        public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'yes'),
         org:$('#wz-org').value.trim(),org_unit:$('#wz-orgunit').value.trim(),
         country:$('#wz-country').value.trim(),state:$('#wz-state').value.trim(),
         city:$('#wz-city').value.trim(),deb:$('#wz-deb').value.trim(),
@@ -14891,6 +14956,7 @@ SETUP_JS = """
       profile:$('#wz-profile').value,
       deb_file:S.pkg?S.pkg.file:'',deb_sha256:S.pkg?S.pkg.sha:'',
       fqdn:$('#wz-fqdn').value.trim(),le_email:$('#wz-email').value.trim(),
+      public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'yes'),
       org:$('#wz-org').value.trim(),org_unit:$('#wz-orgunit').value.trim(),
       country:$('#wz-country').value.trim(),state:$('#wz-state').value.trim(),
       city:$('#wz-city').value.trim(),components:$('#wz-components').value.trim(),
@@ -14912,6 +14978,7 @@ SETUP_JS = """
     $('#wz-addr').value=d.address||'';$('#wz-user').value=d.user||'root';
     $('#wz-profile').value=d.profile||'cloud';
     $('#wz-fqdn').value=d.fqdn||'';$('#wz-email').value=d.le_email||'';
+    if($('#wz-pubcert'))$('#wz-pubcert').value=d.public_cert||'yes';
     $('#wz-org').value=d.org||'MilUX';$('#wz-orgunit').value=d.org_unit||'TAK';
     $('#wz-country').value=d.country||'GB';$('#wz-state').value=d.state||'England';
     $('#wz-city').value=d.city||'';$('#wz-components').value=d.components||'';
@@ -16634,7 +16701,13 @@ def render_deploy(state):
     doc.append("<fieldset class='wz-step depcard locked'><legend>3 · The server</legend>"
                "<label class=fl>Server FQDN<input id=wz-fqdn placeholder='tak.example.org' required>"
                "<span class=hint>must already resolve to the box for Let's Encrypt</span></label>"
-               "<label class=fl>Let's Encrypt email<input id=wz-email placeholder='ops@example.org' required>"
+               "<label class=fl>Publicly trusted certificate"
+               "<select id=wz-pubcert>"
+               "<option value=yes>Yes - this box is reachable from the internet</option>"
+               "<option value=no>No - keep it private</option>"
+               "</select></label>"
+               "<div class=fedpop-note id=wz-pubcert-note></div>"
+               "<label class=fl id=wz-emailwrap>Let's Encrypt email<input id=wz-email placeholder='ops@example.org'>"
                "<span class=hint>expiry notices go here</span></label>"
                f"<label class=fl>Organisation<input id=wz-org value='{e(_di['org'])}' placeholder='e.g. Acme Defence' required></label>"
                f"<label class=fl>Org unit<input id=wz-orgunit value='{e(_di['org_unit'])}' placeholder='e.g. Operations' required></label>"
@@ -16797,9 +16870,22 @@ def render_deploy(state):
         if f["name"] == "dry_run" or f.get("hidden"):
             continue
         d = DEPLOY_DEFAULTS.get(f["name"], "")
-        req = "" if f["name"] == "components" else " required"
-        doc.append(f"<label class=fl>{e(f['label'])}<input data-k='{e(f['name'])}' "
-                   f"value='{e(d)}'{req}><span class=hint>{e(f['help'])}</span></label>")
+        req = "" if (f["name"] == "components" or f.get("optional")) else " required"
+        # A field with a fixed set of answers is a menu. This form was rendering every
+        # field as a free text box regardless, so "publicly trusted certificate" arrived
+        # as somewhere to type, and anything but yes or no came back invalid.
+        if f.get("choices"):
+            def _o(c, _d=d):
+                v, lbl = (c if isinstance(c, (tuple, list)) else (c, c))
+                return (f"<option value='{e(v)}'" + (" selected" if _d == v else "")
+                        + f">{e(lbl)}</option>")
+            opts = "".join(_o(c) for c in f["choices"])
+            doc.append(f"<label class=fl>{e(f['label'])}"
+                       f"<select data-k='{e(f['name'])}'{req}>{opts}</select>"
+                       f"<span class=hint>{e(f['help'])}</span></label>")
+        else:
+            doc.append(f"<label class=fl>{e(f['label'])}<input data-k='{e(f['name'])}' "
+                       f"value='{e(d)}'{req}><span class=hint>{e(f['help'])}</span></label>")
     doc.append("<label class=depdry><input type=checkbox data-k=dry_run checked> "
                "<b>Dry run</b> - print every step, change nothing. Untick only when the dry "
                "run read correctly.</label>")

@@ -83,7 +83,15 @@ if [[ "$ONLY_STAGE" == "components" ]]; then
     [[ "$COMPONENTS" =~ ^[a-z,]+$ ]] || die "invalid --components"
 else
     [[ "$FQDN" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || die "invalid --fqdn"
-    [[ "$LE_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "invalid --le-email"
+    # Only needed when a public certificate is actually being requested. A private
+    # build has nowhere to send an expiry notice and no certificate to expire, so
+    # demanding an address for one is a question with no purpose.
+    if (( NO_LE )); then
+        [[ -z "$LE_EMAIL" || "$LE_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] \
+            || die "invalid --le-email"
+    else
+        [[ "$LE_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "invalid --le-email"
+    fi
     [[ "$COUNTRY" =~ ^[A-Z]{2}$ ]] || die "--country must be a 2-letter code"
     for v in "$ORG" "$ORG_UNIT" "$STATE" "$CITY"; do
         [[ "$v" =~ ^[A-Za-z0-9._\ -]{1,40}$ ]] || die "PKI fields must be [A-Za-z0-9._ -], max 40: '$v'"

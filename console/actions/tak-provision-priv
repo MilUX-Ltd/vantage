@@ -53,6 +53,7 @@ mapfile -t kv < <(printf '%s' "$argsb64" | base64 -d 2>/dev/null \
 import json, sys
 d = json.load(sys.stdin)
 allowed = ["fqdn", "le_email", "org", "org_unit", "country", "state", "city", "deb",
+           "public_cert",
            "components", "dry_run", "stage", "ca_pass"]
 for k in d:
     if k not in allowed:
@@ -64,7 +65,12 @@ declare -A P
 for line in "${kv[@]}"; do P["${line%%=*}"]="${line#*=}"; done
 
 [[ "${P[fqdn]}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || deny "bad fqdn"
-[[ "${P[le_email]}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || deny "bad le_email"
+if [[ "${P[public_cert]}" == "no" ]]; then
+    [[ -z "${P[le_email]}" || "${P[le_email]}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] \
+        || deny "bad le_email"
+else
+    [[ "${P[le_email]}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || deny "bad le_email"
+fi
 [[ "${P[org]}" =~ ^[A-Za-z0-9._\ -]{1,40}$ ]]      || deny "bad org"
 [[ "${P[org_unit]}" =~ ^[A-Za-z0-9._\ -]{1,40}$ ]] || deny "bad org_unit"
 [[ "${P[country]}" =~ ^[A-Z]{2}$ ]]                || deny "bad country"
@@ -81,10 +87,15 @@ for line in "${kv[@]}"; do P["${line%%=*}"]="${line#*=}"; done
 [[ "${P[stage]}" =~ ^(components)?$ ]]             || deny "bad stage"
 [[ -z "${P[ca_pass]}" || "${P[ca_pass]}" =~ ^[A-Za-z0-9._!-]{8,64}$ ]] || deny "bad ca_pass"
 
-args=(--fqdn "${P[fqdn]}" --le-email "${P[le_email]}" --org "${P[org]}"
+args=(--fqdn "${P[fqdn]}" --org "${P[org]}"
       --org-unit "${P[org_unit]}" --country "${P[country]}" --state "${P[state]}"
       --city "${P[city]}" --deb "${P[deb]}")
+[[ -n "${P[le_email]}" ]] && args+=(--le-email "${P[le_email]}")
 [[ -n "${P[components]}" ]] && args+=(--components "${P[components]}")
+# public_cert=no is the planner's answer arriving at the build. Without it the box
+# spends two minutes on a challenge that cannot succeed behind a router and prints a
+# wall of red that reads like a fault, which is exactly what it did on 3 Sep 2026.
+[[ "${P[public_cert]}" == "no" ]] && args+=(--no-letsencrypt)
 [[ "${P[dry_run]}" == "1" ]] && args+=(--dry-run)
 [[ -n "${P[stage]}" ]] && args+=(--stage "${P[stage]}")
 [[ -n "${P[ca_pass]}" ]] && args+=(--ca-pass "${P[ca_pass]}")
