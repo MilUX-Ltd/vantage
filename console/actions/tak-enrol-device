@@ -65,3 +65,8 @@ echo "PNG $png"
 # certificate does not need it; a box using its own cannot enrol a device without it.
 pkg=$(awk '$1=="PKG"{print $2}' <<<"$out")
 [[ -n "$pkg" ]] && echo "PKG $pkg"
+# "cert" means the package carries the device's own certificate and the join needs
+# nothing typed; "enrol" means it carries trust only and the device will ask to log
+# in. The page must not promise the first while shipping the second.
+kind=$(awk '$1=="PKGKIND"{print $2}' <<<"$out")
+[[ -n "$kind" ]] && echo "PKGKIND $kind"

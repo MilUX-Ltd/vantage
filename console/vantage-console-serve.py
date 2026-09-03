@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.45.2"
+VERSION = "2.46.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.45-beta"
+VANTAGE_RELEASE = "0.9.46-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -1425,6 +1425,9 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         # without this the QR fails with "the TAK server's identity could not be
         # verified" and there is nothing on the page to fix it with.
         out["pkg"] = parsed.get("PKG", "")
+        # cert = the device's own certificate is inside and nothing is typed.
+        # enrol = trust only, and TAK's auto-enrolment will ask for a login.
+        out["pkg_kind"] = parsed.get("PKGKIND", "enrol" if parsed.get("PKG") else "")
         # Held for collection so the device can fetch it itself. Downloading the zip to
         # the operator's laptop and then getting it onto a phone by hand was the step
         # that made this "works, once you have a cable"; the token turns it into a scan.
@@ -1434,10 +1437,15 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
                     base64.b64decode(out["pkg"]), f"{out['name'] or 'device'}-enrolment.zip")
             except Exception:
                 out["pkg_token"] = ""
-        out["message"] = (f"Enrolment credential ready for {out['name']}. "
-                          + ("Scan the import code with ATAK: it carries the certificate "
-                             "authority, the server and the credential together."
-                             if out["pkg"] else "Scan with ATAK, or use the iTAK line."))
+        if out["pkg_kind"] == "cert":
+            tail = ("Scan the import code with ATAK. It carries the authority, the server "
+                    "and this device's own certificate, so nothing is typed.")
+        elif out["pkg"]:
+            tail = ("Scan the import code with ATAK for the authority and the server; the "
+                    "device will then ask for the credential above.")
+        else:
+            tail = "Scan with ATAK, or use the iTAK line."
+        out["message"] = f"Enrolment credential ready for {out['name']}. " + tail
     elif a["result"] == "capass":
         if "CAPASS" in parsed:
             out["message"] = ("Certificate password: " + parsed["CAPASS"] + "\n"
@@ -4589,6 +4597,7 @@ def start_setup_job(data, client, authed=False):
                                          "url": res.get("url", ""), "itak": res.get("itak", ""),
                                          "png": res.get("png", ""),
                                          "pkg": res.get("pkg", ""),
+                                         "pkg_kind": res.get("pkg_kind", ""),
                                          "pkg_token": res.get("pkg_token", "")})
                     else:
                         say(log, f"credential FAILED: {c['user']}: {res.get('error') or res.get('message')}")
@@ -7916,10 +7925,15 @@ root.querySelectorAll('form.action').forEach(function(f){
               // Lead with it, and say why, rather than leaving it as a download.
               if(j.pkg){
                 var why=document.createElement('div'); why.className='cred-pkg-why';
-                why.innerHTML='<b>Scan this one, not the one above.</b> This server signs '+
-                  'its own certificates, so a device cannot verify it until it has the '+
-                  'certificate authority. This code carries the authority, the server and '+
-                  'the credential together, and the device fetches them itself.';
+                why.innerHTML=(j.pkg_kind==='cert')
+                  ? '<b>Scan this one, not the one above. That is the whole join.</b> It '+
+                    'carries the certificate authority, the server, and the certificate '+
+                    'issued to this device. '+
+                    'certificate. There is nothing to type: no username, no password.'
+                  : '<b>Scan this one, not the one above.</b> This server signs its own '+
+                    'certificates, so a device cannot verify it until it has the certificate '+
+                    'authority. This code carries the authority and the server; the device '+
+                    'will then ask you to sign in.';
                 res.appendChild(why);
                 if(j.pkg_token){
                   var qi=document.createElement('img');
@@ -14751,15 +14765,18 @@ SETUP_JS = """
         // package carries them, so the operator needs them ON THIS SCREEN. They were in
         // the data all along and simply never printed: the build finished, the device
         // asked, and the answer existed nowhere the operator could see it.
-        if(c.password){
-          h+='<div class=cred-lines>Sign in on the device as <code>'+esc(c.user)+'</code>'
-            +' with <code>'+esc(c.password)+'</code></div>';
-        }
         if(c.pkg_token){
-          h+='<div class=cred-pkg-why><b>Scan this code.</b> This server signs its own '
-            +'certificates, so a device cannot verify it until it has the certificate '
-            +'authority. This code carries the authority, the server and the credential '
-            +'together; the device fetches them itself.</div>'
+          // Say which of the two packages this actually is. Promising a one-scan join
+          // and then shipping the enrolment package is how the operator ends up staring
+          // at a login prompt whose answer is nowhere on the screen.
+          h+='<div class=cred-pkg-why>'+(c.pkg_kind==='cert'
+            ? '<b>Scan this code. That is the whole join.</b> It carries the certificate '
+              +'authority, the server, and the certificate issued to this device. There is '
+              +'nothing to type: no username, no password.'
+            : '<b>Scan this code.</b> This server signs its own certificates, so a device '
+              +'cannot verify it until it has the certificate authority. This code carries '
+              +'the authority and the server. The device will then ask you to sign in with '
+              +'the credential below.')+'</div>'
             +'<img class="cred-qr import" alt="Enrolment import code for '+esc(c.user)+'" '
             +'src="/enrol/'+esc(c.pkg_token)+'.png" '
             +'onerror="this.remove()">'
@@ -14777,6 +14794,16 @@ SETUP_JS = """
             +'</details>';
         } else if(c.png){
           h+='<img class=cred-qr alt="QR for '+esc(c.user)+'" src="data:image/png;base64,'+c.png+'">';
+        }
+        // The credential is only an instruction when the device will actually ask for
+        // it. With a certificate package it is the server account behind the identity,
+        // worth recording and not worth typing.
+        if(c.password){
+          h+='<div class=cred-lines>'+(c.pkg_kind==='cert'
+            ? 'Server account <code>'+esc(c.user)+'</code>, password <code>'
+              +esc(c.password)+'</code> (kept for the record; the device does not ask)'
+            : 'Sign in on the device as <code>'+esc(c.user)+'</code> with <code>'
+              +esc(c.password)+'</code>')+'</div>';
         }
         h+='<div class=cred-lines><code>'+esc(c.itak||'')+'</code></div></div>';
         return h;

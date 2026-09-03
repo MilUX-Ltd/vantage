@@ -70,15 +70,63 @@ echo "PASS $pass"
 # verified" - correctly: the QR carries host, username and password and no certificate
 # authority at all. This is the missing half. Best-effort, exactly like the token store
 # above: the credential already exists and must still reach the operator if this fails.
+# The join package. Two shapes, and the difference is whether the operator has to
+# type anything.
+#
+#   Certificate package (preferred). We mint the device's client certificate here and
+#   ship it inside. The device arrives already holding an identity, so there is no
+#   enrolment step, no username and no password: one scan is the whole join. This is
+#   the shape common/build-enrollment-dp.py has produced for WinTAK since March 2024.
+#
+#   Enrolment package (fallback). Trust only. The device then logs in with the
+#   username and password so the server can issue it a certificate. TAK's auto-
+#   enrolment always asks for those, so this shape can never be one scan.
+#
+# We take the certificate route whenever the box can mint one, and fall back rather
+# than fail: a box that cannot issue a certificate still gets its operator joined.
 TS=/opt/tak/certs/files/truststore-root.p12
 CAPASS_FILE=/opt/tak/certs/.milux-capass
+CERTBUILDER=/usr/local/bin/build-enrollment-dp.py
 BUILDER=/usr/local/bin/build-enrolment-package.py
-if [[ -n "$host" && -s "$TS" && -r "$CAPASS_FILE" && -x "$BUILDER" ]]; then
+CERTS=/opt/tak/certs
+
+pkg=""
+if [[ -n "$host" && -s "$TS" && -r "$CAPASS_FILE" && -x "$CERTBUILDER" && -x "$CERTS/makeCert.sh" ]]; then
+    capass=$(head -1 "$CAPASS_FILE")
+    P12="$CERTS/files/$user.p12"
+    # Re-enrolling a device reuses the certificate it already has. makeCert.sh
+    # refuses to overwrite, and issuing a second certificate for one name leaves the
+    # first valid and unaccounted for.
+    if [[ ! -s "$P12" ]]; then
+        ( cd "$CERTS" && timeout 120 ./makeCert.sh client "$user" ) >/tmp/.enrol-cert.$$ 2>&1 \
+            || echo "PKGNOTE could not mint a client certificate for $user" >&2
+        rm -f "/tmp/.enrol-cert.$$"
+    fi
+    if [[ -s "$P12" ]]; then
+        tmpz=$(mktemp -u /tmp/.enrolpkg.$$.XXXXXX.zip)
+        if timeout 60 "$CERTBUILDER" --host "$host" --port 8089 \
+                --description "$host" --username "$user" \
+                --ca "$TS" --ca-password "$capass" \
+                --client-cert "$P12" --client-password "$capass" \
+                --name "$user" --out "$tmpz" >/dev/null 2>&1 && [[ -s "$tmpz" ]]; then
+            pkg=$(base64 -w0 "$tmpz" 2>/dev/null || base64 "$tmpz" | tr -d '\n')
+            echo "PKGKIND cert"
+        else
+            echo "PKGNOTE certificate package would not build" >&2
+        fi
+        rm -f "$tmpz"
+    fi
+fi
+
+if [[ -z "$pkg" && -n "$host" && -s "$TS" && -r "$CAPASS_FILE" && -x "$BUILDER" ]]; then
     capass=$(head -1 "$CAPASS_FILE")
     if pkg=$("$BUILDER" --host "$host" --user "$user" --pass "$pass" \
                 --truststore "$TS" --ca-pass "$capass" --name "$host" 2>/dev/null); then
-        echo "PKG $pkg"
+        echo "PKGKIND enrol"
     else
-        echo "PKGERR could not build the enrolment data package" >&2
+        pkg=""
+        echo "PKGERR could not build a join package" >&2
     fi
 fi
+
+[[ -n "$pkg" ]] && echo "PKG $pkg"

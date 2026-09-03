@@ -237,7 +237,7 @@ SCRIPT_LIST=$(for k in "${!ACTION_SCRIPTS[@]}"; do s="${ACTION_SCRIPTS[$k]}"; pr
 # step 2 on a box that was otherwise fine. An optional extra must never be able to stop
 # the thing it is optional to; the package is simply not built, and the QR still works on
 # a box with a public certificate. Live failure, 3 Sep 2026, of my own making.
-for _x in build-enrolment-package.py; do
+for _x in build-enrolment-package.py build-enrollment-dp.py; do
     [[ -f "/usr/local/bin/$_x" ]] && EXTRA_SCRIPTS+=("$_x")
 done
 # shellcheck disable=SC2086
