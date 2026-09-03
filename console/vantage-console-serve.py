@@ -36,7 +36,7 @@ VERSION = "2.44.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.38-beta"
+VANTAGE_RELEASE = "0.9.40-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -307,6 +307,28 @@ def load_instance():
         pass
     return inst
 ARTIFACTS = os.environ.get("VANTAGE_CONSOLE_ARTIFACTS", "/var/lib/vantage-console/artifacts")
+
+
+def artifacts_release():
+    """Which release the provisioner and checker on this box came from, or None.
+
+    A console updates itself and its artifacts separately, and for a long time the update
+    path wrote the console and left the artifacts alone. The console then reported a
+    current version while every build it ran used a months-old provisioner. Two releases
+    of provisioning fixes were published, merged, and silently not in use. Nothing said so
+    because nothing compared the two. This is that comparison."""
+    try:
+        with open(os.path.join(ARTIFACTS, ".release")) as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
+def artifacts_stale():
+    """(is_stale, what_the_artifacts_are) - unknown counts as stale, because an
+    unstamped set predates the stamp and is exactly the case this exists to catch."""
+    got = artifacts_release()
+    return (got != VANTAGE_RELEASE), got
 # 1.7.0 gated agent. OpenClaw reads the estate and PROPOSES an action here; it never executes.
 # A proposal is a normal catalogue action, target-bound and pre-filled, that a human still reads
 # and confirms. The console holds the keys and the audit; the agent holds neither. PROPOSALS is
@@ -1313,7 +1335,14 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         out["url"] = parsed.get("URL", "")
         out["itak"] = parsed.get("ITAK", "")
         out["png"] = parsed.get("PNG", "")
-        out["message"] = f"Enrolment credential ready for {out['name']}. Scan with ATAK, or use the iTAK line."
+        # The data package, present only when this box signs its own certificates and
+        # could build one. A device cannot verify a private CA it has never seen, so
+        # without this the QR fails with "the TAK server's identity could not be
+        # verified" and there is nothing on the page to fix it with.
+        out["pkg"] = parsed.get("PKG", "")
+        out["message"] = (f"Enrolment credential ready for {out['name']}. "
+                          + ("Import the data package on the device first, then scan the QR."
+                             if out["pkg"] else "Scan with ATAK, or use the iTAK line."))
     elif a["result"] == "capass":
         if "CAPASS" in parsed:
             out["message"] = ("Certificate password: " + parsed["CAPASS"] + "\n"
@@ -6462,6 +6491,12 @@ form.action{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;
 /* A gated action: password then button, on one line, wrapping to two on a narrow
    screen. The field is only as wide as it needs to be, so the button stays the thing
    your eye lands on. */
+/* Loud on purpose: a console running build scripts older than itself will produce
+   servers that do not match the release it claims to be. */
+.up-stale{margin:10px 0 0;padding:12px 14px;background:var(--flag-fill,#F3E5D6);
+  border:1px solid var(--flag,#8A4B22);border-left:4px solid var(--flag,#8A4B22);
+  border-radius:4px;font-size:13.5px;line-height:1.55}
+.up-stale b{color:var(--flag,#8A4B22)}
 .wz-plan-get{margin:8px 0 0;font-size:12.5px;color:var(--muted);max-width:70ch;line-height:1.5}
 .wz-plan-get a{color:var(--accent);font-weight:600}
 /* The mint gate is its own block under the credential rows, not a stray field in the
@@ -6661,6 +6696,9 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:var(--r-sm);
 .cred-view{margin-top:12px}
 .cred-enrol{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);padding:16px;
  display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.cred-pkg-why{margin:12px 0 8px;padding:10px 12px;background:var(--flag-fill,#F3E5D6);
+  border-left:3px solid var(--flag,#8A4B22);border-radius:4px;font-size:13px;line-height:1.5}
+.cred-pkg-why b{color:var(--flag,#8A4B22)}
 .cred-qr{width:220px;height:220px;image-rendering:pixelated;background:#fff;padding:8px;border-radius:var(--r-sm)}
 .cred-lines code{font-family:var(--font-mono);font-size:12px;color:var(--fg2);word-break:break-all}
 .cred-btns{display:flex;gap:10px}
@@ -7734,7 +7772,26 @@ root.querySelectorAll('form.action').forEach(function(f){
               si.style.marginLeft='8px';si.textContent='Save iTAK line';si.onclick=function(){
                 var a=document.createElement('a');a.href='data:text/plain;base64,'+btoa(j.itak);
                 a.download=(j.name||'device')+'-itak.txt';document.body.appendChild(a);a.click();a.remove();};
-              res.appendChild(si);}}
+              res.appendChild(si);}
+              // The data package. On a box using its own certificates this is not
+              // optional: the device has no way to verify the server without it, and
+              // the QR fails with "the TAK server's identity could not be verified".
+              // Lead with it, and say why, rather than leaving it as a download.
+              if(j.pkg){
+                var why=document.createElement('div'); why.className='cred-pkg-why';
+                why.innerHTML='<b>Import this on the device first.</b> This server uses '+
+                  'its own certificate authority, which the device has never seen, so it '+
+                  'cannot verify the server until it has this. Then scan the QR.';
+                res.appendChild(why);
+                var sp=document.createElement('button');sp.type='button';
+                sp.className='a-go primary';
+                sp.textContent='Download the data package (.zip)';
+                sp.onclick=function(){
+                  var a=document.createElement('a');
+                  a.href='data:application/zip;base64,'+j.pkg;
+                  a.download=(j.name||'device')+'-enrolment.zip';
+                  document.body.appendChild(a);a.click();a.remove();};
+                res.appendChild(sp);}}
           if(j.credentials){var ul=document.createElement('div');ul.className='credrows';
             j.credentials.forEach(function(c){var d=document.createElement('div');
               d.textContent=(c.ctype==='cert'?'certificate  ':'enrolment    ')+c.name
@@ -11740,6 +11797,17 @@ def render_operations(state):
         "The check calls github.com only when you press it; nothing is downloaded and no "
         "credentials leave this box. An offline box will say it could not reach GitHub, "
         "which is not a fault.</p>"
+        # Say it here, where the operator looks at versions, and say it in the strongest
+        # terms available: a stale provisioner means every build this console runs uses
+        # code that is not the code in this release.
+        + ((lambda st, got: "" if not st else
+            "<div class=up-stale><b>This console's build scripts are older than the "
+            "console.</b> The console is " + e(VANTAGE_RELEASE) + " and its provisioner "
+            "came from " + (("release " + e(got)) if got else "an unknown, earlier release") +
+            ". Every server this console builds would use that older provisioner, not this "
+            "release. Updating will not fix it if the update path itself is what is stale: "
+            "re-run <code>install-vantage.sh</code> from the current release on this box "
+            "once, and this message goes away.</div>")(*artifacts_stale()))
         # The check is a READ: /api/updates/check is a GET and is not gated, and the
         # handler below sends no passphrase.
         + "<div class=a-act><button id=upchk class=a-go type=button>Check GitHub for "

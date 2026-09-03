@@ -231,6 +231,9 @@ echo "[2/6] users and action scripts"
 # The heredoc into `bash -s` is the channel that demonstrably carries on this estate, so
 # the payload rides in it, and the box is asked afterwards what it actually has.
 SCRIPT_LIST=$(for k in "${!ACTION_SCRIPTS[@]}"; do s="${ACTION_SCRIPTS[$k]}"; printf '%s ' "$s"; [[ -z "${NO_PRIV[$s]:-}" ]] && printf '%s-priv ' "$s"; done)
+# tak-enrol-device-priv shells out to this to build the enrolment data package, so it
+# has to travel with the action scripts or the package is silently never built.
+EXTRA_SCRIPTS+=(build-enrolment-package.py)
 # shellcheck disable=SC2086
 SCRIPTS_B64=$(tar -C /usr/local/bin -cf - $SCRIPT_LIST "${EXTRA_SCRIPTS[@]}" | base64 | tr -d '\n')
 $SSH "$RSUDO bash -s" <<EOF || die "could not unpack the action scripts on the box"

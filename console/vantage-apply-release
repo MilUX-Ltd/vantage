@@ -122,6 +122,8 @@ for _a in vantage-tak-provision.sh vantage-infratak-provision.sh; do
     [[ -f "$ROOT/console/provision/$_a" ]] \
         && install -m 0755 "$ROOT/console/provision/$_a" "$ARTIFACTS/$_a"
 done
+# and stamp what they came from, so the console can tell when they are stale
+grep -m1 '^VANTAGE_RELEASE = ' "$NEW_SERVE" | cut -d\" -f2 > "$ARTIFACTS/.release" 2>/dev/null || true
 # the box's own checker, so its next poll reports against the new one
 install -m 0755 "$NEW_CHECK" "$BIN/tak-health" 2>/dev/null || true
 # action scripts: the console's own copies, used when it acts on this box and when it
@@ -150,6 +152,9 @@ fi
 # this line exists to avoid.
 [[ -f "$ROOT/console/vantage-apply-release" ]] && \
     install -m 0755 "$ROOT/console/vantage-apply-release" "$BIN/vantage-apply-release"
+# and the enrolment package builder, for the same reason as the provisioners above
+[[ -f "$ROOT/common/build-enrolment-package.py" ]] && \
+    install -m 0755 "$ROOT/common/build-enrolment-package.py" "$BIN/build-enrolment-package.py"
 
 # ---- 4. restart and wait for it to actually answer ---------------------------------------
 say "restarting $UNIT"

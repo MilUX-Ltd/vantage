@@ -42,7 +42,7 @@ host=""
 [[ -n "$host" ]] || host=$(hostname -f 2>/dev/null || hostname)
 
 # The privileged half creates the credential and prints USER/PASS lines.
-out=$(sudo -n /usr/local/bin/tak-enrol-device-priv "$user" "$group" "${pwb64:-}") || exit 2
+out=$(sudo -n /usr/local/bin/tak-enrol-device-priv "$user" "$group" "${pwb64:-}" "$host") || exit 2
 pass=$(awk '$1=="PASS"{print $2}' <<<"$out")
 [[ -n "$pass" ]] || deny "credential step returned no password"
 
@@ -54,3 +54,7 @@ echo "PASS $pass"
 echo "URL $url"
 echo "ITAK ${host},${user},${pass}"
 echo "PNG $png"
+# The data package, when the privileged half could build one. A box using a public
+# certificate does not need it; a box using its own cannot enrol a device without it.
+pkg=$(awk '$1=="PKG"{print $2}' <<<"$out")
+[[ -n "$pkg" ]] && echo "PKG $pkg"
