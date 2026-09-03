@@ -42,6 +42,11 @@ FQDN="" LE_EMAIL="" ORG="MilUX" ORG_UNIT="TAK" COUNTRY="GB" STATE="England" CITY
 DEB="" COMPONENTS="" ONLY_STAGE="" DRY=0 CA_PASS_CHOICE=""
 OFFLINE_REPO=""      # --offline-repo: build from a carried-in package bundle
 NO_LE=0              # --no-letsencrypt: skip the public-certificate stage
+# --dns-credentials: prove the name by writing a DNS record instead of by answering an
+# inbound connection. This is what lets a box on a private address hold a publicly
+# trusted certificate, which is how our own estate runs: private boxes, real
+# certificates. Without it a box behind a router has only its own authority.
+DNS_CREDS=""
 # needrestart list-mode: apt inside a provision must never auto-restart services. On a
 # single-box install the console IS on this box, and needrestart restarting it kills the
 # job that is driving the provision (bitten live, 27 Aug). Deferred restarts land at the
@@ -66,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --offline-repo) OFFLINE_REPO="${2:-}"; shift 2 ;;
         # skip the browser-trusted 8446 connector: no public DNS, or you do not want it
         --no-letsencrypt) NO_LE=1; shift ;;
+        --dns-credentials) DNS_CREDS="${2:-}"; shift 2 ;;
         --components) COMPONENTS="${2:-}"; shift 2 ;;
         --stage) ONLY_STAGE="${2:-}"; shift 2 ;;
         --ca-pass) CA_PASS_CHOICE="${2:-}"; shift 2 ;;
@@ -428,9 +434,24 @@ stage_letsencrypt() {
         echo "STAGE-OK letsencrypt (own certificate)"
         return 0
     fi
-    run "apt-get install -y -qq certbot"
+    if [[ -n "$DNS_CREDS" ]]; then
+        # DNS-01. The authority reads a TXT record from the zone's public nameservers,
+        # so nothing has to reach this box: no inbound port, no public address. The
+        # box's name still enters public certificate transparency logs, which is the
+        # part to be deliberate about rather than the reachability.
+        run "apt-get install -y -qq certbot python3-certbot-dns-cloudflare"
+    else
+        run "apt-get install -y -qq certbot"
+    fi
     if [[ ! -d /etc/letsencrypt/live/$FQDN ]]; then
-        run "certbot certonly -d $FQDN -m $LE_EMAIL --standalone --agree-tos --no-eff-email --non-interactive"
+        if [[ -n "$DNS_CREDS" ]]; then
+            run "certbot certonly -d $FQDN -m $LE_EMAIL --dns-cloudflare \
+                 --dns-cloudflare-credentials $DNS_CREDS \
+                 --dns-cloudflare-propagation-seconds 30 \
+                 --agree-tos --no-eff-email --non-interactive --keep-until-expiring"
+        else
+            run "certbot certonly -d $FQDN -m $LE_EMAIL --standalone --agree-tos --no-eff-email --non-interactive"
+        fi
     fi
     # certbot is allowed to fail: a box with no public A record cannot be validated, which
     # is CORRECT on a private build. What is not allowed is carrying on as though it
@@ -441,8 +462,18 @@ stage_letsencrypt() {
     # reported success. Seen live on edge-laptop1, 2 Sep 2026.
     if (( ! DRY )) && [[ ! -s /etc/letsencrypt/live/$FQDN/privkey.pem ]]; then
         log "no public certificate was issued for $FQDN"
-        log "  certbot could not prove control of the name from the internet. On a private"
-        log "  box that is expected: there is no public A record, by choice."
+        # The two routes fail for completely different reasons, and telling an operator
+        # to check a public A record when they asked for the DNS route sends them to the
+        # wrong place entirely.
+        if [[ -n "$DNS_CREDS" ]]; then
+            log "  certbot could not prove control of the name through DNS. Check the token"
+            log "  can edit records in the zone this name sits in, and that the zone is the"
+            log "  one your nameservers actually serve."
+        else
+            log "  certbot could not prove control of the name from the internet. On a private"
+            log "  box that is expected: there is no public A record, by choice. If you want a"
+            log "  real certificate here, build with the DNS route instead."
+        fi
         log "  falling back to this box's own certificate on 8446, so the API still starts"
         local own="$CERTS/files/${FQDN}.jks"
         if [[ -f "$own" ]]; then

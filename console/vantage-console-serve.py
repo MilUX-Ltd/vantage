@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.48.0"
+VERSION = "2.49.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.49-beta"
+VANTAGE_RELEASE = "0.9.50-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -508,10 +508,18 @@ ACTIONS = {
              "pattern": r"^$|^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$",
              "help": "expiry notices go here; not needed on a private build"},
             {"name": "public_cert", "label": "Publicly trusted certificate",
-             "pattern": r"^(yes|no)?$", "optional": True, "choices": ["yes", "no"],
-             "help": "no keeps the box off public certificate transparency logs, and "
-                     "devices then need this estate's authority once before they can "
-                     "join by QR"},
+             "pattern": r"^(none|http|dns)?$", "optional": True,
+             "choices": [("none", "No - this estate's own authority"),
+                         ("http", "Yes - the box is reachable from the internet"),
+                         ("dns", "Yes - prove the name by DNS (works on a private box)")],
+             "help": "Both yes answers publish this box's name permanently in public "
+                     "certificate transparency logs, and both let a device join from "
+                     "the plain QR. DNS is the one that works behind a router"},
+            {"name": "dns_token_b64", "label": "DNS API token",
+             "pattern": r"^[A-Za-z0-9+/=]{0,512}$", "optional": True,
+             "secret": True, "encode": "b64", "input_type": "password",
+             "help": "only for the DNS route: a Cloudflare token with permission to edit "
+                     "records in the zone this name sits in. The box keeps it for renewal"},
             {"name": "org", "label": "Organisation", "pattern": r"^[A-Za-z0-9._ -]{1,40}$",
              "help": "PKI organisation, e.g. MilUX"},
             {"name": "org_unit", "label": "Org unit", "pattern": r"^[A-Za-z0-9._ -]{1,40}$",
@@ -14735,18 +14743,30 @@ SETUP_JS = """
   function pubcertNote(){
     var sel=$('#wz-pubcert'), note=$('#wz-pubcert-note'), ew=$('#wz-emailwrap');
     if(!sel||!note) return;
-    if(sel.value==='no'){
+    var dw=$('#wz-dnswrap');
+    // Private and publicly-certified are not opposites. A box on a private address can
+    // hold a real certificate by proving its name through DNS, which is how this estate
+    // runs its own boxes. A two-answer question could not say that, so it did not.
+    if(sel.value==='none'){
       note.innerHTML='<b>Devices need the estate authority once.</b> Nothing about '+
         'this box is published, and no certificate authority is asked for anything. In '+
         'exchange, each handset imports the estate authority once - Actions > Provision '+
         'a device to this estate - and after that joining any box in the estate is a '+
         'plain QR with nothing typed.';
-      if(ew) ew.hidden=true;
+      if(ew) ew.hidden=true; if(dw) dw.hidden=true;
+    }else if(sel.value==='dns'){
+      note.innerHTML='<b>Devices join from the QR alone, and the box stays private.</b> '+
+        'The name is proved by writing a record in your DNS zone, so nothing has to reach '+
+        'this box: no inbound port, no public address. Its name is still published '+
+        'permanently in public certificate transparency logs, which is the part to be '+
+        'deliberate about.';
+      if(ew) ew.hidden=false; if(dw) dw.hidden=false;
     }else{
       note.innerHTML='<b>Devices join from the QR alone.</b> The box must already be '+
-        'reachable from the internet on port 80 for the name you gave. Its name is then '+
-        'published permanently in public certificate transparency logs.';
-      if(ew) ew.hidden=false;
+        'reachable from the internet on port 80 for the name you gave, so this is for a '+
+        'hosted server rather than kit behind a router. Its name is published permanently '+
+        'in public certificate transparency logs.';
+      if(ew) ew.hidden=false; if(dw) dw.hidden=true;
     }
   }
   if($('#wz-pubcert')) $('#wz-pubcert').onchange=pubcertNote;
@@ -14757,7 +14777,9 @@ SETUP_JS = """
     // A private build asks Let's Encrypt for nothing, so it has no expiry notice to
     // receive. Requiring an address for one blocked step 5 on a field with no purpose.
     var pubcert=($('#wz-pubcert')?$('#wz-pubcert').value:'yes');
-    var need = pubcert==='no' ? ['wz-fqdn'] : ['wz-fqdn','wz-email'], ok=true;
+    var need = pubcert==='none' ? ['wz-fqdn'] : ['wz-fqdn','wz-email'];
+    if(pubcert==='dns') need.push('wz-dnstoken');
+    var ok=true;
     need.forEach(function(id){if(!$('#'+id).value.trim())ok=false;});
     if(ok&&(S.pkg||S.debOnBox)) unlock(5);
   });
@@ -14809,7 +14831,8 @@ SETUP_JS = """
       deb_file:S.pkg?S.pkg.file:'', deb_sha256:S.pkg?S.pkg.sha:'',
       provision:{fqdn:$('#wz-fqdn').value.trim(),ca_pass:($('#wz-capass')?$('#wz-capass').value:''),
         le_email:$('#wz-email').value.trim(),
-        public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'yes'),
+        public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'none'),
+        dns_token_b64:($('#wz-dnstoken')&&$('#wz-dnstoken').value?btoa($('#wz-dnstoken').value):''),
         org:$('#wz-org').value.trim(),org_unit:$('#wz-orgunit').value.trim(),
         country:$('#wz-country').value.trim(),state:$('#wz-state').value.trim(),
         city:$('#wz-city').value.trim(),deb:$('#wz-deb').value.trim(),
@@ -14956,7 +14979,8 @@ SETUP_JS = """
       profile:$('#wz-profile').value,
       deb_file:S.pkg?S.pkg.file:'',deb_sha256:S.pkg?S.pkg.sha:'',
       fqdn:$('#wz-fqdn').value.trim(),le_email:$('#wz-email').value.trim(),
-      public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'yes'),
+      public_cert:($('#wz-pubcert')?$('#wz-pubcert').value:'none'),
+      dns_token_b64:($('#wz-dnstoken')&&$('#wz-dnstoken').value?btoa($('#wz-dnstoken').value):''),
       org:$('#wz-org').value.trim(),org_unit:$('#wz-orgunit').value.trim(),
       country:$('#wz-country').value.trim(),state:$('#wz-state').value.trim(),
       city:$('#wz-city').value.trim(),components:$('#wz-components').value.trim(),
@@ -14978,7 +15002,7 @@ SETUP_JS = """
     $('#wz-addr').value=d.address||'';$('#wz-user').value=d.user||'root';
     $('#wz-profile').value=d.profile||'cloud';
     $('#wz-fqdn').value=d.fqdn||'';$('#wz-email').value=d.le_email||'';
-    if($('#wz-pubcert'))$('#wz-pubcert').value=d.public_cert||'yes';
+    if($('#wz-pubcert'))$('#wz-pubcert').value=d.public_cert||'none';
     $('#wz-org').value=d.org||'MilUX';$('#wz-orgunit').value=d.org_unit||'TAK';
     $('#wz-country').value=d.country||'GB';$('#wz-state').value=d.state||'England';
     $('#wz-city').value=d.city||'';$('#wz-components').value=d.components||'';
@@ -15123,6 +15147,7 @@ DEPLOY_JS = """
     var inputs={},miss=null;
     f.querySelectorAll('[data-k]').forEach(function(el){
       var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value.trim();
+      if(el.dataset.encode==='b64'&&v) v=btoa(unescape(encodeURIComponent(v)));
       inputs[el.dataset.k]=v;
       if(el.required&&!v)miss=el.dataset.k;
     });
@@ -16703,10 +16728,18 @@ def render_deploy(state):
                "<span class=hint>must already resolve to the box for Let's Encrypt</span></label>"
                "<label class=fl>Publicly trusted certificate"
                "<select id=wz-pubcert>"
-               "<option value=yes>Yes - this box is reachable from the internet</option>"
-               "<option value=no>No - keep it private</option>"
+               "<option value=none>No - this estate's own authority</option>"
+               "<option value=http>Yes - the box is reachable from the internet</option>"
+               "<option value=dns>Yes - prove the name by DNS (works on a private box)"
+               "</option>"
                "</select></label>"
                "<div class=fedpop-note id=wz-pubcert-note></div>"
+               "<label class=fl id=wz-dnswrap hidden>DNS API token"
+               "<input id=wz-dnstoken type=password autocomplete=off "
+               "placeholder='Cloudflare token with Zone:DNS:Edit'>"
+               "<span class=hint>Cloudflare &gt; My Profile &gt; API Tokens &gt; Create. "
+               "It is written to the box privately and kept there for renewal, so the "
+               "box holds a credential for that zone from then on.</span></label>"
                "<label class=fl id=wz-emailwrap>Let's Encrypt email<input id=wz-email placeholder='ops@example.org'>"
                "<span class=hint>expiry notices go here</span></label>"
                f"<label class=fl>Organisation<input id=wz-org value='{e(_di['org'])}' placeholder='e.g. Acme Defence' required></label>"
@@ -16884,8 +16917,16 @@ def render_deploy(state):
                        f"<select data-k='{e(f['name'])}'{req}>{opts}</select>"
                        f"<span class=hint>{e(f['help'])}</span></label>")
         else:
-            doc.append(f"<label class=fl>{e(f['label'])}<input data-k='{e(f['name'])}' "
-                       f"value='{e(d)}'{req}><span class=hint>{e(f['help'])}</span></label>")
+            # A field declared secret has to render as one, and a field declared b64 has
+            # to be encoded before it is sent. This form honoured neither, so an API
+            # token would have been typed in clear view and then rejected by the box for
+            # not being base64 - a secret shown to the room and useless as well.
+            itype = f" type={e(f['input_type'])}" if f.get("input_type") else ""
+            ienc = f" data-encode={e(f['encode'])}" if f.get("encode") else ""
+            iauto = " autocomplete=off" if f.get("secret") else ""
+            doc.append(f"<label class=fl>{e(f['label'])}<input data-k='{e(f['name'])}'"
+                       f"{itype}{ienc}{iauto} value='{e(d)}'{req}>"
+                       f"<span class=hint>{e(f['help'])}</span></label>")
     doc.append("<label class=depdry><input type=checkbox data-k=dry_run checked> "
                "<b>Dry run</b> - print every step, change nothing. Untick only when the dry "
                "run read correctly.</label>")

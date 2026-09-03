@@ -10,8 +10,8 @@ audit_note_2026-09-03: |
   credential paths beyond describing where the action writes its token. Hash
   updated by the maintainer; a full re-audit with skill-safety-audit is still
   owed and is not blocked by anything here.
-audit_sha: 728284bebb1e7d5e
-audit_sha_source: fa5017602455f47d
+audit_sha: 731e5761ecb91943
+audit_sha_source: 8c3c9d163d85a643
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -58,6 +58,20 @@ opens the authority, which is the same password that opens this box's client cer
 it over as deliberately as a key.
 
 ### Getting a publicly trusted certificate onto a private box
+
+Private and publicly-certified are not opposites, and treating them as one question was
+wrong. A box on a private address can hold a genuine certificate; this estate runs its own
+boxes exactly that way. What decides it is how the name is proved, not where the box sits:
+
+| Route | How the name is proved | Works behind a router? | Published |
+|---|---|---|---|
+| Own authority | nothing is proved to anyone | yes | nothing |
+| Public, inbound | the authority connects to port 80 on the box | **no** | the name, in certificate transparency logs, permanently |
+| Public, DNS | a TXT record in the zone | yes | the same |
+
+A build now asks which of the three, and the DNS route asks for a zone API token with it.
+`public-cert` below does the same thing on a box that is already built.
+
 
 **`public-cert`** &rarr; `console/actions/tak-public-cert`
 
