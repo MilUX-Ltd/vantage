@@ -359,6 +359,18 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
     <input type="text" id="public" placeholder="leave blank until the box has joined">
   </div>
 
+  <h3>Getting in the first time</h3>
+  <div class="field">
+    <label>How you reach the box before Vantage exists</label>
+    <span class="hint">The whole build hangs off this, and it is different for a machine
+      you installed yourself and one a provider handed you. It changes the commands
+      below, not just the wording.</span>
+    <div class="choice">
+      <label><input type="radio" name="login" value="password" checked> A user and password I set during install</label>
+      <label><input type="radio" name="login" value="key"> An SSH key that is already on it</label>
+    </div>
+  </div>
+
   <h3 id="vpnhead">Private network</h3>
   <div class="field">
     <label>Provider</label>
@@ -402,7 +414,7 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 
   var KEY = "vantage-build-planner";
   var ids = ["human", "fqdn", "host", "user", "router", "box", "mac", "certhost", "public"];
-  var radios = ["shape", "kiosk", "vpn", "cert", "journey"];
+  var radios = ["shape", "kiosk", "vpn", "cert", "journey", "login"];
 
   function $(id) { return document.getElementById(id); }
   function radio(name) {
@@ -445,8 +457,11 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
 
   // ---- state ------------------------------------------------------------
   function read() {
+    // Every radio the page asks about has to appear HERE too. The listener list above
+    // only decides what triggers a re-render; this is what the render can actually see,
+    // and a field in one and not the other is a question the page asks and then ignores.
     var s = { shape: radio("shape"), kiosk: radio("kiosk"), vpn: radio("vpn"),
-              cert: radio("cert"), journey: radio("journey") };
+              cert: radio("cert"), journey: radio("journey"), login: radio("login") };
     ids.forEach(function (i) { s[i] = ($(i).value || "").trim(); });
     return s;
   }
@@ -826,9 +841,20 @@ footer{margin-top:56px;padding-top:16px;border-top:2px solid var(--accent);font-
           "<b>The console can reach the box.</b> Same network, or both on the same VPN. A kit LAN behind its own router is reachable from nowhere else",
           "<b>The admin user can elevate.</b> Enrolment needs <b>root, or passwordless sudo</b>. An ordinary sudo account that prompts for a password is refused with <i>neither root nor passwordless-sudo</i>"
         ]) +
-        cmd('echo "' + user + ' ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-build-' + user + " >/dev/null \\\n" +
-            "  && sudo chmod 0440 /etc/sudoers.d/90-build-" + user + " \\\n" +
-            "  && sudo visudo -c -f /etc/sudoers.d/90-build-" + user, BOX) +
+        (s.login === "key"
+          ? "<p>You said the box already has an SSH key on it. If that key reaches " +
+            "<b>root</b>, both boxes above are already true and there is nothing to run " +
+            "here: skip to Deploy, and on the bootstrap step choose <b>Paste a private " +
+            "key</b> or <b>Upload a private key</b> rather than generating one. The " +
+            "console adopts it into a root-only store and shreds the copy you sent.</p>" +
+            "<p>If the key reaches an ordinary user instead, that user still needs to " +
+            "elevate without being asked:</p>" +
+            cmd('echo "' + user + ' ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-build-' + user + " >/dev/null \\\n" +
+                "  && sudo chmod 0440 /etc/sudoers.d/90-build-" + user + " \\\n" +
+                "  && sudo visudo -c -f /etc/sudoers.d/90-build-" + user, BOX)
+          : cmd('echo "' + user + ' ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-build-' + user + " >/dev/null \\\n" +
+                "  && sudo chmod 0440 /etc/sudoers.d/90-build-" + user + " \\\n" +
+                "  && sudo visudo -c -f /etc/sudoers.d/90-build-" + user, BOX)) +
         '<div class="trap"><p><b>That comes off before the box ships.</b> <code>sudo rm /etc/sudoers.d/90-build-' + esc(user) + "</code>, then <code>sudo -n true</code> must <b>fail</b>. A build-time convenience that ships is a build-time convenience you have deployed.</p></div>" +
         "<p>Then, on your estate console, open <b>Deploy</b> and stay on <b>Build a new server</b>:</p>" +
         check([

@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.52.0"
+VERSION = "2.54.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.54-beta"
+VANTAGE_RELEASE = "0.9.55-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -116,11 +116,7 @@ _SESSIONS = {}          # token -> expiry epoch
 _LOGIN_FAIL = {}        # ip -> [epoch, ...] sliding window
 _AUTH_LOCK = threading.Lock()
 
-AUTH_OPEN_PREFIXES = ("/store/file/", "/eud", "/fonts/",
-                      # the enrolment package a phone pulls for itself. The phone
-                      # has no session and cannot get one; the unguessable one-shot
-                      # token in the path is the credential, and it expires.
-                      "/enrol/")
+AUTH_OPEN_PREFIXES = ("/store/file/", "/eud", "/fonts/")
 AUTH_OPEN_PATHS = ("/login", "/healthz", "/api/health.json", "/favicon.svg",
                    "/favicon.ico", "/api/propose", "/mcp",
                    # the kiosk exit: loopback-gated in the handler, so the box's own
@@ -196,54 +192,6 @@ def login_throttled(ip):
 def login_failed(ip):
     with _AUTH_LOCK:
         _LOGIN_FAIL.setdefault(ip, []).append(_time.time())
-
-
-# ---------------------------------------------------------------------------------
-# Enrolment packages waiting to be collected by a device.
-#
-# A phone cannot sign in to the console, so the package it needs has to be reachable
-# without a session. It holds the device password and the truststore password, so it is
-# held in memory only, never written to disk, addressed by 128 bits of urandom, expires
-# on its own, and can be collected only a few times. ATAK fetches it over plain HTTP,
-# which it permits (usesCleartextTraffic=true in the shipping APK, no network security
-# config), and which it has to here: the box's own TLS is signed by the very CA the
-# device has not got yet.
-ENROL_PKG_TTL = 3600         # seconds. A build runs ~25 minutes and mints its credential
-                             # near the end, so the operator meets this code already tired
-                             # and may not have the phone in hand. An hour covers that; it
-                             # is still a window, not a standing URL.
-ENROL_PKG_MAX_FETCH = 3      # a retried download is normal, a harvested one is not
-_ENROL_LOCK = threading.Lock()
-_ENROL_PKGS = {}
-
-
-def stash_enrol_package(blob, name):
-    """Hold a built package for collection and return the token that addresses it."""
-    tok = secrets.token_hex(16)
-    now = _time.time()
-    with _ENROL_LOCK:
-        for k in [k for k, v in _ENROL_PKGS.items() if v["expires"] <= now]:
-            _ENROL_PKGS.pop(k, None)
-        _ENROL_PKGS[tok] = {"blob": blob, "name": name,
-                            "expires": now + ENROL_PKG_TTL, "fetches": 0}
-    return tok
-
-
-def take_enrol_package(tok, consume=True):
-    """The package for this token, or None if it never existed, expired or is used up."""
-    now = _time.time()
-    with _ENROL_LOCK:
-        rec = _ENROL_PKGS.get(tok)
-        if not rec:
-            return None
-        if rec["expires"] <= now:
-            _ENROL_PKGS.pop(tok, None)
-            return None
-        if consume:
-            rec["fetches"] += 1
-            if rec["fetches"] >= ENROL_PKG_MAX_FETCH:
-                _ENROL_PKGS.pop(tok, None)
-        return rec
 
 
 def auth_required(path):
@@ -1463,15 +1411,6 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         # cert = the device's own certificate is inside and nothing is typed.
         # enrol = trust only, and TAK's auto-enrolment will ask for a login.
         out["pkg_kind"] = parsed.get("PKGKIND", "enrol" if parsed.get("PKG") else "")
-        # Held for collection so the device can fetch it itself. Downloading the zip to
-        # the operator's laptop and then getting it onto a phone by hand was the step
-        # that made this "works, once you have a cable"; the token turns it into a scan.
-        if out["pkg"]:
-            try:
-                out["pkg_token"] = stash_enrol_package(
-                    base64.b64decode(out["pkg"]), f"{out['name'] or 'device'}-enrolment.zip")
-            except Exception:
-                out["pkg_token"] = ""
         if out["pkg_kind"] == "cert":
             tail = ("Scan the import code with ATAK. It carries the authority, the server "
                     "and this device's own certificate, so nothing is typed.")
@@ -4677,8 +4616,7 @@ def start_setup_job(data, client, authed=False):
                                          "url": res.get("url", ""), "itak": res.get("itak", ""),
                                          "png": res.get("png", ""),
                                          "pkg": res.get("pkg", ""),
-                                         "pkg_kind": res.get("pkg_kind", ""),
-                                         "pkg_token": res.get("pkg_token", "")})
+                                         "pkg_kind": res.get("pkg_kind", "")})
                     else:
                         say(log, f"credential FAILED: {c['user']}: {res.get('error') or res.get('message')}")
                 if with_console:
@@ -6464,9 +6402,13 @@ a.sw-up:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 @media(max-width:560px){.swrow{grid-template-columns:1fr auto;grid-auto-flow:dense}
  .swrow .sw-s{grid-column:1}.swrow .sw-a{grid-column:2}}
 /* portal nav (1.2.0) - lives inside the sticky header, below the brand row */
-.topnav{position:relative;display:flex;gap:2px;max-width:1180px;margin:0 auto;padding:0 22px;
- overflow-x:auto;scrollbar-width:none}
-.topnav::-webkit-scrollbar{display:none}
+/* WRAP, do not scroll. This was a horizontal scroller with its scrollbar hidden, so a
+   section past the right edge was invisible AND gave no hint it existed - on a kiosk
+   screen the Sync tab simply was not there as far as the operator could tell, and it
+   was reported as missing more than once. A nav that hides its own overflow is a nav
+   with sections nobody can find. */
+.topnav{position:relative;display:flex;flex-wrap:wrap;gap:2px 0;max-width:1180px;
+ margin:0 auto;padding:0 22px}
 .topnav a{font:600 11.5px var(--font-display);letter-spacing:.08em;text-transform:uppercase;
  color:var(--hdr-mute);padding:9px 12px 10px;text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
 .topnav a:hover{color:var(--hdr-fg)}
@@ -6931,6 +6873,14 @@ a.cred-refresh{display:inline-block;text-decoration:none}
 /* The components block spans the whole card. Left in one 240px form column it could only
    ever be a single tall list, whatever its own grid said. */
 .depcard .wz-comps-wrap{grid-column:1/-1}
+/* In a wizard step, SPANNING IS THE DEFAULT and the form fields opt out. The card is an
+   auto-fit grid of 240px columns, so any block added without being told to span quietly
+   takes a column of its own: the "+ Add a user" button landed in the column beside the
+   user rows and sat on top of them. Naming each new child in a span list is what let
+   that through - twice - so the rule is inverted here. A label is a form field and wants
+   its column; everything else is a block and wants the width. */
+#wizard .wz-step>*{grid-column:1/-1}
+#wizard .wz-step>label{grid-column:auto}
 .depdry{font-size:13.5px;color:var(--fg2);display:flex;gap:8px;align-items:center}
 .depstatus{margin:12px 0 0;font-family:var(--font-mono);font-size:13px;min-height:20px}
 .depstatus.run{color:var(--fg2)}
@@ -7991,49 +7941,42 @@ root.querySelectorAll('form.action').forEach(function(f){
           if(j.p12&&j.name){var a=document.createElement('a');a.href='data:application/x-pkcs12;base64,'+j.p12;
             a.download=j.name+'.p12';a.textContent='Download '+j.name+'.p12';a.className='dl';
             res.appendChild(document.createElement('br'));res.appendChild(a);}
-          // ONE artefact per device. Deciding this once, here, is the whole point:
-          // a box with its own authority needs the package and the plain code is
-          // meaningless on it; a box with a trusted certificate needs only the plain
-          // code. Showing both is how an operator scans both and learns by luck.
-          if(j.png||j.pkg_token){
-            var oneScan = j.pkg_token && j.pkg_kind==='cert';
+          // The file, and nothing else - same reason as the build screen. A code
+          // pointing at this console was tried and never worked on a handset; the file
+          // works every time. See the lessons log 39.
+          if(j.pkg || j.png){
+            var oneScan = j.pkg && j.pkg_kind==='cert';
             var why=document.createElement('div'); why.className='cred-pkg-why';
-            why.innerHTML = oneScan
-              ? '<b>Scan this once, with the camera in ATAK.</b> It brings down the '+
-                'authority that lets the device trust this server, the server itself, '+
-                'and the certificate that identifies this device. Nothing to type.'
-              : (j.pkg_token
-                 ? '<b>Two steps, in this order.</b> <b>1.</b> Scan the code - it gives '+
-                   'the device the authority it needs to trust this server. <b>2.</b> '+
-                   'The device then asks you to sign in, with the account below.'
-                 : '<b>Scan this once, with the camera in ATAK.</b> This server has a '+
-                   'certificate the device already trusts, so the code is the whole join.');
+            why.innerHTML = j.pkg
+              ? (oneScan
+                 ? '<b>Download this and open it on the device. That is the whole join.</b> '+
+                   'It carries the authority that lets the device trust this server, the '+
+                   'server itself, and the certificate identifying this device.'
+                 : '<b>Download this and open it on the device.</b> It gives the device the '+
+                   'authority to trust this server; the device then asks you to sign in.')
+              : '<b>Scan this once, with the camera in ATAK.</b> This server has a '+
+                'certificate the device already trusts, so the code is the whole join.';
             res.appendChild(why);
 
-            var im=document.createElement('img');
-            im.alt='Join code for '+(j.name||'device');
-            if(j.pkg_token){ im.className='cred-qr import';
-              im.src='/enrol/'+j.pkg_token+'.png'; im.onerror=function(){im.remove();}; }
-            else { im.className='cred-qr'; im.src='data:image/png;base64,'+j.png; }
-            res.appendChild(im);
-
-            if(j.pkg_token){
-              var ex=document.createElement('div'); ex.className='cred-pkg-why';
-              ex.textContent='Good for an hour, and the device has to be on the same '
-                +'network as this console. If no code appeared, use the file below - it '
-                +'does the same job.';
-              res.appendChild(ex);
-              if(j.pkg){
-                var dl=document.createElement('a'); dl.className='cred-refresh';
-                dl.href='data:application/zip;base64,'+j.pkg;
-                dl.download=(j.name||'device')+(oneScan?'-join.zip':'-trust.zip');
-                dl.textContent='Download the same thing as a file';
-                res.appendChild(dl);
-              }
+            if(j.pkg){
+              var dl=document.createElement('a'); dl.className='a-go primary';
+              dl.href='data:application/zip;base64,'+j.pkg;
+              dl.download=(j.name||'device')+(oneScan?'-join.zip':'-trust.zip');
+              dl.textContent='Download the join package';
+              res.appendChild(dl);
+              var how=document.createElement('div'); how.className='cred-pkg-why';
+              how.textContent='Get it onto the handset however suits you - a cable, a '
+                +'memory stick, or your file store - and open it there.';
+              res.appendChild(how);
+            }else{
+              var im=document.createElement('img'); im.className='cred-qr';
+              im.alt='Join code for '+(j.name||'device');
+              im.src='data:image/png;base64,'+j.png;
+              res.appendChild(im);
             }
 
+            var willAsk = j.pkg && !oneScan;
             var cred=document.createElement('div'); cred.className='cred-lines';
-            var willAsk = j.pkg_token && j.pkg_kind!=='cert';
             cred.textContent = willAsk
               ? 'When it asks, sign in as '+(j.name||'')+' with '+(j.password||'?')
               : 'Server account '+(j.name||'')+', password '+(j.password||'?')
@@ -8044,10 +7987,15 @@ root.querySelectorAll('form.action').forEach(function(f){
               it.textContent='iTAK on iPhone has no camera import, so type this in by '
                 +'hand instead: '+j.itak;
               res.appendChild(it);}
+            if(j.url){
+              var d2=document.createElement('details'); d2.className='cred-lines';
+              var sm=document.createElement('summary'); sm.textContent='What is in the code';
+              var cd=document.createElement('code'); cd.className='wz-pub'; cd.textContent=j.url;
+              d2.appendChild(sm); d2.appendChild(cd); res.appendChild(d2);}
           }
           // The estate authority package: no code, no credential, one import per device
           // for life. The only result that is a package and nothing else.
-          if(j.pkg && !j.pkg_token && !j.png){
+          if(j.pkg && !j.png && !j.pkg_kind){
             var ew2=document.createElement('div'); ew2.className='cred-pkg-why';
             ew2.innerHTML='<b>Put this on each device once.</b> A memory stick or your '+
               'file store, then open it on the handset. After that the device trusts '+
@@ -8666,14 +8614,20 @@ def nav_html(state, active, inst=None):
     """Two fixed items, whatever the fleet size - a tab per server dies at server
     seven. The tile grid is the server index; server pages carry a jump select.
     The deployed edition (a single box's own console) carries only the surfaces that
-    make sense for one box: Overview, Operations, Store, Vault. No fleet federation,
-    no deploy-a-new-box, no estate agent."""
+    make sense for one box: Overview, Operations, Sync, Store, Vault. No fleet
+    federation, no deploy-a-new-box, no estate agent.
+
+    Sync belongs on a box, and its absence was reported as a missing tab more than once.
+    A box that syncs with an estate is exactly the thing that needs somewhere to show
+    whether it has: what it is paired with, and when anything last moved. The page
+    already rendered for a client console; only the way in was missing."""
     e = html.escape
     inst = inst or load_instance()
     agent_name = inst["agent_name"]
     if not console_is_admin(inst):
         items = [("/", "Overview", active == "estate", "Overview"),
                  ("/operations", "Operations", active == "operations", "Operations"),
+                 ("/sync", "Sync", active == "sync", "Sync"),
                  ("/store", "File store", active == "store", "File store"),
                  ("/vault", "Knowledge Vault", active == "vault", "Knowledge Vault")]
         links = "".join(
@@ -14795,8 +14749,21 @@ SETUP_JS = """
       if(ew) ew.hidden=false; if(dw) dw.hidden=true;
     }
   }
-  if($('#wz-pubcert')) $('#wz-pubcert').onchange=pubcertNote;
+  // A server reachable from the internet can get its own certificate, and should:
+  // that is the one-scan join with nothing to move. A kit behind a router cannot, so
+  // its own authority is the sensible start. The operator can still choose otherwise;
+  // this only decides what the question opens on.
+  function certDefaultForShape(){
+    var pr=$('#wz-profile'), sel=$('#wz-pubcert');
+    if(!pr||!sel||sel.dataset.touched==='1') return;
+    sel.value = (pr.value==='cloud') ? 'http' : 'none';
+    pubcertNote();
+  }
+  if($('#wz-profile')) $('#wz-profile').addEventListener('change',certDefaultForShape);
+  if($('#wz-pubcert')) $('#wz-pubcert').addEventListener('change',function(){
+    this.dataset.touched='1'; });
   pubcertNote();
+  certDefaultForShape();
 
   // step 3 unlocks step 4+5 when the required fields hold
   wiz.addEventListener('input',function(){
@@ -14893,15 +14860,15 @@ SETUP_JS = """
   };
   function showCreds(j){
     if(!j.creds||!j.creds.length) return;
-    // The FILE leads. It works from anywhere: download it, open it on the device, done.
-    // The code is a shortcut that only works when the device can reach THIS console at
-    // the address you happen to have open, which is a condition the operator cannot see
-    // and we cannot check from here. Leading with the code made the reliable route look
-    // like the fallback, and an operator scanning from the box own kiosk screen got a
-    // code pointing at 127.0.0.1 and no explanation at all.
+    // The file, and nothing else. A code that told the device to fetch the same file
+    // from this console was tried for a week and never once worked on the handset in
+    // front of us, while the file worked every time. ATAK registers the tak: scheme and
+    // takes the enrolment URI happily; its import URI does nothing we can see or reach.
+    // A route that fails silently is worse than no route: the operator scans, nothing
+    // happens, and there is nowhere to look.
     var out=j.creds.map(function(c){
       var h='<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>';
-      var oneScan = c.pkg_token && c.pkg_kind==='cert';
+      var oneScan = c.pkg && c.pkg_kind==='cert';
 
       if(c.pkg){
         h+='<div class=cred-pkg-why>'+(oneScan
@@ -14913,24 +14880,10 @@ SETUP_JS = """
             +'in, with the account below.')+'</div>'
           +'<div class=cred-lines><a class="a-go primary" download="'+esc(c.user)
           +(oneScan?'-join.zip':'-trust.zip')+'" href="data:application/zip;base64,'
-          +c.pkg+'">Download the join package</a></div>';
-        if(c.pkg_token){
-          h+='<details class=cred-lines><summary>Or scan it, if the device is on this '
-            +'network</summary><div class=cred-pkg-why>The code tells the device to fetch '
-            +'the same file from this console, so the device has to be able to reach the '
-            +'address you have open in this browser. Good for an hour.</div>'
-            // No nested quotes in the handler: it hides itself and reveals the
-            // explanation next to it. Escaping a quoted string inside an inline
-            // attribute inside a Python block has bitten this file twice already.
-            +'<img class="cred-qr import" alt="Join code for '+esc(c.user)+'" '
-            +'src="/enrol/'+esc(c.pkg_token)+'.png" '
-            +'onerror="this.hidden=true;this.nextElementSibling.hidden=false">'
-            +'<div class=cred-pkg-why hidden>No code here, and that is deliberate: this '
-            +'console is open on a loopback address, so any code would tell the device to '
-            +'fetch the file from itself. Open the console on the address the device can '
-            +'reach, or just use the file above.</div>'
-            +'</details>';
-        }
+          +c.pkg+'">Download the join package</a></div>'
+          +'<div class=cred-pkg-why>Get it onto the handset however suits you - a cable, '
+          +'a memory stick, or your file store - and open it there. ATAK imports it and '
+          +'the server appears in its list.</div>';
       }else if(c.png){
         h+='<div class=cred-pkg-why><b>Scan this once, with the camera in ATAK.</b> '
           +'This server has a certificate the device already trusts, so the code is the '
@@ -14951,6 +14904,17 @@ SETUP_JS = """
       if(c.itak){
         h+='<div class=cred-lines>iTAK on iPhone has no camera import, so type this in '
           +'by hand instead: <code>'+esc(c.itak)+'</code></div>';
+      }
+      // What the code actually contains. When a scan does nothing there is otherwise
+      // nowhere to look: no error on the handset, no error here, and no way to tell a
+      // wrong host from a mangled token without rebuilding the box to find out. It
+      // holds the same credential the code does, so it is no more exposed than the
+      // picture above it.
+      if(c.url){
+        h+='<details class=cred-lines><summary>What is in the code</summary>'
+          +'<div class=cred-pkg-why>If scanning does nothing, read this. The host has to '
+          +'be one the handset can reach, and the token has to survive to the end of the '
+          +'line.</div><code class=wz-pub>'+esc(c.url)+'</code></details>';
       }
       return h+'</div>';
     }).join('');
@@ -16931,7 +16895,19 @@ def render_deploy(state):
     var kk=document.getElementById('wz-kiosk');
     if(kk) kk.checked = !!p.kiosk;
     if(p.kiosk) lines.push('\u2022 this box will boot into its own console');
-    if(p.cert==='none') lines.push('\u2022 no public certificate was wanted for it');
+    // The plan answered this. Acting on it, not just repeating it back - the same
+    // omission as the kiosk tick, where the summary said what the plan wanted and the
+    // control that would have done it was never touched.
+    var pc=document.getElementById('wz-pubcert');
+    if(pc && p.cert){
+      pc.value = (p.cert==='none') ? 'none'
+               : (p.profile==='cloud') ? 'http' : 'supplied';
+      pc.dataset.touched='1';
+      pc.dispatchEvent(new Event('change'));
+    }
+    if(p.cert==='none') lines.push('\u2022 it makes its own certificate; nothing is published');
+    else if(p.profile==='cloud') lines.push('\u2022 it will ask for a public certificate during the build');
+    else lines.push('\u2022 you are supplying a certificate for it');
     if(!p.addr) lines.push('\u2022 the address is blank - fill it in yourself, it is the one '
       + 'this console must be able to reach');
     res.textContent=lines.join('\n');
@@ -17422,8 +17398,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if not err else 503,
                        render_error(err, "vault") if err else render_vault(state),
                        "text/html; charset=utf-8")
-        elif path.startswith("/enrol/"):
-            self._send_enrol(path[len("/enrol/"):])
         elif path.startswith("/store/file/"):
             from urllib.parse import unquote
             self._send_store_file(unquote(path[len("/store/file/"):]), "store")
@@ -17443,70 +17417,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, page, "text/html; charset=utf-8")
         else:
             self._send(404, "not found\n", "text/plain")
-
-    def _send_enrol(self, rest):
-        """Serve an enrolment package, or the QR a device scans to come and get it.
-
-        <token>.zip is the package itself, fetched by the phone with no session. The
-        token is the only thing guarding it, so a miss is a flat 404 with nothing in it
-        that says whether the token was wrong or merely late.
-
-        <token>.png is the QR, fetched by the operator's own signed-in browser. It is
-        built from the Host header of THIS request, which is the address that browser
-        used to reach the console - so it is an address that resolves on this network,
-        rather than a hostname the box calls itself and nothing else can find.
-        """
-        m = re.match(r"^([0-9a-f]{32})\.(zip|png)$", rest or "")
-        if not m:
-            self._send(404, "not found\n", "text/plain")
-            return
-        tok, kind = m.group(1), m.group(2)
-        rec = take_enrol_package(tok, consume=(kind == "zip"))
-        if not rec:
-            self._send(404, "not found\n", "text/plain")
-            return
-
-        if kind == "zip":
-            audit({"action": "enrol-package-collected", "target": rec["name"],
-                   "result": "OK"})
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Length", str(len(rec["blob"])))
-            self.send_header("Content-Disposition",
-                             f'attachment; filename="{rec["name"]}"')
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(rec["blob"])
-            return
-
-        host = (self.headers.get("Host", "") or "").strip()
-        if not re.match(r"^[A-Za-z0-9._-]+(:[0-9]{1,5})?$", host):
-            self._send(404, "not found\n", "text/plain")
-            return
-        # A code built from a loopback address tells the phone to fetch from ITSELF. It
-        # scans, nothing happens, and nothing anywhere says why - which is exactly what
-        # an operator reported after scanning from the box's own kiosk screen. Refuse to
-        # draw it rather than draw a code that cannot work.
-        if re.match(r"^(127\.|localhost|\[?::1\]?)", host, re.I):
-            self._send(409, "loopback\n", "text/plain")
-            return
-        url = (f"tak://com.atakmap.app/import?url=http://{host}/enrol/{tok}.zip"
-               f"&filename={rec['name']}")
-        try:
-            png = subprocess.run(["qrencode", "-t", "PNG", "-o", "-", "-m", "3", "-s", "6",
-                                  url], capture_output=True, timeout=10)
-        except (OSError, subprocess.SubprocessError):
-            png = None
-        if not png or png.returncode != 0 or not png.stdout:
-            # qrencode is best-effort on a console box. The URL still works typed in.
-            self._send(404, "not found\n", "text/plain")
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(png.stdout)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(png.stdout)
 
     def do_GET_peer(self, path):
         """Peer-token reads: the estate snapshot and vault folder bundles. Bearer only -

@@ -43,6 +43,11 @@ log() {
 
 op="${1:-}"; shift || true
 name="${1:-}"; shift || true
+# Whatever followed the name. Captured HERE, immediately after the shifts, because the
+# case arms below see an already-shifted argument list: a branch reaching for "$3" is
+# reading past the end and silently gets nothing, which is how "rotate" was accepted,
+# ignored, and reported as working.
+arg1="${1:-}"
 [[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import|usb-export|kiosk-exit|apply-release)$ ]] || deny "unknown operation"
 [[ "$name" =~ ^[a-z0-9-]{1,24}$ ]] || deny "key name must match [a-z0-9-], max 24"
 key="$STORE/$name"
@@ -180,7 +185,7 @@ keygen)
     # when they press "Generate a key", which says what it does. Pressing it and getting
     # the same string back looks like a broken button and leaves a key you may be trying
     # to rotate away from still valid.
-    if [[ "${3:-}" == "rotate" ]]; then
+    if [[ "$arg1" == "rotate" ]]; then
         [[ -f "$key" ]] && { rm -f "$key" "$key.pub"; log "keygen $name (rotated, old key discarded)"; }
     else
         [[ -f "$key" ]] && { log "keygen $name (existing)"; cat "$key.pub"; exit 0; }
