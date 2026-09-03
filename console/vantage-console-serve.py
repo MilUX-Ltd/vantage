@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.51.1"
+VERSION = "2.52.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.53-beta"
+VANTAGE_RELEASE = "0.9.54-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -1931,6 +1931,19 @@ def build_console_installer(kiosk=False):
     # own action keys, authorize them on the local takadmin, write actions.json self-target.
     # Embedded and run at the end so a deployed box comes up managing its own server, not
     # read-only. It needs the tak-* scripts + takadmin an estate-enrolled box already carries.
+    # The console's ONE root path. Without it on the box, every privileged local
+    # operation - saving the operator password, leaving the kiosk - runs `sudo -n
+    # console-setup-priv`, finds no rule and no binary, and sudo answers with its
+    # insult about not being able to do that. The installer used to assume this file
+    # was already here because the admin console's own installer had put it there;
+    # nothing put it on a box that only ever received a deployed console.
+    setup_priv_b64 = ""
+    sp_path = os.path.join(libdir, "actions", "console-setup-priv")
+    if not os.path.isfile(sp_path):
+        sp_path = "/usr/local/bin/console-setup-priv"
+    if os.path.isfile(sp_path):
+        with open(sp_path, "rb") as fh:
+            setup_priv_b64 = base64.b64encode(fh.read()).decode()
     self_enrol_b64 = ""
     se_path = os.path.join(libdir, "console-self-enrol.sh")
     if os.path.isfile(se_path):
@@ -2053,6 +2066,21 @@ def build_console_installer(kiosk=False):
            if kiosk and kiosk_priv_b64 else "")
         # enrol the box into its own console so client mode can manage its own server, but
         # only where the estate machinery (takadmin + the tak-* scripts) is already present.
+        # The root helper and the one sudoers rule that lets the console use it. Written
+        # before anything tries to, and validated - a malformed sudoers file locks every
+        # sudo on the box, so it goes in through a temp file that visudo has to accept.
+        + ((
+            "base64 -d > /usr/local/bin/console-setup-priv <<'B64SP'\n" + setup_priv_b64
+            + "\nB64SP\n"
+            "chmod 755 /usr/local/bin/console-setup-priv\n"
+            "printf '%s ALL=(root) NOPASSWD: /usr/local/bin/console-setup-priv\\n' "
+            "vantage-console > /tmp/.vc-sudoers.$$\n"
+            "if visudo -cf /tmp/.vc-sudoers.$$ >/dev/null 2>&1; then\n"
+            "  install -m 0440 -o root -g root /tmp/.vc-sudoers.$$ "
+            "/etc/sudoers.d/vantage-console-setup\n"
+            "else echo 'WARN could not install the sudoers rule; the console will not be "
+            "able to save its own settings'; fi\n"
+            "rm -f /tmp/.vc-sudoers.$$\n") if setup_priv_b64 else "")
         + (("if id takadmin >/dev/null 2>&1; then\n"
             "  base64 -d > /usr/local/bin/console-self-enrol <<'B64SE'\n" + self_enrol_b64
             + "\nB64SE\n"
@@ -4161,7 +4189,11 @@ def setup_api(path, data, client):
     if not re.fullmatch(RE_KEYNAME, name):
         return 400, {"error": "key name must be [a-z0-9-], max 24"}
     if path == "/api/setup/keygen":
-        ok, out = setup_helper("keygen", name)
+        # Pressing the button rotates; reopening a deployment does not. Same endpoint,
+        # and the difference is stated by the caller rather than guessed at here.
+        rotate = "rotate" if str(data.get("rotate", "")) == "1" else ""
+        ok, out = setup_helper("keygen", name, rotate) if rotate \
+            else setup_helper("keygen", name)
         audit({"action": "setup-keygen", "target": name, "result": "OK" if ok else "ERROR",
                "client": client})
         return (200, {"pubkey": out}) if ok else (502, {"error": out[:300]})
@@ -14573,7 +14605,7 @@ SETUP_JS = """
   };
   $('#wz-genkey').onclick=function(){
     var r=$('#wz-keyres'); msg(r,'','Generating\\u2026');
-    J('/api/setup/keygen',{name:keyname()}).then(function(x){
+    J('/api/setup/keygen',{name:keyname(),rotate:'1'}).then(function(x){
       if(x.code!==200){msg(r,'error',x.j.error||'failed');return;}
       S.key=keyname();
       $('#wz-pub').textContent=x.j.pubkey;
@@ -14861,49 +14893,53 @@ SETUP_JS = """
   };
   function showCreds(j){
     if(!j.creds||!j.creds.length) return;
-    // ONE artefact per device, never a menu. Two codes on a screen with no stated order
-    // is how an operator scans both and finds out by luck which one mattered. What the
-    // device needs depends entirely on whether this server has a certificate the device
-    // already trusts, so decide that here and show the one thing that applies.
+    // The FILE leads. It works from anywhere: download it, open it on the device, done.
+    // The code is a shortcut that only works when the device can reach THIS console at
+    // the address you happen to have open, which is a condition the operator cannot see
+    // and we cannot check from here. Leading with the code made the reliable route look
+    // like the fallback, and an operator scanning from the box own kiosk screen got a
+    // code pointing at 127.0.0.1 and no explanation at all.
     var out=j.creds.map(function(c){
       var h='<div class=cred-enrol><div class="a-res ok">'+esc(c.user)+' ('+esc(c.group)+')</div>';
       var oneScan = c.pkg_token && c.pkg_kind==='cert';
 
-      if(oneScan){
-        h+='<div class=cred-pkg-why><b>Scan this once, with the camera in ATAK.</b> '
-          +'It brings down everything the device needs: the authority that lets it trust '
-          +'this server, the server itself, and the certificate that identifies this '
-          +'device. Nothing to type, and nothing else to scan.</div>';
-      }else if(c.pkg_token){
-        h+='<div class=cred-pkg-why><b>Two steps, in this order.</b> '
-          +'<b>1.</b> Scan the code - it gives the device the authority it needs to trust '
-          +'this server. <b>2.</b> The device then asks you to sign in, with the account '
-          +'shown below the code.</div>';
+      if(c.pkg){
+        h+='<div class=cred-pkg-why>'+(oneScan
+          ? '<b>Download this and open it on the device. That is the whole join.</b> It '
+            +'carries the authority that lets the device trust this server, the server '
+            +'itself, and the certificate identifying this device. Nothing to type.'
+          : '<b>Download this and open it on the device.</b> It gives the device the '
+            +'authority it needs to trust this server. The device then asks you to sign '
+            +'in, with the account below.')+'</div>'
+          +'<div class=cred-lines><a class="a-go primary" download="'+esc(c.user)
+          +(oneScan?'-join.zip':'-trust.zip')+'" href="data:application/zip;base64,'
+          +c.pkg+'">Download the join package</a></div>';
+        if(c.pkg_token){
+          h+='<details class=cred-lines><summary>Or scan it, if the device is on this '
+            +'network</summary><div class=cred-pkg-why>The code tells the device to fetch '
+            +'the same file from this console, so the device has to be able to reach the '
+            +'address you have open in this browser. Good for an hour.</div>'
+            // No nested quotes in the handler: it hides itself and reveals the
+            // explanation next to it. Escaping a quoted string inside an inline
+            // attribute inside a Python block has bitten this file twice already.
+            +'<img class="cred-qr import" alt="Join code for '+esc(c.user)+'" '
+            +'src="/enrol/'+esc(c.pkg_token)+'.png" '
+            +'onerror="this.hidden=true;this.nextElementSibling.hidden=false">'
+            +'<div class=cred-pkg-why hidden>No code here, and that is deliberate: this '
+            +'console is open on a loopback address, so any code would tell the device to '
+            +'fetch the file from itself. Open the console on the address the device can '
+            +'reach, or just use the file above.</div>'
+            +'</details>';
+        }
       }else if(c.png){
         h+='<div class=cred-pkg-why><b>Scan this once, with the camera in ATAK.</b> '
           +'This server has a certificate the device already trusts, so the code is the '
-          +'whole join.</div>';
-      }
-
-      if(c.pkg_token){
-        h+='<img class="cred-qr import" alt="Join code for '+esc(c.user)+'" '
-          +'src="/enrol/'+esc(c.pkg_token)+'.png" onerror="this.remove()">'
-          +'<div class=cred-pkg-why>Good for an hour, and the device has to be on the '
-          +'same network as this console. If no code appeared above, use the file below '
-          +'instead - open it on the device and it does the same job.</div>';
-        if(c.pkg){
-          h+='<div class=cred-lines><a class=cred-refresh download="'+esc(c.user)
-            +(oneScan?'-join.zip':'-trust.zip')+'" href="data:application/zip;base64,'
-            +c.pkg+'">Download the same thing as a file</a></div>';
-        }
-      }else if(c.png){
-        h+='<img class=cred-qr alt="Join code for '+esc(c.user)+'" '
+          +'whole join and there is no file to move.</div>'
+          +'<img class=cred-qr alt="Join code for '+esc(c.user)+'" '
           +'src="data:image/png;base64,'+c.png+'">';
       }
 
-      // The account. An instruction when the device is going to ask for it, a record
-      // when it is not - and never a bare password with no word about what it is for.
-      var willAsk = c.pkg_token && c.pkg_kind!=='cert';
+      var willAsk = c.pkg && !oneScan;
       if(c.password){
         h+='<div class=cred-lines>'+(willAsk
           ? 'When it asks, sign in as <code>'+esc(c.user)+'</code> with <code>'
@@ -17446,6 +17482,13 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host", "") or "").strip()
         if not re.match(r"^[A-Za-z0-9._-]+(:[0-9]{1,5})?$", host):
             self._send(404, "not found\n", "text/plain")
+            return
+        # A code built from a loopback address tells the phone to fetch from ITSELF. It
+        # scans, nothing happens, and nothing anywhere says why - which is exactly what
+        # an operator reported after scanning from the box's own kiosk screen. Refuse to
+        # draw it rather than draw a code that cannot work.
+        if re.match(r"^(127\.|localhost|\[?::1\]?)", host, re.I):
+            self._send(409, "loopback\n", "text/plain")
             return
         url = (f"tak://com.atakmap.app/import?url=http://{host}/enrol/{tok}.zip"
                f"&filename={rec['name']}")

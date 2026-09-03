@@ -175,7 +175,16 @@ vaultdir)
     echo "OK vault root ready"
     ;;
 keygen)
-    [[ -f "$key" ]] && { log "keygen $name (existing)"; cat "$key.pub"; exit 0; }
+    # Reusing an existing key is right when a deployment is REOPENED - the operator has
+    # already placed that key on the box and should not have to do it again. It is wrong
+    # when they press "Generate a key", which says what it does. Pressing it and getting
+    # the same string back looks like a broken button and leaves a key you may be trying
+    # to rotate away from still valid.
+    if [[ "${3:-}" == "rotate" ]]; then
+        [[ -f "$key" ]] && { rm -f "$key" "$key.pub"; log "keygen $name (rotated, old key discarded)"; }
+    else
+        [[ -f "$key" ]] && { log "keygen $name (existing)"; cat "$key.pub"; exit 0; }
+    fi
     ssh-keygen -t ed25519 -N "" -C "vantage-console-setup-$name" -f "$key" -q || deny "keygen failed"
     chmod 600 "$key"
     log "keygen $name"
