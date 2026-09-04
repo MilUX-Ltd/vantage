@@ -13,6 +13,7 @@ nothing: it reports, and moving a pin stays a deliberate edit with a changelog n
 | [TAK Server](https://tak.gov/) | `5.8 (the release the provisioner targets; the .deb is supplied by you)` | the server itself, on every box that runs one | US Government / TAK Product Center terms, licensed to the operator | carried on the stick by you, never downloaded |
 | [PostgreSQL + PostGIS](https://www.postgresql.org/) | `18 with PostGIS 3, from the PGDG archive` | TAK Server's database | PostgreSQL Licence | yes, in the offline bundle |
 | [OpenJDK JRE](https://openjdk.org/) | `17 (headless), from the distribution archive` | the Java runtime TAK Server's .deb depends on | GPL-2.0 with Classpath Exception | yes, in the offline bundle |
+| [Syncthing](https://github.com/syncthing/syncthing) | `v2.1.3` | the sync engine behind the Sharing page: carries Knowledge Vault folders between boxes (ADR-006) | MPL-2.0 | yes, the release tarball carries the pinned linux-amd64 package onto the software shelf; Pair sends it to a box that has none |
 | [MediaMTX](https://github.com/bluenviron/mediamtx) | `v1.20.0` | the video server behind the Streams page | MIT | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [CloudTAK](https://github.com/dfpc-coe/CloudTAK) | `v13.70.0` | the browser client, in docker | MIT | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
 | [mbtileserver](https://github.com/consbio/mbtileserver) | `v0.11.0` | serves the offline map tilesets | ISC | not yet, see docs/VANTAGE-OFFLINE-SOFTWARE.md |
@@ -33,6 +34,7 @@ nothing: it reports, and moving a pin stays a deliberate edit with a changelog n
 - **TAK Server** is not pinned by a constant: 5.8 (the release the provisioner targets; the .deb is supplied by you).
 - **PostgreSQL + PostGIS** is not pinned by a constant: 18 with PostGIS 3, from the PGDG archive.
 - **OpenJDK JRE** is not pinned by a constant: 17 (headless), from the distribution archive.
+- **Syncthing** is pinned at `console/pins.sh:SYNCTHING_VER`.
 - **MediaMTX** is pinned at `console/provision/vantage-tak-provision.sh:MEDIAMTX_VER`.
 - **CloudTAK** is pinned at `console/provision/vantage-tak-provision.sh:CLOUDTAK_TAG`.
 - **mbtileserver** is pinned at `console/provision/vantage-tak-provision.sh:MBTILESERVER_VER`.

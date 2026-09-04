@@ -118,6 +118,9 @@ changes something recoverable, `destructive` changes something that is not trivi
 | `vpn-join` | write | Join the box to your private network |
 | `vpn-leave` | write | Leave it, shredding the join key |
 | `deploy-console` | write | Install a console on a box so it can manage itself |
+| `sync-pair` | write | Pairs a box's sync engine with this console over the install-console key: uses the engine the box has or installs the pinned one from the package on the box, hardens it, gives it the vault, introduces this console at a fixed address, and reports the box's identity, which the console pins. Pressed from the Sharing page's Pair button. |
+| `sync-retire` | write | The box's half of retiring the whole-vault share: over the install-console key the box's engine forgets the folder that covers its vault root; files stay. Pressed by the console's retire route. |
+| `sync-share` | write | The box's half of a Sync-page tick: over the install-console key, the box's own copy of console-sync-priv creates the sync folder at its vault path and shares it with this console. Pressed by the console's share route, not by hand. |
 | `push-vault` | write | Sends one of this console's Knowledge Vault folders to the box over the install-console key, under the never-clobber rule: anything newer on the box is kept. |
 
 The Meshtastic mesh is Mesh Manager's, a standalone application reached from a box's tile

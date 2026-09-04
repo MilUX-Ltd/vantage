@@ -74,7 +74,7 @@ VAR=/var/lib/vantage-console
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 for f in vantage-console-serve.py vantage-console-collect.py console-enrol-server.sh \
-         actions/console-setup-priv provision/vantage-tak-provision.sh; do
+         actions/console-setup-priv actions/console-sync-priv sync-pair-payload.sh pins.sh provision/vantage-tak-provision.sh; do
     [[ -r "$SRC/$f" ]] || die "missing source file: $SRC/$f - run from the console/ directory"
 done
 command -v python3 >/dev/null || die "python3 not found (apt-get install -y python3)"
@@ -104,9 +104,30 @@ done
 
 echo "==> [3/8] code + helpers"
 install -m 0755 "$SRC/vantage-console-serve.py"   "$LIB/"
+install -m 0644 "$SRC/sync-pair-payload.sh"       "$LIB/"
+install -m 0644 "$SRC/pins.sh"                    "$LIB/"
 install -m 0755 "$SRC/vantage-console-collect.py" "$LIB/"
 install -m 0755 "$SRC/console-enrol-server.sh"  /usr/local/bin/console-enrol-server
 install -m 0755 "$SRC/actions/console-setup-priv" /usr/local/bin/console-setup-priv
+install -m 0755 "$SRC/actions/console-sync-priv" /usr/local/bin/console-sync-priv
+install -d -m 0750 /var/lib/vantage-sync
+[[ -f /var/lib/vantage-sync/sync-paths.json ]] || printf '{"vault": "/srv/vault/Deployed"}\n' > /var/lib/vantage-sync/sync-paths.json
+# The engine's API key, held for the helper at 0600 root and never by the console. Taken once
+# from the running engine's own config where one exists; an existing key file is never touched.
+install -d -m 0750 /etc/vantage
+if [[ ! -s /etc/vantage/sync-api.key ]]; then
+    for cfg in /var/lib/vaultsync/syncthing/config.xml /home/USER/.local/state/syncthing/config.xml \
+               /home/USER/.config/syncthing/config.xml; do
+        [[ -r "$cfg" ]] || continue
+        key=$(sed -n 's/.*<apikey>\([^<]*\)<\/apikey>.*/\1/p' "$cfg" | head -1)
+        if [[ -n "$key" ]]; then
+            printf '%s\n' "$key" | install -m 0600 -o root -g root /dev/stdin /etc/vantage/sync-api.key
+            echo "sync engine key taken from $cfg into /etc/vantage/sync-api.key (0600 root)"
+            break
+        fi
+    done
+    [[ -s /etc/vantage/sync-api.key ]] || echo "no sync engine config found here; the Sync page will say the key is missing until one exists"
+fi
 # the update helper runs DETACHED from the console (it restarts it), so it lives in
 # /usr/local/bin rather than the console library
 install -m 0755 "$SRC/vantage-apply-release" /usr/local/bin/vantage-apply-release
@@ -155,6 +176,7 @@ chmod 0644 "$ETC/console-host"
 echo "==> [4/8] sudoers for the setup helper"
 cat > /etc/sudoers.d/vantage-console-setup <<EOF
 $USER_NAME ALL=(root) NOPASSWD: /usr/local/bin/console-setup-priv
+$USER_NAME ALL=(root) NOPASSWD: /usr/local/bin/console-sync-priv
 EOF
 chmod 440 /etc/sudoers.d/vantage-console-setup
 visudo -c >/dev/null || die "sudoers validation failed"

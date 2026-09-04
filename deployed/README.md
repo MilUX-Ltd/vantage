@@ -14,7 +14,7 @@ non-commercial use (see LICENSE at the repository root).
 - **The box** runs `boxside/bin/vd-sync-server.py` beside a Vantage console, serving one
   vault directory. Devices enrol by QR; every request after that is signed by a key that
   never leaves the device's hardware keystore.
-- **The console** (Sync page) is the operator surface: mint enrolment QRs, confirm a device
+- **The console** (Sharing page) is the operator surface: mint enrolment QRs, confirm a device
   against the six-digit code its holder reads out, revoke at end of deployment, and see
   exactly what each device receives. Sharing decisions live where the content lives: a
   deployment's folder in the Knowledge Vault, and "Shared to deployments" on the File store
@@ -32,7 +32,7 @@ python3 boxside/bin/vd-sync-server.py --state-dir ~/vd-state \
 python3 boxside/bin/vd-ops.py --state-dir ~/vd-state config   # prints the admin token
 ```
 
-Link the box on the console's Sync page (URL plus that admin token), then enrol devices
+Link the box on the console's Sharing page (URL plus that admin token), then enrol devices
 from the same page. `vd-ops` covers every operator act headless: mint, pending, confirm,
 reject, revoke, pack add/list/remove, config. Add `--read-only` to serve pulls only.
 

@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+"""console-sync-priv - the console's root path to the sync engine (Syncthing) on this box.
+Spec 010, ADR-006. Reached ONLY through a scoped sudoers rule:
+
+    vantage-console ALL=(root) NOPASSWD: /usr/local/bin/console-sync-priv
+
+The console never holds the engine's API key; this helper does, and exposes a closed catalogue.
+Every argument is validated before it is used, nothing resembling a shell is run, and every run
+is logged (never the key). Exit codes: 0 ok, 2 refused (validation, or the engine said no),
+3 engine down, 4 the engine refused the key, 5 the engine's reply made no sense.
+
+  status                                          one JSON document: version, myID, devices,
+                                                  folders, completion per shared pair,
+                                                  restart_required, conform, as_of
+  conform                                         the security-relevant settings, read back
+  device-list | folder-list
+  device-add <device-id> <name> <tcp://host:port>  static address, no auto-accept
+  device-remove <device-id>
+  folder-create <folder-id> <label-b64> <map/sub> <sendreceive|receiveonly>
+  folder-share <folder-id> <device-id>            refused unless the folder carries the
+                                                  master's protections (ignoreDelete,
+                                                  staggered versioning)
+  folder-unshare <folder-id> <device-id>
+  folder-protect <folder-id>                      set those protections on this side
+  folder-retire <folder-id>                       take the folder out of the engine; files stay;
+                                                  refused while any device shares it
+  completion <folder-id> <device-id>
+  conflict-resolve <folder-id> <sub-path> <mine|theirs>
+  engine-start | engine-stop                      the engine's unit on this box, a fixed name;
+                                                  start also enables it at boot
+  engine-enable                                   enable the unit at boot without starting it
+  engine-harden                                   discovery, relays, NAT and reporting off
+
+Configuration comes from fixed paths (environment overrides exist for the test suite, which
+runs this helper as a plain process against a fake engine):
+  VANTAGE_SYNC_API      http://127.0.0.1:8384
+  VANTAGE_SYNC_KEYFILE  /etc/vantage/sync-api.key   (0600 root, written by the installer from the
+                        engine's config.xml; the helper falls back to that config.xml itself,
+                        first at /var/lib/vaultsync/syncthing, the estate's hand-built home)
+  VANTAGE_SYNC_PATHMAP  /var/lib/vantage-sync/sync-paths.json   {"vault": "/srv/vault/Deployed"}
+  VANTAGE_SYNC_LOG      /var/lib/vantage-sync/helper.log
+"""
+import base64
+import datetime
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+API = os.environ.get("VANTAGE_SYNC_API", "http://127.0.0.1:8384").rstrip("/")
+KEYFILE = os.environ.get("VANTAGE_SYNC_KEYFILE", "/etc/vantage/sync-api.key")
+PATHMAP = os.environ.get("VANTAGE_SYNC_PATHMAP", "/var/lib/vantage-sync/sync-paths.json")
+LOG = os.environ.get("VANTAGE_SYNC_LOG", "/var/lib/vantage-sync/helper.log")
+CONFIG_CANDIDATES = [os.environ.get("VANTAGE_SYNC_CONFIG", ""),
+                     "/var/lib/vaultsync/syncthing/config.xml",
+                     "/home/USER/.local/state/syncthing/config.xml",
+                     "/home/USER/.config/syncthing/config.xml",
+                     "/var/lib/syncthing/.local/state/syncthing/config.xml"]
+TIMEOUT = 5
+B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+RE_FOLDER_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+RE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+RE_SUB = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,79}")
+RE_ADDR = re.compile(r"tcp://(?:[A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:]+\]):[0-9]{2,5}")
+RE_MAPKEY = re.compile(r"[a-z][a-z0-9-]{0,23}")
+VERSIONING = {"type": "staggered", "params": {"cleanoutDays": "365", "maxAge": "31536000"}}
+ARITY = {"status": 0, "conform": 0, "device-list": 0, "folder-list": 0, "device-add": 3,
+         "device-remove": 1, "folder-create": 4, "folder-share": 2, "folder-unshare": 2,
+         "folder-protect": 1, "folder-retire": 1, "completion": 2, "conflict-resolve": 3,
+         "engine-start": 0, "engine-stop": 0, "engine-harden": 0, "engine-enable": 0}
+
+
+def log(*parts):
+    try:
+        with open(LOG, "a") as fh:
+            fh.write(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                     + " " + " ".join(str(p) for p in parts) + "\n")
+    except OSError:
+        pass
+
+
+def refuse(msg):
+    print("refused: " + msg, file=sys.stderr)
+    log("REFUSED", sys.argv[1:2], msg)
+    sys.exit(2)
+
+
+class EngineDown(Exception):
+    pass
+
+
+class Unauthorised(Exception):
+    pass
+
+
+class BadReply(Exception):
+    pass
+
+
+def read_key():
+    try:
+        with open(KEYFILE) as fh:
+            k = fh.read().strip()
+        if k:
+            return k
+    except OSError:
+        pass
+    for c in CONFIG_CANDIDATES:
+        if not c:
+            continue
+        try:
+            with open(c) as fh:
+                m = re.search(r"<apikey>([^<]+)</apikey>", fh.read())
+            if m:
+                return m.group(1).strip()
+        except OSError:
+            continue
+    raise Unauthorised("no key available to this helper")
+
+
+def call(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method,
+                                 headers={"X-API-Key": read_key(), "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise Unauthorised("the engine refused the key")
+        if e.code == 404:
+            raise BadReply("no such object: " + path.split("?")[0])
+        raise BadReply("the engine answered %d to %s %s" % (e.code, method, path.split("?")[0]))
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        raise EngineDown("the engine did not answer on " + API.split("//", 1)[-1])
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise BadReply("the engine's reply was not JSON")
+
+
+# --- validators -------------------------------------------------------------------------------
+def luhn32(s):
+    factor, total = 1, 0
+    for c in s:
+        addend = factor * B32.index(c)
+        factor = 1 if factor == 2 else 2
+        total += (addend // 32) + (addend % 32)
+    return B32[(32 - total % 32) % 32]
+
+
+def v_device(did):
+    d = did.strip().upper()
+    if not re.fullmatch(r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}", d):
+        refuse("device id is not eight groups of seven")
+    flat = d.replace("-", "")
+    for i in range(0, 56, 14):
+        if luhn32(flat[i:i + 13]) != flat[i + 13]:
+            refuse("device id check digit is wrong")
+    return d
+
+
+def v_folder_id(fid):
+    if not RE_FOLDER_ID.fullmatch(fid):
+        refuse("folder id must be [a-z0-9-], max 64")
+    return fid
+
+
+def v_name(n):
+    if not RE_NAME.fullmatch(n):
+        refuse("name must be [A-Za-z0-9._-], max 40")
+    return n
+
+
+def v_addr(a):
+    if not RE_ADDR.fullmatch(a):
+        refuse("address must be tcp://host:port")
+    return a
+
+
+def v_label(b64):
+    try:
+        lab = base64.b64decode(b64, validate=True).decode("utf-8")
+    except Exception:
+        refuse("label must be base64 utf-8")
+    if not RE_SUB.fullmatch(lab):
+        refuse("label must be printable, max 80")
+    return lab
+
+
+def v_type(t):
+    if t not in ("sendreceive", "receiveonly"):
+        refuse("type must be sendreceive or receiveonly")
+    return t
+
+
+def v_path(token):
+    """<map-key>/<sub>: the map key names a root from the fixed map; the sub-path is one
+    validated segment under it. Resolved and checked so a symlink cannot walk out."""
+    if "/" not in token:
+        refuse("path must be <map>/<folder>")
+    key, sub = token.split("/", 1)
+    if not RE_MAPKEY.fullmatch(key) or not RE_SUB.fullmatch(sub) or sub in (".", "..") or "/" in sub:
+        refuse("path token is not one folder under a mapped root")
+    try:
+        with open(PATHMAP) as fh:
+            roots = json.load(fh)
+    except (OSError, ValueError):
+        refuse("no path map on this box")
+    root = roots.get(key)
+    if not root:
+        refuse("no mapped root named " + key)
+    root_real = os.path.realpath(root)
+    target = os.path.join(root, sub)
+    if os.path.lexists(target) and os.path.islink(target):
+        refuse("that folder is a symlink")
+    real = os.path.realpath(target)
+    if real != os.path.join(root_real, sub):
+        refuse("that path does not resolve under " + key)
+    return real
+
+
+def v_keep(k):
+    if k not in ("mine", "theirs"):
+        refuse("keep must be mine or theirs")
+    return k
+
+
+# --- reads --------------------------------------------------------------------------------------
+def hh(iso):
+    return iso
+
+
+def find_conflicts(path, cap=200):
+    out = []
+    if not os.path.isdir(path):
+        return out
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in (".stversions", ".stfolder", ".stignore")]
+        for f in files:
+            m = re.match(r"(.*)\.sync-conflict-(\d{8}-\d{6})-([A-Z2-7]{7})(\.[^.]*)?$", f)
+            if not m:
+                continue
+            rel = os.path.relpath(os.path.join(root, f), path)
+            orig = os.path.relpath(os.path.join(root, m.group(1) + (m.group(4) or "")), path)
+            ts = m.group(2)
+            out.append({"path": rel, "original": orig, "modified_by": m.group(3),
+                        "at": "%s-%s-%sT%s:%s:%sZ" % (ts[0:4], ts[4:6], ts[6:8], ts[9:11], ts[11:13], ts[13:15])})
+            if len(out) >= cap:
+                return out
+    return out
+
+
+def protections(f):
+    return bool(f.get("ignoreDelete")) and (f.get("versioning") or {}).get("type") == "staggered"
+
+
+HARDEN = {"globalAnnounceEnabled": False, "localAnnounceEnabled": False, "relaysEnabled": False,
+          "natEnabled": False, "urAccepted": -1}
+
+
+def conform_block(options, gui, folders):
+    """Findings carry a code the console turns into a press: folder-unprotected -> protect the
+    folder; discovery/relays/nat/reporting -> harden the engine; gui -> a sentence."""
+    findings = []
+    for f in folders:
+        if not protections(f):
+            findings.append({"code": "folder-unprotected", "folder": f.get("id"),
+                             "text": "folder %s (%s) does not keep prior versions or refuse deletions from a box"
+                                     % (f.get("id"), f.get("label") or "")})
+        if f.get("type") not in ("sendreceive", "receiveonly"):
+            findings.append({"code": "folder-type", "folder": f.get("id"),
+                             "text": "folder %s is %s" % (f.get("id"), f.get("type"))})
+    if options.get("globalAnnounceEnabled"):
+        findings.append({"code": "discovery", "text": "global discovery is on: the engine announces itself to the internet"})
+    if options.get("localAnnounceEnabled"):
+        findings.append({"code": "discovery", "text": "This box is announcing itself on every network it joins. On a kit network that is a signal anyone on it can see."})
+    if options.get("relaysEnabled"):
+        findings.append({"code": "relays", "text": "relays are on: traffic may pass through third-party relay servers"})
+    if options.get("natEnabled"):
+        findings.append({"code": "nat", "text": "NAT traversal is on"})
+    if int(options.get("urAccepted", -1) or 0) > 0:
+        findings.append({"code": "reporting", "text": "usage reporting is on"})
+    g = str(gui.get("address", ""))
+    if not (g.startswith("127.0.0.1:") or g.startswith("localhost:") or g.startswith("[::1]:")):
+        findings.append({"code": "gui", "text": "the engine's own web page is reachable beyond this box: " + g})
+    return {"discovery": bool(options.get("globalAnnounceEnabled") or options.get("localAnnounceEnabled")),
+            "relays": bool(options.get("relaysEnabled")), "nat": bool(options.get("natEnabled")),
+            "listen": list(options.get("listenAddresses") or []), "gui": g, "findings": findings}
+
+
+def status():
+    version = call("GET", "/rest/system/version").get("version", "")
+    my_id = call("GET", "/rest/system/status").get("myID", "")
+    conns = call("GET", "/rest/system/connections").get("connections", {}) or {}
+    devices = call("GET", "/rest/config/devices") or []
+    folders = call("GET", "/rest/config/folders") or []
+    options = call("GET", "/rest/config/options") or {}
+    gui = call("GET", "/rest/config/gui") or {}
+    restart = bool(call("GET", "/rest/config/restart-required").get("requiresRestart"))
+    devs = []
+    for d in devices:
+        did = d.get("deviceID", "")
+        c = conns.get(did, {}) or {}
+        devs.append({"deviceID": did, "name": d.get("name", ""),
+                     "address": (d.get("addresses") or [""])[0], "paused": bool(d.get("paused")),
+                     "connected": bool(c.get("connected")),
+                     "connected_since": (c.get("startedAt") or c.get("at") or "") if c.get("connected") else "",
+                     "last_seen": (c.get("at") or "") if not c.get("connected") else ""})
+    fols, completion = [], {}
+    for f in folders:
+        shared = [x.get("deviceID") for x in (f.get("devices") or []) if x.get("deviceID") and x.get("deviceID") != my_id]
+        fols.append({"id": f.get("id"), "label": f.get("label", ""), "path": f.get("path", ""),
+                     "type": f.get("type", ""), "paused": bool(f.get("paused")), "devices": shared,
+                     "ignoreDelete": bool(f.get("ignoreDelete")),
+                     "versioning": (f.get("versioning") or {}).get("type") or "none",
+                     "conflicts": find_conflicts(f.get("path", ""))})
+        for did in shared:
+            try:
+                c = call("GET", "/rest/db/completion?folder=%s&device=%s" % (f.get("id"), did))
+            except BadReply:
+                c = {}
+            completion.setdefault(f.get("id"), {})[did] = {
+                "completion": c.get("completion", 0), "needBytes": c.get("needBytes", 0),
+                "needItems": c.get("needItems", 0), "globalBytes": c.get("globalBytes", 0),
+                "remoteState": c.get("remoteState", ""),
+                "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    unit = unit_state()
+    conform = conform_block(options, gui, folders)
+    if unit.get("enabled") is False:
+        conform["findings"].append({"code": "not-enabled", "text": "Sharing will not come back on by itself. If this box restarts, nothing moves between boxes until someone turns sharing on here."})
+    return {"version": version, "myID": my_id, "devices": devs, "folders": fols, "completion": completion,
+            "restart_required": restart, "conform": conform, "unit": unit,
+            "as_of": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+# --- writes -------------------------------------------------------------------------------------
+def get_folder(fid):
+    return call("GET", "/rest/config/folders/" + fid)
+
+
+def share(fid, did, on):
+    f = get_folder(fid)
+    if on and not protections(f):
+        refuse("folder %s lacks the master's protections (ignoreDelete, versioning); protect it first" % fid)
+    cur = [x.get("deviceID") for x in (f.get("devices") or [])]
+    new = [d for d in cur if d != did] + ([did] if on else [])
+    if not on and did in cur and all(d == call("GET", "/rest/system/status").get("myID", "") for d in new):
+        pass  # unsharing the last box leaves only this device on the folder; that is the intended end state
+    if new == cur:
+        return {"ok": True, "unchanged": True, "devices": new}
+    call("PATCH", "/rest/config/folders/" + fid, {"devices": [{"deviceID": d} for d in new]})
+    restart = bool(call("GET", "/rest/config/restart-required").get("requiresRestart"))
+    return {"ok": True, "devices": new, "restart_required": restart}
+
+
+def _systemctl(op, quiet=False):
+    """One systemctl verb on the fixed unit, spawned without a shell. Returns the exit code."""
+    ctl = os.environ.get("VANTAGE_SYNC_SYSTEMCTL", "/usr/bin/systemctl")
+    unit = os.environ.get("VANTAGE_SYNC_UNIT", "syncthing@vaultsync")
+    argv = [ctl, op, unit] if not quiet else [ctl, "--quiet", op, unit]
+    try:
+        pid = os.posix_spawn(ctl, argv, dict(os.environ))
+    except OSError as e:
+        refuse("cannot run %s: %s" % (ctl, e))
+    _, st = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(st)
+
+
+def unit_state():
+    """Whether the engine's unit runs now and whether it starts at boot; a fact about this
+    box, not the engine's own opinion, so it lives beside the REST reads in status. Unknown
+    (None) where systemctl cannot be asked; a read never refuses."""
+    unit = os.environ.get("VANTAGE_SYNC_UNIT", "syncthing@vaultsync")
+    ctl = os.environ.get("VANTAGE_SYNC_SYSTEMCTL", "/usr/bin/systemctl")
+    if not os.path.exists(ctl):
+        return {"unit": unit, "active": None, "enabled": None}
+    try:
+        return {"unit": unit, "active": _systemctl("is-active", quiet=True) == 0,
+                "enabled": _systemctl("is-enabled", quiet=True) == 0}
+    except SystemExit:
+        return {"unit": unit, "active": None, "enabled": None}
+
+
+def engine_ctl(op):
+    """Start (and enable at boot), stop, or enable the engine's unit. A fixed binary and a fixed
+    unit name; the only thing the caller chooses is which verb. A master whose engine does not
+    come back after a reboot leaves the estate silent, so start always enables."""
+    unit = os.environ.get("VANTAGE_SYNC_UNIT", "syncthing@vaultsync")
+    if op == "enable":
+        rc = _systemctl("enable")
+        if rc != 0:
+            refuse("systemctl enable %s failed with exit code %d" % (unit, rc))
+        return {"ok": True, "unit": unit, "op": "enable"}
+    if op == "start":
+        rc_en = _systemctl("enable")
+    else:
+        rc_en = 0
+    rc = _systemctl(op)
+    if rc != 0:
+        refuse("systemctl %s %s failed with exit code %d" % (op, unit, rc))
+    out = {"ok": True, "unit": unit, "op": op}
+    if op == "start":
+        out["enabled"] = (rc_en == 0)
+    return out
+
+
+def main(argv):
+    if not argv or argv[0] not in ARITY:
+        refuse("unknown verb")
+    verb, args = argv[0], argv[1:]
+    if len(args) != ARITY[verb]:
+        refuse("%s takes %d argument(s)" % (verb, ARITY[verb]))
+    try:
+        if verb == "engine-enable":
+            out = engine_ctl("enable")
+        elif verb == "engine-harden":
+            call("PATCH", "/rest/config/options", HARDEN)
+            restart = bool(call("GET", "/rest/config/restart-required").get("requiresRestart"))
+            out = {"ok": True, "set": HARDEN, "restart_required": restart}
+        elif verb == "engine-start":
+            out = engine_ctl("start")
+        elif verb == "engine-stop":
+            out = engine_ctl("stop")
+        elif verb == "status":
+            out = status()
+        elif verb == "conform":
+            out = status()["conform"]
+        elif verb == "device-list":
+            out = status()["devices"]
+        elif verb == "folder-list":
+            out = status()["folders"]
+        elif verb == "device-add":
+            did, name, addr = v_device(args[0]), v_name(args[1]), v_addr(args[2])
+            call("POST", "/rest/config/devices", {"deviceID": did, "name": name, "addresses": [addr],
+                                                  "autoAcceptFolders": False, "introducer": False})
+            out = {"ok": True, "deviceID": did}
+        elif verb == "device-remove":
+            did = v_device(args[0])
+            call("DELETE", "/rest/config/devices/" + did)
+            out = {"ok": True, "deviceID": did}
+        elif verb == "folder-create":
+            fid, lab, path, typ = v_folder_id(args[0]), v_label(args[1]), v_path(args[2]), v_type(args[3])
+            existing = None
+            try:
+                existing = get_folder(fid)
+            except BadReply:
+                existing = None
+            if existing:
+                if os.path.realpath(existing.get("path", "")) != path:
+                    refuse("folder %s already exists at a different path" % fid)
+                out = {"ok": True, "id": fid, "path": path, "unchanged": True}
+            else:
+                call("POST", "/rest/config/folders", {"id": fid, "label": lab, "path": path, "type": typ,
+                                                      "devices": [], "ignoreDelete": True, "versioning": VERSIONING,
+                                                      "ignorePerms": True, "fsWatcherEnabled": True})
+                out = {"ok": True, "id": fid, "path": path}
+        elif verb == "folder-share":
+            out = share(v_folder_id(args[0]), v_device(args[1]), True)
+        elif verb == "folder-unshare":
+            out = share(v_folder_id(args[0]), v_device(args[1]), False)
+        elif verb == "folder-protect":
+            fid = v_folder_id(args[0])
+            get_folder(fid)
+            call("PATCH", "/rest/config/folders/" + fid, {"ignoreDelete": True, "versioning": VERSIONING})
+            out = {"ok": True, "id": fid}
+        elif verb == "folder-retire":
+            fid = v_folder_id(args[0])
+            f = get_folder(fid)
+            my_id = call("GET", "/rest/system/status").get("myID", "")
+            holders = [x.get("deviceID", "")[:7] for x in (f.get("devices") or []) if x.get("deviceID") and x.get("deviceID") != my_id]
+            if holders:
+                refuse("folder %s is still shared with %s; stop sharing first" % (fid, ", ".join(holders)))
+            call("DELETE", "/rest/config/folders/" + fid)
+            out = {"ok": True, "id": fid, "files": "kept at " + str(f.get("path", ""))}
+        elif verb == "completion":
+            fid, did = v_folder_id(args[0]), v_device(args[1])
+            out = call("GET", "/rest/db/completion?folder=%s&device=%s" % (fid, did))
+        elif verb == "conflict-resolve":
+            fid, sub, keep = v_folder_id(args[0]), args[1], v_keep(args[2])
+            if not RE_SUB.fullmatch(os.path.basename(sub)) or ".." in sub.split("/") or sub.startswith("/"):
+                refuse("path is not a file inside the folder")
+            f = get_folder(fid)
+            root = os.path.realpath(f.get("path", ""))
+            orig = os.path.realpath(os.path.join(root, sub))
+            if not orig.startswith(root + os.sep):
+                refuse("path is not inside the folder")
+            cands = [c for c in find_conflicts(root) if os.path.realpath(os.path.join(root, c["original"])) == orig]
+            if not cands:
+                refuse("no conflicting copy of that file")
+            conf = os.path.realpath(os.path.join(root, cands[0]["path"]))
+            vers = os.path.join(root, ".stversions")
+            os.makedirs(vers, exist_ok=True)
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+            loser = orig if keep == "theirs" else conf
+            base = os.path.basename(orig)
+            kept_name = os.path.join(vers, "%s~%s-resolved" % (base, stamp))
+            os.replace(loser, kept_name)
+            if keep == "theirs":
+                os.replace(conf, orig)
+            out = {"ok": True, "kept": keep, "versioned": os.path.relpath(kept_name, root)}
+        else:
+            refuse("unknown verb")
+    except EngineDown as e:
+        print(str(e), file=sys.stderr)
+        log("ENGINE-DOWN", verb)
+        return 3
+    except Unauthorised as e:
+        print(str(e), file=sys.stderr)
+        log("UNAUTHORISED", verb)
+        return 4
+    except BadReply as e:
+        print(str(e), file=sys.stderr)
+        log("BAD-REPLY", verb, str(e))
+        return 5
+    print(json.dumps(out))
+    log("OK", verb, *[a for a in args][:3])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -375,6 +375,7 @@ component_services() { # token -> service names, or rc 1 for an unknown token
       nodered)   echo "node-red" ;;
       ollama)    echo "ollama" ;;
       lanntp)    echo "chrony" ;;
+      syncthing) echo "syncthing@vaultsync" ;;
       mesh)      mesh_unit ;;
       tailscale) echo "tailscaled" ;;
       docker)    echo "docker" ;;
@@ -1316,6 +1317,8 @@ self_test() {
         "$([[ "$(component_services takserver)" == "takserver postgresql" ]] && echo yes || echo no)"
     expect "lanntp maps to chrony"            yes \
         "$([[ "$(component_services lanntp)" == "chrony" ]] && echo yes || echo no)"
+    expect "syncthing maps to its unit"      yes \
+        "$([[ "$(component_services syncthing)" == "syncthing@vaultsync" ]] && echo yes || echo no)"
     expect "nodered token maps to node-red"   yes \
         "$([[ "$(component_services nodered)" == "node-red" ]] && echo yes || echo no)"
     if component_services wibble >/dev/null 2>&1; then

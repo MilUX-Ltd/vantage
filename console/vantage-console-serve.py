@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Vantage - fleet management for TAK.  Copyright (c) 2026 MilUX Ltd.
+# Vantage - the operations console for a whole TAK estate.  Copyright (c) 2026 MilUX Ltd.
 # Source-available under the Vantage Community Licence (see LICENSE): free for
 # non-commercial use; commercial, government, and MOD use require a licence -
 # matt@milux.co.uk
@@ -20,7 +20,7 @@ stays exactly as read-only as before; actions are a separate, deliberately-gated
     is read-only, which is the safe default.
   * Every action is ONE allowlisted operation reached through its OWN scoped forced-command SSH
     key (id_action_*). The console cannot run a free-text command; a cracked console gets no shell.
-  * Credential-minting actions (issuing a cert, enrolling a device) require an operator passphrase.
+  * Credential-minting actions (issuing a cert, enrolling a device) require an operator password.
     Softer actions (restart a unit, push the checker) need only an explicit confirm.
   * Every attempt writes an audit line: who, what, where, when, outcome. Secrets are never logged.
 
@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.58.0"
+VERSION = "2.67.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.58-beta"
+VANTAGE_RELEASE = "0.9.59-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -58,7 +58,7 @@ INSTANCE_FILE = os.environ.get("VANTAGE_CONSOLE_INSTANCE", "/etc/vantage-console
 INSTANCE_DEFAULTS = {
     "product_name": "Vantage",
     "maker": "MilUX",
-    "tagline": "fleet management for TAK",
+    "tagline": "the operations console for a whole TAK estate",
     # the agent is generic until an instance names one, and hidden until one is wired
     # in - a fresh install has nothing for a chat tab to talk to
     "agent_name": "Agent",
@@ -692,12 +692,57 @@ ACTIONS = {
                    "from {target}. It carries no credential, but it decides what a device "
                    "will trust; hand it over as deliberately as a key.",
     },
+    "sync-pair": {
+        # Pairing a box (Spec 010, slice 5): over the install-console key, the box's engine is
+        # used or installed from the pinned package, hardened, given the vault, and introduced
+        # to this console. The id it reports over that authenticated channel is the id pinned.
+        "label": "Pair this box's sync engine", "verb": "install-console",
+        "key": "id_action_install_console", "group": "box", "needs": "",
+        "desc": "Sets up the sync engine on the box and introduces it to this console.",
+        "inputs": [{"name": "master_id", "label": "Master id", "pattern": r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}"},
+                   {"name": "master_addr", "label": "Master address", "pattern": r"tcp://[A-Za-z0-9.:\[\]-]{3,80}|-"}],
+        "confirm": "Pair {target} with this console's sync engine.",
+        "risk": "write", "tag": "Pairs a box", "needs_passphrase": False,
+        "result": "text", "gen_artifact": "pair", "timeout": 240, "keep_output": True,
+    },
+    "sync-retire": {
+        # The box's half of retiring the whole-vault share (Spec 010, slice 7): over the
+        # install-console key the box's engine stops sharing the folder that covers its vault
+        # root with the master and forgets it. Files stay where they are; the per-folder
+        # shares are untouched.
+        "label": "Stop sharing the whole vault on this box", "verb": "install-console",
+        "key": "id_action_install_console", "group": "box", "needs": "",
+        "desc": "The box's engine forgets the folder that covers its whole vault; files stay.",
+        "inputs": [{"name": "master_id", "label": "Master id", "pattern": r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}"}],
+        "confirm": "Stop sharing the whole vault on {target}.",
+        "risk": "write", "tag": "Changes sync scope", "needs_passphrase": False,
+        "result": "text", "gen_artifact": "retire", "timeout": 120, "keep_output": True,
+    },
+    "sync-share": {
+        # The box's half of a tick (Spec 010): over the install-console key, the box's own
+        # copy of console-sync-priv creates the folder at its vault path and shares it back
+        # with the master. No far-side HTTP surface, no token; the same channel the console
+        # arrived by. The master's half is the console's own helper.
+        "label": "Accept a sync folder on this box", "verb": "install-console",
+        "key": "id_action_install_console", "group": "box", "needs": "",
+        "desc": "Creates the matching sync folder on the box and shares it with this console.",
+        "inputs": [{"name": "folder_id", "label": "Folder id", "pattern": r"[a-z0-9][a-z0-9-]{0,63}"},
+                   {"name": "label_b64", "label": "Label", "pattern": r"[A-Za-z0-9+/=]{4,160}"},
+                   {"name": "sub", "label": "Folder", "pattern": r"[A-Za-z0-9][A-Za-z0-9._ -]{0,79}"},
+                   {"name": "master_id", "label": "Master id", "pattern": r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}"},
+                   {"name": "master_addr", "label": "Master address", "pattern": r"tcp://[A-Za-z0-9.:\[\]-]{3,80}|-"},
+                   {"name": "peers_b64", "label": "Peers to introduce", "pattern": r"[A-Za-z0-9+/=]{0,6000}"},
+                   {"name": "drop_b64", "label": "Peers to drop", "pattern": r"[A-Za-z0-9+/=]{0,6000}"}],
+        "confirm": "Share the folder with {target}.",
+        "risk": "write", "tag": "Shares a vault folder", "needs_passphrase": True,
+        "result": "text", "gen_artifact": "sync", "timeout": 120, "keep_output": True,
+    },
     "push-vault": {
         # Rides the install-console key: the far box's forced command permits one verb
         # and demands the installer marker, both of which this payload carries. So the
         # vault reaches every enrolled console box with NO re-enrol and no change on the
         # box - and no far-side HTTP surface, which the deployed edition does not offer.
-        "label": "Send a vault folder to this box", "verb": "install-console",
+        "label": "Copy a vault folder to this box (one-shot, for folders the sync engine does not carry)", "verb": "install-console",
         "key": "id_action_install_console", "group": "box", "needs": "",
         "desc": "Lands one of this console's Knowledge Vault folders on the box, under the "
                 "never-clobber rule: anything newer on the box is kept.",
@@ -1051,6 +1096,9 @@ def enabled_actions(cfg):
     # never had to learn its name for it to work on a console enrolled before it existed
     if "deploy-console" in en:
         en.add("push-vault")
+        en.add("sync-share")
+        en.add("sync-pair")
+        en.add("sync-retire")
     return [a for a in ACTIONS if a in en]   # registry order = safe -> dangerous
 
 
@@ -1278,7 +1326,7 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
             and not verify_passphrase(cfg, passphrase):
         audit({"action": aid, "target": target, "inputs": safe_inputs,
                "result": "DENIED", "reason": "passphrase", "client": client})
-        return 403, {"error": "passphrase incorrect"}
+        return 403, {"error": "operator password incorrect"}
 
     # Push actions carry a file: read it, pipe it on stdin, and send its sha256 as the
     # first argument so the far end can verify what actually arrived. The box re-hashes
@@ -1311,6 +1359,18 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
             return 500, {"error": f"could not build the console installer: {e}"[:200]}
         argv = [hashlib.sha256(payload.encode()).hexdigest(),
                 base64.b64encode(str(bind).encode()).decode()]
+    elif a.get("gen_artifact") == "retire":
+        payload = build_sync_retire_installer(inputs or {})
+        argv = [hashlib.sha256(payload.encode()).hexdigest(),
+                base64.b64encode(b"retire").decode()]
+    elif a.get("gen_artifact") == "pair":
+        payload = build_sync_pair_installer(inputs or {})
+        argv = [hashlib.sha256(payload.encode()).hexdigest(),
+                base64.b64encode(b"pair").decode()]
+    elif a.get("gen_artifact") == "sync":
+        payload = build_sync_share_installer(inputs or {})
+        argv = [hashlib.sha256(payload.encode()).hexdigest(),
+                base64.b64encode(b"sync").decode()]
     elif a.get("gen_artifact") == "vault":
         folder = str((inputs or {}).get("folder", ""))
         vcode, bundle = vault_export(folder)
@@ -1428,7 +1488,7 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
     elif a["result"] == "read":
         out["message"] = (p.stdout or "").rstrip()[:40000]
     else:
-        out["message"] = (p.stdout or "done").strip()[:400]
+        out["message"] = (p.stdout or "done").strip()[:(20000 if a.get("keep_output") else 400)]
     if ok and aid == "federation-connect":
         record_fedlink(target, safe_inputs.get("displayName"),
                        safe_inputs.get("address"), safe_inputs.get("port"))
@@ -2260,6 +2320,20 @@ def vault_push(data, client):
     folder = str(data.get("folder", ""))
     if not re.fullmatch(STORE_NAME_RE, folder):
         return 400, {"error": "bad folder name"}
+    # Spec 010, slice 10: a folder the sync engine carries is not copied by hand. The tick on
+    # the Sync page is the way; this push is the one-shot copy for folders the engine does not
+    # manage (text notes only, newer copy wins, no deletions).
+    _snap, _serr, _ = sync_snapshot()
+    if _snap and pid.startswith("box:"):
+        _f = sync_folder_map(_snap)["by_dir"].get(folder)
+        if _f:
+            _st = load_state()
+            _st = _st[0] if isinstance(_st, tuple) else _st
+            _col = sync_collector(_st or {})
+            _dev = _device_for(pid[4:], _col.get(pid[4:]), _snap, sync_pins())
+            if _dev and str(_dev.get("deviceID", "")) in (_f.get("devices") or []):
+                return 409, {"error": f"{folder} is carried to {pid[4:]} by the sync engine; the tick on the Sync page "
+                                      "is the way. This push is for folders the engine does not manage."}
     if pid.startswith("box:"):
         # An enrolled box: the vault goes over the install-console key this console already
         # holds for it, as an installer payload the box verifies and runs as root. This is
@@ -2846,7 +2920,7 @@ def agent_chat(data, client):
         tools.append({"name": t["name"], "description": t["description"],
                       "input_schema": t.get("inputSchema", {"type": "object", "properties": {}})})
     system = (f"You are {inst['agent_name']}, the assistant built into a {inst['product_name']} "
-              "console that manages a fleet of TAK servers. Use the tools to read the estate's "
+              "console that manages a whole TAK estate. Use the tools to read the estate's "
               "health, servers, credentials and knowledge vault before answering. Be concise "
               "and practical. "
               + {"observe": "You can only read; never claim to have changed anything.",
@@ -3468,9 +3542,1198 @@ def area_root(area):
 STORE_NAME_RE = r"[A-Za-z0-9][A-Za-z0-9._ -]{0,79}"
 STORE_FILE_RE = r"[A-Za-z0-9][A-Za-z0-9._ -]{0,119}\.[A-Za-z0-9]{1,10}"
 SETUP_HELPER = os.environ.get("VANTAGE_CONSOLE_SETUP_HELPER", "/usr/local/bin/console-setup-priv")
+
+# Sharing on this box (Spec 010, ADR-006). The console never holds the engine's key: a root helper
+# does, behind a closed catalogue, and this is the only code that invokes it.
+SYNC_HELPER = os.environ.get("VANTAGE_CONSOLE_SYNC_HELPER", "/usr/local/bin/console-sync-priv")
+SYNC_PINS = os.environ.get("VANTAGE_CONSOLE_SYNC_PINS", "/var/lib/vantage-console/agent/sync-pins.json")
+SYNC_BUDGET = float(os.environ.get("VANTAGE_CONSOLE_SYNC_BUDGET", "6"))
+SYNC_MUTATION_BUDGET = 15
+SYNC_CACHE_TTL = float(os.environ.get("VANTAGE_CONSOLE_SYNC_CACHE_TTL", "5"))
+SYNC_ERROR_WORDS = {
+    "helper_missing": "This console cannot control sharing on this box: a piece of the console software "
+                      "(console-sync-priv) is not installed here. It comes with the console installer.",
+    "helper_denied": "This console is not allowed to control sharing on this box: the permission it needs "
+                     "(the sudoers rule for console-sync-priv) is missing here.",
+    "engine_down": "Sharing is off on this box. Nothing is moving between boxes. "
+                   "What each box already holds is still there and still readable.",
+    "unauthorised": "Sharing would not accept the credentials this console holds for it. Nothing below was read.",
+    "timeout": "Sharing did not answer in time. Nothing below was read this time, so the lines show what was read last.",
+    "bad_reply": "Sharing answered in a way this console could not read. Nothing below was read.",
+    "refused": "The sharing controls on this box the box refused it, code that request.",
+}
+_SYNC_CACHE = {"snap": None, "as_of": "", "err": "", "read_at": 0.0}
+
+
+def sync_helper(*args, timeout=None):
+    """One call to the sync helper. Returns (obj, err): err is one of a closed vocabulary and
+    never an exception string; each value has one operator sentence in SYNC_ERROR_WORDS."""
+    if not os.path.exists(SYNC_HELPER):
+        return None, "helper_missing"
+    try:
+        p = subprocess.run(["sudo", "-n", SYNC_HELPER, *[str(a) for a in args]],
+                           capture_output=True, text=True,
+                           timeout=timeout if timeout is not None else SYNC_BUDGET)
+    except subprocess.TimeoutExpired:
+        return None, "timeout"
+    except Exception:
+        return None, "helper_missing"
+    err_text = (p.stderr or "").strip()
+    if p.returncode == 0:
+        try:
+            return json.loads(p.stdout or ""), "ok"
+        except ValueError:
+            return None, "bad_reply"
+    if p.returncode == 2:
+        return {"error": err_text[:300]}, "refused"
+    if p.returncode == 3:
+        return None, "engine_down"
+    if p.returncode == 4:
+        return None, "unauthorised"
+    if p.returncode == 1 and "sudo" in err_text:
+        return None, "helper_denied"
+    if p.returncode == 127 or "command not found" in err_text:
+        return None, "helper_missing"
+    return None, "bad_reply"
+
+
+def sync_snapshot(force=False):
+    """The engine's own account, cached for a few seconds and stamped. A refresh that runs out
+    of budget keeps the last snapshot and says the rows were not read, never that they are
+    zero. Returns (snapshot_or_None, err, as_of)."""
+    now = _time.time()
+    c = _SYNC_CACHE
+    if not force and c["snap"] is not None and now - c["read_at"] < SYNC_CACHE_TTL:
+        return c["snap"], c["err"], c["as_of"]
+    obj, err = sync_helper("status")
+    if err == "ok" and isinstance(obj, dict):
+        c.update({"snap": obj, "as_of": str(obj.get("as_of", "")), "err": "", "read_at": now})
+        return obj, "", c["as_of"]
+    c["err"] = err
+    c["read_at"] = now
+    return c["snap"], err, c["as_of"]
+
+
+def _hhmm(iso):
+    iso = str(iso or "")
+    m = re.search(r"T(\d\d:\d\d)", iso)
+    return (m.group(1) + " UTC") if m else (iso[:16] or "an unknown time")
+
+
+def sync_pins():
+    try:
+        with open(SYNC_PINS) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _device_for(box, t, snapshot, pins):
+    """Which engine device is this box: the pinned id, a device named like the box or its label,
+    or a device whose address is the host the console reaches the box on. None if nothing fits."""
+    devs = snapshot.get("devices", []) or []
+    by_id = {str(d.get("deviceID", "")): d for d in devs}
+    pinned = str(pins.get(box, "") or "")
+    if pinned and pinned in by_id:
+        return by_id[pinned]
+    names = {str(box).lower()}
+    host = ""
+    if isinstance(t, dict):
+        if t.get("label"):
+            names.add(str(t["label"]).lower())
+        host = str(t.get("_host", "") or "")
+    for d in devs:
+        if str(d.get("name", "")).lower() in names:
+            return d
+    if host:
+        for d in devs:
+            a = str(d.get("address", ""))
+            if a.startswith("tcp://") and a[6:].rsplit(":", 1)[0].strip("[]") == host:
+                return d
+    return None
+
+
+def sync_rows(snapshot, collector, pins=None):
+    """Pure: the same snapshot and collector state give the same rows. One row per box per
+    folder the master holds. 'Shared' comes from the master's device list, 'connected' from
+    the engine's connections with its time, and the claim from completion with its time: three
+    facts with sources, never a tick with no time on it (Spec 010, AC1)."""
+    pins = pins if pins is not None else sync_pins()
+    snapshot = snapshot or {}
+    as_of = str(snapshot.get("as_of", ""))
+    boxes = list(collector.keys()) if isinstance(collector, dict) else []
+    matched = set()
+    for box in boxes:
+        d = _device_for(box, collector.get(box), snapshot, pins)
+        if d:
+            matched.add(str(d.get("deviceID", "")))
+    rows = []
+    for f in snapshot.get("folders", []) or []:
+        fid = str(f.get("id", ""))
+        comp = (snapshot.get("completion", {}) or {}).get(fid, {}) or {}
+        # a device the engine shares this folder with that is none of this console's boxes is still shown
+        strangers = [d for d in (snapshot.get("devices", []) or [])
+                     if str(d.get("deviceID", "")) in (f.get("devices") or []) and str(d.get("deviceID", "")) not in matched]
+        for box in boxes + [None] * len(strangers):
+            if box is None:
+                dev = strangers.pop(0)
+                did = str(dev.get("deviceID", ""))
+                box = (str(dev.get("name", "")) or did[:7]) + " (not one of this console's boxes)"
+                pinned = ""
+            else:
+                dev = _device_for(box, collector.get(box), snapshot, pins)
+                pinned = str(pins.get(box, "") or "")
+                did = str(dev.get("deviceID", "")) if dev else ""
+            row = {"box": box, "folder": fid, "label": f.get("label", fid), "as_of": as_of,
+                   "shared": bool(did) and did in (f.get("devices") or []),
+                   "connected": bool(dev.get("connected")) if dev else None,
+                   "alarm": False, "conflict": False, "words": ""}
+            if dev and pinned and did and pinned != did:
+                row["alarm"] = True
+                row["words"] = (f"This box's identity has changed: it was {pinned[:7]}…, it now says {did[:7]}…. "
+                                "Nothing is shared with it until you confirm the new identity on the box's own screen.")
+                rows.append(row)
+                continue
+            if not row["shared"]:
+                row["words"] = "not shared"
+            else:
+                c = comp.get(did, {}) or {}
+                need = int(c.get("needItems", 0) or 0)
+                at = _hhmm(c.get("at", as_of))
+                row["outstanding"] = need
+                if row["connected"]:
+                    since = _hhmm(dev.get("connected_since", ""))
+                    row["words"] = (f"Connected since {since}. Had everything at {at}." if need == 0
+                                    else f"Connected since {since}. {need} item{'s' if need != 1 else ''} still to arrive at {at}.")
+                else:
+                    seen = _hhmm(dev.get("last_seen", ""))
+                    row["words"] = (f"Not connected since {seen}. Had everything then." if need == 0
+                                    else f"Not connected since {seen}. {need} item{'s' if need != 1 else ''} were still to arrive then.")
+            confs = [c for c in (f.get("conflicts") or []) if not did or str(c.get("modified_by", "")) in (did[:7], did)]
+            if confs and row["shared"]:
+                row["conflict"] = True
+                c0 = confs[0]
+                row["words"] += (f" Two versions of {c0.get('original')}: this box's, and {box}'s from "
+                                 f"{_hhmm(c0.get('at'))}. Choose which to keep." +
+                                 (f" {len(confs)} files in this folder have two versions." if len(confs) > 1 else ""))
+            rows.append(row)
+    return rows
+
+
+def sync_collector(state):
+    """The boxes the Sync page reasons about: this console's sync boxes, each carrying the host
+    the console reaches it on so the engine's device can be matched by address."""
+    cfg = load_actions_config()
+    tcfg = cfg.get("targets", {}) or {}
+    out = {}
+    names = sync_boxes(state, tcfg)
+    for t in state.get("targets", []) or []:
+        name = t.get("name")
+        if name in names:
+            d = dict(t)
+            d["_host"] = str(tcfg.get(name, "")).rsplit("@", 1)[-1]
+            out[name] = d
+    return out
+
+
+def sync_state_api(state):
+    """GET /api/sync/state: the engine's account and the rows, stamped; the error sentence when
+    it could not be read. Never a proxy: the caller names nothing about the engine."""
+    snap, err, as_of = sync_snapshot()
+    collector = sync_collector(state)
+    out = {"as_of": as_of, "err": err, "words": SYNC_ERROR_WORDS.get(err, "") if err else "",
+           "unread": bool(err), "rows": sync_rows(snap, collector) if snap else [],
+           "engine": {"version": (snap or {}).get("version", ""), "myID": (snap or {}).get("myID", ""),
+                      "restart_required": bool((snap or {}).get("restart_required"))} if snap else None,
+           "conform": (snap or {}).get("conform") if snap else None}
+    return 200, out
+
+
+def console_mode():
+    return load_instance().get("console_mode", "admin")
+
+
+def sync_gate(data, cfg=None):
+    """The Sync page asks for no password (Matt, 4 September 2026: "it adds too much friction").
+    Client mode cannot share; otherwise the signed-in session that reached the page is the gate,
+    and every change is audited. Returns (code, msg) with code 0 when allowed."""
+    if console_mode() == "client":
+        return 403, "This console runs as a client of its own box; sharing is decided on the estate console."
+    if data.get("_session_ok") or AUTH_OPEN_MODE or not auth_configured():
+        return 0, ""
+    return 401, "sign in first"
+
+
+def vault_dirs():
+    try:
+        return sorted(d for d in os.listdir(VAULT_ROOT)
+                      if os.path.isdir(os.path.join(VAULT_ROOT, d)) and not d.startswith("."))
+    except OSError:
+        return []
+
+
+def sync_slug(name):
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")[:56] or "folder"
+    return "vault-" + slug
+
+
+def dir_size(path, cap=20000):
+    total, n = 0, 0
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in (".stversions", ".stfolder")]
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+            n += 1
+            if n >= cap:
+                return total
+    return total
+
+
+def sync_folder_map(snapshot):
+    """Which engine folder is the whole vault, which is one deployment directory, which is
+    something else: by resolved path, never by name."""
+    root = os.path.realpath(VAULT_ROOT)
+    out = {"whole_root": None, "by_dir": {}, "other": []}
+    for f in (snapshot or {}).get("folders", []) or []:
+        p = os.path.realpath(str(f.get("path", "")))
+        if p == root:
+            out["whole_root"] = f
+        elif os.path.dirname(p) == root:
+            out["by_dir"][os.path.basename(p)] = f
+        else:
+            out["other"].append(f)
+    return out
+
+
+def _master_addr():
+    host = BIND.rsplit(":", 1)[0] if ":" in BIND and not BIND.startswith("[") else BIND
+    if host in ("", "127.0.0.1", "0.0.0.0", "localhost", "::1"):
+        return "-"
+    return "tcp://%s:22000" % host
+
+
+def build_sync_share_installer(inputs):
+    """The box's half of a tick, as a bash payload over the install-console key. It carries the
+    helper itself so a box that has never seen one comes up with it, takes the box's engine
+    key into the helper's key file once, creates the folder at the box's own vault path and
+    shares it with the master. Prints SYNC-SHARE-JSON for the console to read back."""
+    hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions", "console-sync-priv")
+    if not os.path.isfile(hp):
+        hp = "/usr/local/bin/console-sync-priv"
+    with open(hp, "rb") as fh:
+        helper_b64 = base64.b64encode(fh.read()).decode()
+    lines = [helper_b64[i:i + 76] for i in range(0, len(helper_b64), 76)]
+    fid = str(inputs.get("folder_id", ""))
+    lab = str(inputs.get("label_b64", ""))
+    sub = str(inputs.get("sub", ""))
+    mid = str(inputs.get("master_id", ""))
+    addr = str(inputs.get("master_addr", "-"))
+    peers = _sync_peer_list(inputs.get("peers_b64", ""))
+    drops = _sync_peer_list(inputs.get("drop_b64", ""))
+    peer_lines = "".join(
+        "if ! /usr/local/bin/console-sync-priv device-list | grep -q '" + p["id"] + "'; then\n"
+        "  /usr/local/bin/console-sync-priv device-add '" + p["id"] + "' '" + p["name"] + "' '" + p["addr"] + "' >/dev/null\n"
+        "fi\n"
+        "/usr/local/bin/console-sync-priv folder-share '" + fid + "' '" + p["id"] + "' >/dev/null\n"
+        for p in peers)
+    drop_lines = "".join(
+        "/usr/local/bin/console-sync-priv folder-unshare '" + fid + "' '" + p["id"] + "' >/dev/null || true\n"
+        for p in drops)
+    return (
+        "#!/usr/bin/env bash\n"
+        "# VANTAGE-CONSOLE-INSTALLER - accepts one sync folder on this box (Spec 010).\n"
+        "# Sent by the estate console over the install-console key. Creates the folder at this\n"
+        "# box's vault path in the box's own sync engine and shares it with the master.\n"
+        "set -euo pipefail\n"
+        "root=\"${VANTAGE_CONSOLE_VAULT:-}\"\n"
+        "if [[ -z \"$root\" ]]; then\n"
+        "  for u in /etc/systemd/system/vantage-console-deployed.service /etc/systemd/system/vantage-console.service; do\n"
+        "    [[ -f \"$u\" ]] && root=$(grep -m1 '^Environment=VANTAGE_CONSOLE_VAULT=' \"$u\" | cut -d= -f3-) && [[ -n \"$root\" ]] && break\n"
+        "  done\n"
+        "fi\n"
+        "root=\"${root:-/srv/vault/Deployed}\"\n"
+        "want=$(mktemp) && base64 -d > \"$want\" <<'B64SYNC'\n" + "\n".join(lines) + "\nB64SYNC\n"
+        "if [[ ! -x /usr/local/bin/console-sync-priv ]] || ! cmp -s \"$want\" /usr/local/bin/console-sync-priv; then\n"
+        "  install -m 0755 \"$want\" /usr/local/bin/console-sync-priv\n"
+        "fi\n"
+        "rm -f \"$want\"\n"
+        "install -d -m 0750 /var/lib/vantage-sync /etc/vantage\n"
+        "[[ -f /var/lib/vantage-sync/sync-paths.json ]] || printf '{\"vault\": \"%s\"}\\n' \"$root\" > /var/lib/vantage-sync/sync-paths.json\n"
+        "if [[ ! -s /etc/vantage/sync-api.key ]]; then\n"
+        "  for cfg in /var/lib/vaultsync/syncthing/config.xml /home/USER/.local/state/syncthing/config.xml /home/USER/.config/syncthing/config.xml; do\n"
+        "    [[ -r \"$cfg\" ]] || continue\n"
+        "    key=$(sed -n 's/.*<apikey>\\([^<]*\\)<\\/apikey>.*/\\1/p' \"$cfg\" | head -1)\n"
+        "    [[ -n \"$key\" ]] && printf '%s\\n' \"$key\" | install -m 0600 -o root -g root /dev/stdin /etc/vantage/sync-api.key && break\n"
+        "  done\n"
+        "fi\n"
+        "mkdir -p \"$root/" + sub.replace('"', '') + "\"\n"
+        "if ! /usr/local/bin/console-sync-priv device-list | grep -q '" + mid + "'; then\n"
+        + ("  /usr/local/bin/console-sync-priv device-add '" + mid + "' office '" + addr + "'\n" if addr != "-" else
+           "  echo 'SYNC-SHARE-ERROR this box does not know the master and no address was given'; exit 3\n")
+        + "fi\n"
+        "/usr/local/bin/console-sync-priv folder-create '" + fid + "' '" + lab + "' 'vault/" + sub.replace("'", "") + "' sendreceive >/dev/null\n"
+        "out=$(/usr/local/bin/console-sync-priv folder-share '" + fid + "' '" + mid + "')\n"
+        + peer_lines + drop_lines +
+        "echo \"SYNC-SHARE-JSON $out\"\n")
+
+
+def _sync_peer_list(b64):
+    """Peers for a box's engine, as [{id, name, addr}], each validated by shape; anything else
+    is dropped rather than written into a script."""
+    out = []
+    try:
+        raw = json.loads(base64.b64decode(str(b64 or "") or b"W10=").decode()) if b64 else []
+    except Exception:
+        return out
+    for p in raw if isinstance(raw, list) else []:
+        pid = str((p or {}).get("id", "")); name = str((p or {}).get("name", "")); addr = str((p or {}).get("addr", "-"))
+        if (re.fullmatch(r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}", pid) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}", name)
+                and re.fullmatch(r"tcp://[A-Za-z0-9.:\[\]-]{3,80}|-", addr)):
+            out.append({"id": pid, "name": name, "addr": addr})
+    return out
+
+
+def sync_folder_members(f, snap, collector, pins):
+    """The boxes holding this folder, as peers: name, pinned or matched id, and the address the
+    console reaches them on. The master is not a peer; the boxes already know it."""
+    members = []
+    for bx in collector:
+        dev = _device_for(bx, collector.get(bx), snap, pins)
+        did = str(dev.get("deviceID", "")) if dev else ""
+        if did and did in (f.get("devices") or []):
+            members.append({"id": did, "name": bx, "addr": "tcp://%s:22000" % str(collector[bx].get("_host", ""))})
+    return members
+
+
+def _read_pins():
+    """console/pins.sh beside this file (or in the library): the third-party versions the console
+    pins, shared with the baseline, the fetch script and the pairing payload."""
+    out = {}
+    for cand in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "pins.sh"), "/usr/local/lib/vantage-console/pins.sh"):
+        try:
+            with open(cand, encoding="utf-8") as fh:
+                for line in fh:
+                    m = re.match(r'^([A-Z][A-Z0-9_]*)="([^"]*)"', line)
+                    if m:
+                        out[m.group(1)] = m.group(2)
+            if out:
+                break
+        except OSError:
+            continue
+    return out
+
+
+_PINS = _read_pins()
+SYNC_ENGINE_PIN = _PINS.get("SYNCTHING_VER", "v2.1.3")
+SYNC_ENGINE_FILE = _PINS.get("SYNCTHING_FILE", "syncthing-linux-amd64-v2.1.3.tar.gz")
+SYNC_ENGINE_SHA = _PINS.get("SYNCTHING_SHA256", "f929eb8e5b72a85543eeeefb2c38f34a68e0c530e70758a2905b78840c76602c")
+
+
+def sync_engine_package():
+    """The pinned engine on this console's software shelf, or None. Checked by hash, so a file
+    of the right name and the wrong content is not a package."""
+    for cand in (os.path.join(STORE_ROOT, "software", SYNC_ENGINE_FILE), os.path.join(STORE_ROOT, SYNC_ENGINE_FILE)):
+        try:
+            h = hashlib.sha256()
+            with open(cand, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            if h.hexdigest() == SYNC_ENGINE_SHA:
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def sync_send_engine(box, dest, log=None):
+    """Stream the pinned engine to a box's package inbox over the package-push key, the same
+    hash-named route the TAK upgrade uses; a package already held is not streamed again.
+    Returns (ok, words)."""
+    src = sync_engine_package()
+    if not src:
+        return False, (f"the pinned engine {SYNC_ENGINE_FILE} is not on this console's software shelf; "
+                       "it ships with every Vantage release and can be added from the Software page")
+    push_key = os.path.join(ACTION_KEYS, "id_action_pkgpush")
+    if not os.path.exists(push_key):
+        return False, "this console holds no package-push key for the estate"
+    base = ["ssh", "-i", push_key, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new", dest]
+    try:
+        h = subprocess.run(base + [f"have-package {SYNC_ENGINE_SHA}"], capture_output=True, text=True, timeout=30)
+        if h.returncode == 0 and "HELD" in (h.stdout or ""):
+            return True, f"{box} already holds the pinned engine package"
+        with open(src, "rb") as fh:
+            p = subprocess.run(base + [f"push-package {SYNC_ENGINE_SHA} {SYNC_ENGINE_FILE}"],
+                               stdin=fh, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        return False, f"sending the engine package to {box} ran out of time"
+    except OSError as ex:
+        return False, f"could not reach {box} to send the engine package: {ex}"
+    if p.returncode != 0:
+        return False, f"{box} the box refused it, code the engine package: {((p.stderr or p.stdout) or '').strip()[:200]}"
+    return True, f"sent the pinned engine package to {box}"
+_SYNC_INFLIGHT = {}   # box -> started (epoch), while a pair or share is running
+
+
+def sync_pairlog_path():
+    return os.path.join(os.path.dirname(SYNC_PINS), "sync-pair-log.json")
+
+
+def sync_pairlog():
+    try:
+        with open(sync_pairlog_path()) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def sync_last_path():
+    return os.path.join(os.path.dirname(SYNC_PINS), "sync-last.json")
+
+
+def sync_last_set(action, ok, words):
+    """The last press on the Sync page, kept so the page can show it after it reloads."""
+    try:
+        os.makedirs(os.path.dirname(sync_last_path()), exist_ok=True)
+        tmp = sync_last_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": action,
+                       "ok": bool(ok), "words": str(words)[:400]}, fh)
+        os.replace(tmp, sync_last_path())
+    except OSError:
+        pass
+
+
+def sync_last():
+    try:
+        with open(sync_last_path()) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def sync_pairlog_set(box, ok, words):
+    d = sync_pairlog()
+    d[str(box)] = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "ok": bool(ok), "words": str(words)[:300]}
+    try:
+        os.makedirs(os.path.dirname(sync_pairlog_path()), exist_ok=True)
+        tmp = sync_pairlog_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(d, fh, indent=1)
+        os.replace(tmp, sync_pairlog_path())
+    except OSError:
+        pass
+
+
+def build_sync_pair_installer(inputs):
+    """The pairing payload from its template: the helper embedded, the master's id and address
+    and the pinned engine version filled in. Nothing else is caller-supplied."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    tp = os.path.join(here, "sync-pair-payload.sh")
+    if not os.path.isfile(tp):
+        tp = "/usr/local/lib/vantage-console/sync-pair-payload.sh"
+    with open(tp) as fh:
+        tmpl = fh.read()
+    hp = os.path.join(here, "actions", "console-sync-priv")
+    if not os.path.isfile(hp):
+        hp = "/usr/local/bin/console-sync-priv"
+    with open(hp, "rb") as fh:
+        helper_b64 = base64.b64encode(fh.read()).decode()
+    lines = "\n".join(helper_b64[i:i + 76] for i in range(0, len(helper_b64), 76))
+    mid = str(inputs.get("master_id", ""))
+    addr = str(inputs.get("master_addr", "-"))
+    if not re.fullmatch(r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}", mid) or not re.fullmatch(r"tcp://[A-Za-z0-9.:\[\]-]{3,80}|-", addr):
+        raise ValueError("pair inputs out of shape")
+    return (tmpl.replace("__MASTER_ID__", mid).replace("__MASTER_ADDR__", addr)
+            .replace("__PIN__", SYNC_ENGINE_PIN).replace("__PKG_SHA__", SYNC_ENGINE_SHA)
+            .replace("__HELPER_B64__", lines))
+
+
+def sync_holders_of(rel):
+    """Which boxes hold a sync folder covering this vault path (the top-level folder it sits
+    in). Returns (boxes, note): boxes empty and a note when the engine could not be read."""
+    rel = str(rel or "").strip("/")
+    if not rel:
+        return [], ""
+    top = rel.split("/", 1)[0]
+    snap, err, _ = sync_snapshot()
+    if not snap:
+        return [], (SYNC_ERROR_WORDS.get(err, "the engine could not be read") if err else "the engine has not been read yet")
+    fmap = sync_folder_map(snap)
+    f = fmap["by_dir"].get(top)
+    holders = list((f or {}).get("devices") or [])
+    wr = fmap.get("whole_root")
+    if wr:
+        holders += [d for d in (wr.get("devices") or []) if d not in holders]
+    if not holders:
+        return [], ""
+    state = load_state()
+    state = state[0] if isinstance(state, tuple) else state
+    collector = sync_collector(state or {})
+    pins = sync_pins()
+    names = []
+    for did in holders:
+        who = next((bx for bx in collector if (_device_for(bx, collector.get(bx), snap, pins) or {}).get("deviceID") == did), None)
+        names.append(who or did[:7])
+    return names, ""
+
+
+def sync_guard(rel, what):
+    """Refuse to rename or delete a vault FOLDER a box holds through the sync engine: the
+    folder is the unit of sharing. Notes inside it rename and delete freely; that is what the
+    two-way sync carries. Returns (code, error) or (0, '')."""
+    if "/" in str(rel or "").strip("/"):
+        return 0, ""
+    names, note = sync_holders_of(rel)
+    if names:
+        return 409, (f"{', '.join(names)} hold{'s' if len(names) == 1 else ''} this folder through the sync engine; "
+                     f"{what} here would {what} it there too. Stop sharing it first.")
+    return 0, ""
+
+
+def build_sync_retire_installer(inputs):
+    """The box's half of retiring the whole-vault share: find the engine folder whose path is
+    the box's vault root, stop sharing it with the master, and take it out of the engine. Files
+    stay. Prints SYNC-RETIRE-JSON."""
+    mid = str(inputs.get("master_id", ""))
+    if not re.fullmatch(r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}", mid):
+        raise ValueError("retire inputs out of shape")
+    hp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "actions", "console-sync-priv")
+    if not os.path.isfile(hp):
+        hp = "/usr/local/bin/console-sync-priv"
+    with open(hp, "rb") as fh:
+        helper_b64 = base64.b64encode(fh.read()).decode()
+    lines = [helper_b64[i:i + 76] for i in range(0, len(helper_b64), 76)]
+    return (
+        "#!/usr/bin/env bash\n"
+        "# VANTAGE-CONSOLE-INSTALLER - retires the whole-vault share on this box (Spec 010).\n"
+        "set -euo pipefail\n"
+        "want=$(mktemp) && base64 -d > \"$want\" <<'B64SYNC'\n" + "\n".join(lines) + "\nB64SYNC\n"
+        "if [[ ! -x /usr/local/bin/console-sync-priv ]] || ! cmp -s \"$want\" /usr/local/bin/console-sync-priv; then install -m 0755 \"$want\" /usr/local/bin/console-sync-priv; fi\n"
+        "rm -f \"$want\"\n"
+        "root=\"${VANTAGE_CONSOLE_VAULT:-}\"\n"
+        "if [[ -z \"$root\" ]]; then\n"
+        "  for u in /etc/systemd/system/vantage-console-deployed.service /etc/systemd/system/vantage-console.service; do\n"
+        "    [[ -f \"$u\" ]] && root=$(grep -m1 '^Environment=VANTAGE_CONSOLE_VAULT=' \"$u\" | cut -d= -f3-) && [[ -n \"$root\" ]] && break\n"
+        "  done\n"
+        "fi\n"
+        "root=\"${root:-/srv/vault/Deployed}\"\n"
+        "[[ -x /usr/local/bin/console-sync-priv ]] || { echo 'SYNC-RETIRE-ERROR this box has no sync helper; pair it first'; exit 3; }\n"
+        "fid=$(/usr/local/bin/console-sync-priv folder-list | python3 -c 'import json,sys,os; r=os.path.realpath(sys.argv[1]); print(next((f[\"id\"] for f in json.load(sys.stdin) if os.path.realpath(f.get(\"path\",\"\"))==r), \"\"))' \"$root\")\n"
+        "if [[ -z \"$fid\" ]]; then echo 'SYNC-RETIRE-JSON {\"retired\": \"\", \"note\": \"no folder covers the vault root on this box\"}'; exit 0; fi\n"
+        "/usr/local/bin/console-sync-priv folder-unshare \"$fid\" '" + mid + "' >/dev/null || true\n"
+        "/usr/local/bin/console-sync-priv folder-retire \"$fid\" >/dev/null\n"
+        "echo \"SYNC-RETIRE-JSON {\\\"retired\\\": \\\"$fid\\\", \\\"files\\\": \\\"kept at $root\\\"}\"\n")
+
+
+def sync_pins_set(box, did):
+    pins = sync_pins()
+    pins[str(box)] = str(did)
+    try:
+        os.makedirs(os.path.dirname(SYNC_PINS), exist_ok=True)
+        tmp = SYNC_PINS + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(pins, fh, indent=1)
+        os.replace(tmp, SYNC_PINS)
+        return True
+    except OSError:
+        return False
+
+
+def sync_api(path, data, client):
+    """The sync routes (Spec 010). Never a proxy: every request names a folder and a box in
+    the console's own words and the helper is the only thing that touches the engine. Every
+    answer is also kept as the page's last line, so a reload does not lose it."""
+    code, res = _sync_api(path, data, client)
+    try:
+        words = (res or {}).get("words") or (res or {}).get("error") or ""
+        if words:
+            sync_last_set(path.rsplit("/", 1)[-1], code == 200, words)
+    except Exception:
+        pass
+    return code, res
+
+
+def _sync_api(path, data, client):
+    cfg = load_actions_config()
+    code, msg = sync_gate(data, cfg)
+    if code:
+        return code, {"error": msg}
+    if path == "/api/sync/engine":
+        op = str(data.get("op", "") or "")
+        if op not in ("start", "stop", "enable"):
+            return 400, {"error": "This page can only turn sharing on, turn it off, or set it to turn on automatically."}
+        obj, herr = sync_helper("engine-" + op, timeout=SYNC_MUTATION_BUDGET)
+        audit({"action": "sync-engine", "target": "-", "result": "OK" if herr == "ok" else "ERROR",
+               "detail": op, "client": client})
+        _SYNC_CACHE["read_at"] = 0.0
+        if herr != "ok":
+            return 502, {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
+        return 200, {"ok": True, "words": {"start": "Sharing is on, and will come back on by itself after a restart. Boxes reconnect and catch up on their own.",
+                                            "stop": "Sharing is off. Nothing moves between boxes until you turn it back on. The folders stay shared and every box keeps what it has.",
+                                            "enable": "Sharing will come back on by itself after a restart."}[op]}
+    snap, err, as_of = sync_snapshot(force=True)
+    if err or not snap:
+        return 503, {"error": SYNC_ERROR_WORDS.get(err, "the engine could not be read")}
+    fmap = sync_folder_map(snap)
+    state = load_state()
+    if isinstance(state, tuple):
+        state = state[0] or {}
+    targets = {t.get("name"): t for t in (state or {}).get("targets", []) if t.get("name")}
+    tcfg = cfg.get("targets", {}) or {}
+
+    def _folder_from(data):
+        fid = str(data.get("folder", "") or "")
+        d = str(data.get("dir", "") or "")
+        if not fid and d and d in fmap["by_dir"]:
+            fid = fmap["by_dir"][d]["id"]
+        f = next((x for x in snap.get("folders", []) if x.get("id") == fid), None)
+        return fid, f
+
+    def _ensure_folder(d):
+        """A folder the vault holds becomes a sync folder the first time a box is ticked for it."""
+        if d in fmap["by_dir"]:
+            return fmap["by_dir"][d]["id"], fmap["by_dir"][d], ""
+        if d not in vault_dirs():
+            return "", None, "no such folder in the vault"
+        fid = sync_slug(d)
+        lab = base64.b64encode(d.encode()).decode()
+        obj, herr = sync_helper("folder-create", fid, lab, "vault/" + d, "sendreceive", timeout=SYNC_MUTATION_BUDGET)
+        audit({"action": "sync-create", "target": "-", "result": "OK" if herr == "ok" else "ERROR",
+               "detail": f"folder={fid} dir={d}", "client": client})
+        if herr != "ok":
+            return "", None, ((obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr))
+        f = {"id": fid, "label": d, "path": os.path.join(VAULT_ROOT, d), "type": "sendreceive", "devices": [],
+             "ignoreDelete": True, "versioning": "staggered", "conflicts": []}
+        fmap["by_dir"][d] = f
+        return fid, f, ""
+
+    if path == "/api/sync/protect":
+        fid, f = _folder_from(data)
+        if not f:
+            return 400, {"error": "Sharing does not know that folder."}
+        obj, herr = sync_helper("folder-protect", fid, timeout=SYNC_MUTATION_BUDGET)
+        audit({"action": "sync-protect", "target": "-", "result": "OK" if herr == "ok" else "ERROR",
+               "detail": f"folder={fid}", "client": client})
+        _SYNC_CACHE["read_at"] = 0.0
+        if herr != "ok":
+            return 502, {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
+        return 200, {"ok": True, "words": f"{f.get('label') or fid} now keeps every earlier version on this box. A deletion sent by a box will not remove anything here."}
+
+    if path == "/api/sync/resolve":
+        fid, f = _folder_from(data)
+        if not f:
+            return 400, {"error": "Sharing does not know that folder."}
+        sub = str(data.get("path", "") or "")
+        keep = str(data.get("keep", "") or "")
+        if keep not in ("mine", "theirs") or not sub or ".." in sub.split("/") or sub.startswith("/"):
+            return 400, {"error": "Say which copy to keep: this box's or the other box's."}
+        obj, herr = sync_helper("conflict-resolve", fid, sub, keep, timeout=SYNC_MUTATION_BUDGET)
+        audit({"action": "sync-resolve", "target": "-", "result": "OK" if herr == "ok" else "ERROR",
+               "detail": f"folder={fid} path={sub[:80]} keep={keep}", "client": client})
+        _SYNC_CACHE["read_at"] = 0.0
+        if herr != "ok":
+            return (409 if herr == "refused" else 502), {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
+        return 200, {"ok": True, "words": f"Kept {'this box' if keep == 'mine' else 'the other box'}'s copy of {sub}. The other copy is with the earlier versions on this box."}
+
+    if path == "/api/sync/harden":
+        obj, herr = sync_helper("engine-harden", timeout=SYNC_MUTATION_BUDGET)
+        audit({"action": "sync-harden", "target": "-", "result": "OK" if herr == "ok" else "ERROR", "client": client})
+        _SYNC_CACHE["read_at"] = 0.0
+        if herr != "ok":
+            return 502, {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
+        words = "Announcing is off, and so are relay servers, router traversal and usage reporting. Boxes are reached only at the addresses set here."
+        if isinstance(obj, dict) and obj.get("restart_required"):
+            words += " Sharing needs a restart before it takes effect."
+        return 200, {"ok": True, "words": words}
+
+    if path == "/api/sync/retire":
+        fid, f = _folder_from(data)
+        if not f:
+            return 400, {"error": "Sharing does not know that folder."}
+        # the migration in one press: stop sharing it with every box, tell each box to drop
+        # its copy of the folder, then drop it here. Files stay on every side; the per-folder
+        # shares are untouched. A box that cannot be reached is named and the rest proceeds.
+        holders = list(f.get("devices") or [])
+        pins = sync_pins()
+        collector = sync_collector(state)
+        done, failed = [], []
+        for did in holders:
+            box_name = next((bx for bx in collector if (_device_for(bx, collector.get(bx), snap, pins) or {}).get("deviceID") == did), None)
+            obj, herr = sync_helper("folder-unshare", fid, did, timeout=SYNC_MUTATION_BUDGET)
+            if herr != "ok":
+                failed.append(f"{box_name or did[:7]}: could not stop sharing here ({herr})")
+                continue
+            if box_name:
+                try:
+                    bcode, bres = run_action("sync-retire", box_name, {"master_id": str(snap.get("myID", ""))}, None, True, client, passphrase_ok=True)
+                except Exception as ex:
+                    bcode, bres = 500, {"error": f"Something went wrong on this box and the step did not finish. The detail is in the audit log."}
+                btext = bres if isinstance(bres, str) else str((bres or {}).get("message") or (bres or {}).get("error") or "")
+                if bcode == 200 and "SYNC-RETIRE-JSON" in btext:
+                    done.append(box_name)
+                else:
+                    failed.append(f"{box_name}: its copy of the folder is still in its engine ({btext.strip()[-120:] or bcode})")
+            else:
+                done.append(did[:7])
+        obj, herr = sync_helper("folder-retire", fid, timeout=SYNC_MUTATION_BUDGET)
+        audit({"action": "sync-retire", "target": ",".join(done) or "-", "result": "OK" if herr == "ok" else "ERROR",
+               "detail": f"folder={fid} boxes={','.join(done)} failed={len(failed)}", "client": client})
+        _SYNC_CACHE["read_at"] = 0.0
+        if herr == "refused":
+            return 409, {"error": (obj or {}).get("error", "refused") + ("; " + "; ".join(failed) if failed else "")}
+        if herr != "ok":
+            return 502, {"error": SYNC_ERROR_WORDS.get(herr, herr)}
+        words = ("The whole vault is no longer shared as one lump here" + (f" or on {', '.join(done)}" if done else "")
+                 + ". Every box keeps the files it already has; nothing is deleted.")
+        if failed:
+            words += " Not finished everywhere: " + "; ".join(failed) + "."
+        return 200, {"ok": True, "words": words, "boxes": done, "failed": failed}
+
+    box = str(data.get("box", "") or "")
+    if box not in targets or box not in tcfg or box not in sync_boxes(state, tcfg):
+        return 400, {"error": "No box of that name on this console."}
+    if path != "/api/sync/pair":
+        pass
+    fid, f = _folder_from(data) if path != "/api/sync/pair" else ("", None)
+    if not f and path == "/api/sync/share":
+        fid, f, ferr = _ensure_folder(str(data.get("dir", "") or ""))
+        if ferr:
+            return (400 if "no such" in ferr else 502), {"error": ferr}
+    if not f and path != "/api/sync/pair":
+        return 409, {"error": "That folder is not one that sharing manages."}
+    pins = sync_pins()
+    collector = sync_collector(state)
+    dev = _device_for(box, collector.get(box), snap, pins)
+    did = str(dev.get("deviceID", "")) if dev else ""
+    named = next((d for d in snap.get("devices", []) if str(d.get("name", "")).lower() == box.lower()), None)
+    if named and pins.get(box) and pins.get(box) != str(named.get("deviceID", "")):
+        return 409, {"error": f"{box}'s identity has changed. That can mean the box was rebuilt. It can also mean this is not the box you think it is. Check its identity on the box's own screen before you share anything with it."}
+    if not did and path != "/api/sync/pair":
+        return 409, {"error": f"{box} is not paired yet. Press Pair beside its name."}
+
+    if path == "/api/sync/pair":
+        t = targets[box]
+        host = str(tcfg.get(box, "")).rsplit("@", 1)[-1]
+        inputs = {"master_id": str(snap.get("myID", "")), "master_addr": _master_addr()}
+        _SYNC_INFLIGHT[box] = _time.time()
+        try:
+            bcode, bres = run_action("sync-pair", box, inputs, None, True, client, passphrase_ok=True)
+        except Exception as ex:
+            _SYNC_INFLIGHT.pop(box, None)
+            sync_pairlog_set(box, False, f"this console could not build the pairing step: {type(ex).__name__}: {str(ex)[:160]}")
+            raise
+        btext = bres if isinstance(bres, str) else str((bres or {}).get("message") or (bres or {}).get("error") or "")
+        merr = re.search(r"SYNC-PAIR-ERROR (.*)", btext)
+        sent = ""
+        if merr and merr.group(1).strip().startswith("needs-package"):
+            # the box has no engine and no package: send the package over the package-push
+            # key, then run the pairing step once more
+            ok_send, words_send = sync_send_engine(box, str(tcfg.get(box, "")))
+            audit({"action": "sync-send-engine", "target": box, "result": "OK" if ok_send else "ERROR",
+                   "detail": words_send[:160], "client": client})
+            if ok_send:
+                sent = words_send
+                try:
+                    bcode, bres = run_action("sync-pair", box, inputs, None, True, client, passphrase_ok=True)
+                except Exception as ex:
+                    _SYNC_INFLIGHT.pop(box, None)
+                    sync_pairlog_set(box, False, f"after sending the engine, the pairing step could not be built: {type(ex).__name__}")
+                    raise
+                btext = bres if isinstance(bres, str) else str((bres or {}).get("message") or (bres or {}).get("error") or "")
+                merr = re.search(r"SYNC-PAIR-ERROR (.*)", btext)
+            else:
+                _SYNC_INFLIGHT.pop(box, None)
+                sync_pairlog_set(box, False, words_send)
+                return 502, {"error": f"{box} does not have the sharing software, and {words_send}"}
+        _SYNC_INFLIGHT.pop(box, None)
+        m = re.search(r"SYNC-PAIR-JSON (\{.*\})", btext)
+        if bcode != 200 or not m:
+            audit({"action": "sync-pair", "target": box, "result": "ERROR", "detail": f"box_rc={bcode}", "client": client})
+            why = merr.group(1).strip() if merr else (bres.get("error", "") if isinstance(bres, dict) else str(bres)[-300:])
+            if why.startswith("needs-package"):
+                why = (f"{box} does not have the sharing software, and the file {SYNC_ENGINE_FILE} is not on it. "
+                       f"Put that file on the File store's software shelf, send it to {box}, then pair again.")
+            sync_pairlog_set(box, False, why)
+            return 502, {"error": f"Could not pair {box}: {why}"}
+        try:
+            rep_ = json.loads(m.group(1))
+        except ValueError:
+            return 502, {"error": f"{box} answered, but not in a way this console could read."}
+        did_new = str(rep_.get("deviceID", ""))
+        if not re.fullmatch(r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}", did_new):
+            return 502, {"error": f"{box} reported something that is not a valid identity. Nothing was shared."}
+        obj, herr = sync_helper("device-add", did_new, box, f"tcp://{host}:22000", timeout=SYNC_MUTATION_BUDGET)
+        if herr != "ok":
+            audit({"action": "sync-pair", "target": box, "result": "ERROR", "detail": f"master device-add {herr}", "client": client})
+            return 502, {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
+        sync_pins_set(box, did_new)
+        _SYNC_CACHE["read_at"] = 0.0
+        audit({"action": "sync-pair", "target": box, "result": "OK", "detail": f"id={did_new[:7]} engine={rep_.get('engine', '')}", "client": client})
+        eng = {"existing": "using the sharing software the box already had", "installed": "the sharing software was installed from the file sent to the box"}.get(str(rep_.get("engine", "")), "")
+        words = (f"{box} is paired. Its identity is {did_new[:7]}…, and this console is now known to it"
+                 + (f" ({eng})" if eng else "") + (f"; {sent}" if sent else "") + ". Tick the folders it should get.")
+        sync_pairlog_set(box, True, words)
+        return 200, {"ok": True, "device_id": did_new, "words": words}
+
+    if path == "/api/sync/unshare":
+        others = [m for m in sync_folder_members(f, snap, collector, pins) if m["name"] != box]
+        obj, herr = sync_helper("folder-unshare", fid, did, timeout=SYNC_MUTATION_BUDGET)
+        dropped = []
+        if herr == "ok":
+            sub = os.path.basename(os.path.realpath(str(f.get("path", ""))))
+            for m in others:
+                pin = {"folder_id": fid, "label_b64": base64.b64encode(str(f.get("label") or sub).encode()).decode(),
+                       "sub": sub, "master_id": str(snap.get("myID", "")), "master_addr": _master_addr(),
+                       "peers_b64": "", "drop_b64": base64.b64encode(json.dumps([{"id": did, "name": box, "addr": "-"}]).encode()).decode()}
+                try:
+                    mcode, mres = run_action("sync-share", m["name"], pin, None, True, client, passphrase_ok=True)
+                    if mcode == 200:
+                        dropped.append(m["name"])
+                except Exception:
+                    pass
+        audit({"action": "sync-unshare", "target": box, "result": "OK" if herr == "ok" else "ERROR",
+               "detail": f"folder={fid}", "client": client})
+        _SYNC_CACHE["read_at"] = 0.0
+        if herr != "ok":
+            return 502, {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
+        return 200, {"ok": True, "shared": False,
+                     "words": f"{f.get('label') or fid} is no longer shared with {box}. The copy already on {box} stays where it is."
+                              + (f" {', '.join(dropped)} stopped syncing it with {box} too." if dropped else "")}
+
+    if path == "/api/sync/share":
+        t = targets[box]
+        free = None
+        for k in ("capacity", "disk"):
+            v = t.get(k) or {}
+            if isinstance(v, dict) and v.get("free_bytes") is not None:
+                free = int(v.get("free_bytes") or 0)
+        size = dir_size(str(f.get("path", "")))
+        if free is not None and free < size * 1.1 + 64 * 1024 * 1024:
+            return 409, {"error": f"{box} has {free // (1024 * 1024)} MB free and the folder needs more than that. Free some space on {box}, then tick it again."
+                                  f"{size // (1024 * 1024)} MB; not enough space to take it."}
+        obj, herr = sync_helper("folder-share", fid, did, timeout=SYNC_MUTATION_BUDGET)
+        if herr != "ok":
+            audit({"action": "sync-share", "target": box, "result": "ERROR", "detail": f"folder={fid} {herr}", "client": client})
+            return 502, {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
+        _SYNC_CACHE["read_at"] = 0.0
+        sub = os.path.basename(os.path.realpath(str(f.get("path", ""))))
+        # the mesh (ADR-006, 4 September): every other box holding this folder becomes a peer of
+        # the new box, and the new box a peer of each of them
+        others = [m for m in sync_folder_members(f, snap, collector, pins) if m["name"] != box]
+        me = {"id": did, "name": box, "addr": "tcp://%s:22000" % str(collector.get(box, {}).get("_host", ""))}
+        inputs = {"folder_id": fid, "label_b64": base64.b64encode(str(f.get("label") or sub).encode()).decode(),
+                  "sub": sub, "master_id": str(snap.get("myID", "")), "master_addr": _master_addr(),
+                  "peers_b64": base64.b64encode(json.dumps(others).encode()).decode() if others else "", "drop_b64": ""}
+        bcode, bres = run_action("sync-share", box, inputs, None, True, client, passphrase_ok=True)
+        mesh_ok, mesh_failed = [], []
+        for m in others:
+            pin = dict(inputs)
+            pin["peers_b64"] = base64.b64encode(json.dumps([me]).encode()).decode()
+            try:
+                mcode, mres = run_action("sync-share", m["name"], pin, None, True, client, passphrase_ok=True)
+            except Exception as ex:
+                mcode, mres = 500, {"error": str(ex)[:120]}
+            mtext = mres if isinstance(mres, str) else str((mres or {}).get("message") or (mres or {}).get("error") or "")
+            (mesh_ok if (mcode == 200 and "SYNC-SHARE-JSON" in mtext) else mesh_failed).append(m["name"])
+        btext = bres if isinstance(bres, str) else str((bres or {}).get("message") or (bres or {}).get("error") or "")
+        m = re.search(r"SYNC-SHARE-JSON (\{.*\})", btext)
+        box_ok = bcode == 200 and bool(m)
+        audit({"action": "sync-share", "target": box, "result": "OK" if box_ok else "PARTIAL",
+               "detail": f"folder={fid} box_rc={bcode}", "client": client})
+        words = f"{f.get('label') or fid} is now shared with {box}."
+        if box_ok:
+            words += " The box took it and put its copy in its own vault."
+            if mesh_ok:
+                words += (f" {f.get('label') or fid} is now on {box} and {', '.join(mesh_ok)}. Those boxes keep each other "
+                          "current when this box is out of reach, and changes made on any of them come back here.")
+            if mesh_failed:
+                words += f" Could not tell {', '.join(mesh_failed)} about {box}. Tick again when they can be reached."
+            if isinstance(obj, dict) and obj.get("restart_required"):
+                words += " The engine here needs a restart before it takes effect."
+            return 200, {"ok": True, "shared": True, "words": words, "box": json.loads(m.group(1))}
+        words += (f" The box has not accepted it yet ({str(bres)[:160] if isinstance(bres, str) else bres.get('error', bcode)}); "
+                  "press again when the box is reachable.")
+        return 502, {"ok": False, "shared": True, "words": words}
+    return 404, {"error": "This console has no such action."}
+
+
+def resolve_bind(bind, port):
+    """The address the console listens on. A name that does not resolve (a kit that has lost
+    its tailnet DNS at boot) must not stop the console from starting: fall back to the
+    tailnet address this box holds, else to every interface, and say so in the log. A console
+    that will not start cannot show why."""
+    host = bind.rsplit(":", 1)[0] if ":" in bind and not bind.startswith("[") else bind
+    host = host.strip("[]")
+    try:
+        socket.getaddrinfo(host, port)
+        return host, ""
+    except (socket.gaierror, OSError):
+        pass
+    try:
+        p = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5)
+        ip = (p.stdout or "").strip().splitlines()[0] if p.returncode == 0 and (p.stdout or "").strip() else ""
+    except Exception:
+        ip = ""
+    if ip:
+        return ip, f"bind name {host} does not resolve on this box; listening on its tailnet address {ip} instead"
+    return "0.0.0.0", f"bind name {host} does not resolve on this box and it has no tailnet address; listening on every interface"
+
+
+def _self_hosts():
+    host = BIND.rsplit(":", 1)[0] if ":" in BIND and not BIND.startswith("[") else BIND
+    return {"127.0.0.1", "localhost", "::1", "", host}
+
+
+def sync_boxes(state, tcfg):
+    """The estate's boxes a folder can be shared with: every enrolled target except this console's
+    own box, which is never a destination for itself."""
+    out = []
+    for t in state.get("targets", []) or []:
+        name = t.get("name")
+        if not name or name not in tcfg:
+            continue
+        if str(tcfg[name]).rsplit("@", 1)[-1] in _self_hosts():
+            continue
+        out.append(name)
+    return out
+
+
+def render_sync_folders(state, snap, err):
+    """Which boxes get which folders: one row per folder, one column per box, a tick where the
+    decision is. A box holding the whole vault shows every folder as shared through it, so the
+    grid never contradicts the line above it. The row ends with who holds the folder."""
+    e = html.escape
+    cfg = load_actions_config()
+    tcfg = cfg.get("targets", {}) or {}
+    boxes = sync_boxes(state, tcfg)
+    labels = {t.get("name"): (t.get("label") or t.get("name")) for t in state.get("targets", []) or []}
+    fmap = sync_folder_map(snap) if snap else {"whole_root": None, "by_dir": {}, "other": []}
+    client = console_mode() == "client"
+    live = bool(snap) and not err and not client
+    dirs = vault_dirs()
+    pins = sync_pins()
+    collector = sync_collector(state)
+    doc = ["<section id=syncfolders aria-label='Which boxes get which folders' class=sync-folders>"]
+    doc.append("<h3 class=sync-h>Which boxes get which folders</h3>")
+    if client:
+        doc.append("<p class=doct>Read-only here: sharing is decided on the estate console.</p>")
+    elif err:
+        if err == "engine_down":
+            doc.append("<p class='sync-err' role=alert>Sharing is off on this box, so nothing here can be ticked. "
+                       "Turn it on and these folders go live again. "
+                       "<button type=button class=sync-engine-op data-op=start>Turn sharing on</button>"
+                       "<span class=press-res role=status></span></p>")
+        else:
+            doc.append(f"<p class='sync-err' role=alert>{e(SYNC_ERROR_WORDS.get(err, 'Sharing could not be read.'))} "
+                       "Nothing here can be changed until it can be read.</p>")
+        if snap:
+            doc.append(f"<p class=meta>Below is what was shared when sharing was last read, at {e(_hhmm(str(snap.get('as_of', ''))))}.</p>")
+    else:
+        doc.append("<p class=meta>Tick a folder under a box to share it with that box. Untick to stop. A box gets "
+                   "exactly the folders ticked for it. A box marked not paired cannot take anything until you press Pair.</p>")
+    wr = fmap.get("whole_root")
+    wr_holders = {}
+    if wr:
+        for did in (wr.get("devices") or []):
+            who = next((bx for bx in boxes if (_device_for(bx, collector.get(bx), snap, pins) or {}).get("deviceID") == did), None)
+            wr_holders[who or did[:7]] = did
+        names = ", ".join(labels.get(bx, bx) for bx in wr_holders)
+        doc.append(f"<p class=sync-finding data-code=whole-vault>The whole vault is shared with {e(names) if names else 'no box'} as one lump. "
+                   "While that stands you cannot choose folders one at a time. Tick the folders you want below, "
+                   "then stop the whole-vault share. No files are deleted."
+                   + ("" if not live else f" <button type=button class=sync-retire data-folder='{e(str(wr.get('id')))}'>Stop sharing the whole vault</button><span class=press-res role=status></span>")
+                   + "</p>")
+    if not boxes:
+        doc.append("<p class=doct>No box is enrolled on this console yet, so there is nothing to share with. "
+                   "Enrol a box from its server page and it appears here as a column.</p>")
+    elif not snap or not any(_device_for(bx, collector.get(bx), snap, pins) for bx in boxes):
+        doc.append("<p class=doct>Start with Pair under a box. Pairing lets that box take folders from here.</p>")
+    heads, notes = [], []
+    plog = sync_pairlog()
+    devs = {}
+    for bx in boxes:
+        dev = _device_for(bx, collector.get(bx), snap, pins) if snap else None
+        devs[bx] = dev
+        last = plog.get(bx) or {}
+        under = ""
+        if dev:
+            under = f"<span class='hint sync-id'>identity {e(str(dev.get('deviceID', ''))[:7])}</span>"
+        elif bx in _SYNC_INFLIGHT:
+            since = _hhmm(datetime.fromtimestamp(_SYNC_INFLIGHT[bx], timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
+            under = f"<span class='hint sync-inflight' data-box='{e(bx)}'>pairing since {e(since)}…</span>"
+        elif live:
+            under = (f"<span class=hint>not paired</span> <button type=button class=sync-pair data-box='{e(bx)}'>Pair</button>"
+                     f"<span class=press-res role=status></span>")
+            if last and not last.get("ok"):
+                under += f" <span class='hint sync-lastfail'>pairing failed {e(_hhmm(str(last.get('at', ''))))}</span>"
+                notes.append(f"<b>{e(labels.get(bx, bx))}</b>: pairing failed at {e(_hhmm(str(last.get('at', ''))))}. {e(str(last.get('words', '')))}")
+        else:
+            under = "<span class=hint>not paired</span>"
+        lab = labels.get(bx, bx)
+        heads.append(f"<th><span class=sync-box>{e(lab)}</span>" + (f" <span class=hint>({e(bx)})</span>" if lab != bx else "") + f"<br>{under}</th>")
+    doc.append("<table class='sync-rows sync-grid'><thead><tr><th>Folder</th>" + "".join(heads) + "<th>Held by</th></tr></thead><tbody>")
+    for d in dirs:
+        f = fmap["by_dir"].get(d)
+        doc.append(f"<tr data-dir='{e(d)}'><td>{e(d)}</td>")
+        holders = []
+        for bx in boxes:
+            dev = devs.get(bx)
+            did = str(dev.get("deviceID", "")) if dev else ""
+            on = bool(f) and bool(did) and did in (f.get("devices") or [])
+            via_root = bool(did) and bx in wr_holders
+            if via_root and not on:
+                holders.append(labels.get(bx, bx))
+                doc.append(f"<td class='sync-cell meta' title='Shared as part of the whole vault'>shared, as part of the whole vault</td>")
+                continue
+            if on:
+                holders.append(labels.get(bx, bx))
+            words = "shared" if on else "not shared"
+            if live and did:
+                doc.append(f"<td class=sync-cell><label class=tick-row><input type=checkbox class=sync-tick data-box='{e(bx)}' "
+                           f"data-dir='{e(d)}' {'checked' if on else ''}>"
+                           f"<span class=tick-note>{words}</span></label><span class=press-res role=status></span></td>")
+            elif did:
+                doc.append(f"<td class='sync-cell meta'>{words}</td>")
+            else:
+                doc.append("<td class='sync-cell meta' title='Pair this box first'>&mdash;</td>")
+        doc.append(f"<td class='sync-cell meta sync-holders'>{('on ' + e(', '.join(holders)) + ', and here') if holders else 'here only'}</td></tr>")
+    if not dirs:
+        doc.append(f"<tr><td colspan={2 + len(boxes)} class=meta>The vault has no folders yet.</td></tr>")
+    doc.append("</tbody></table>")
+    for n_ in notes:
+        doc.append(f"<p class='meta sync-note'>{n_}</p>")
+    doc.append("<p class=meta>A paired box can receive any folder you tick for it. If that box is lost, treat every folder "
+               "ticked for it as lost with it. A folder ticked for two or more boxes is shared between those boxes as well "
+               "as with this one: they keep each other current when this box is out of reach, and changes made on any of "
+               "them come back here.</p>")
+    last = sync_last()
+    if last.get("words"):
+        doc.append(f"<p class='meta sync-last'>Last change, {e(_hhmm(str(last.get('at', ''))))}: "
+                   f"<span class='{'ok' if last.get('ok') else 'fail'}'>{e(str(last.get('words', '')))}</span></p>")
+    doc.append("<div class='a-res sf-res' role=status></div></section>")
+    return "".join(doc)
+
+
+def _sync_state_word(r):
+    """A glance word for a shared pair, from the same facts the sentence carries."""
+    if r.get("alarm"):
+        return "identity changed"
+    if not r.get("shared"):
+        return "not shared"
+    if r.get("connected") is False:
+        return "not connected"
+    if r.get("outstanding"):
+        return "catching up"
+    return "up to date"
+
+
+def render_sync_engine(state):
+    """Sharing on this box: the verdict in one line, every warning with the button that fixes
+    it, the on/off control after the warnings, and the facts for support folded away."""
+    e = html.escape
+    snap, err, as_of = sync_snapshot()
+    client = console_mode() == "client"
+    live = bool(snap) and not err and not client
+    doc = ["<section id=syncengine aria-label='Sharing on this box' class=sync-engine>"]
+    if err:
+        doc.append(f"<p class='sync-err sync-err-{e(err)}' role=alert>{e(SYNC_ERROR_WORDS.get(err, err))}</p>")
+        if err == "engine_down" and not client:
+            doc.append("<p><button type=button class=sync-engine-op data-op=start>Turn sharing on</button> "
+                       "<span class=hint>Boxes reconnect and catch up on their own once it is on.</span>"
+                       "<span class=press-res role=status></span></p>")
+    elif snap:
+        doc.append(f"<p class=sync-verdict>Sharing is on. Read at {e(_hhmm(as_of))}.</p>")
+    if snap:
+        conf = snap.get("conform") or {}
+        for fnd in conf.get("findings") or []:
+            if isinstance(fnd, str):
+                fnd = {"code": "", "text": fnd}
+            code_ = str(fnd.get("code", ""))
+            press = ""
+            if live and code_ == "folder-unprotected":
+                press = (f" <button type=button class=sync-fix data-op=protect data-folder='{e(str(fnd.get('folder', '')))}'>"
+                         "Protect it</button> <span class=hint>Keeps every earlier version on this box for a year. "
+                         "Stops a deletion sent by a box removing anything here.</span><span class=press-res role=status></span>")
+            elif live and code_ in ("discovery", "relays", "nat", "reporting"):
+                press = (" <button type=button class=sync-fix data-op=harden>Turn announcing off</button> "
+                         "<span class=hint>Also turns off relay servers, router traversal and usage reporting. "
+                         "Boxes are then reached only at the addresses set here.</span><span class=press-res role=status></span>")
+            elif live and code_ == "not-enabled":
+                press = (" <button type=button class=sync-engine-op data-op=enable>Turn on automatically</button> "
+                         "<span class=hint>So a restart does not leave sharing off on this box.</span><span class=press-res role=status></span>")
+            doc.append(f"<p class=sync-finding data-code='{e(code_)}'>{e(str(fnd.get('text', '')))}{press}</p>")
+        if snap.get("restart_required"):
+            doc.append("<p class=sync-finding>Saved, but sharing needs a restart before it takes effect.</p>")
+        if live:
+            doc.append("<p class=meta><button type=button class=sync-engine-op data-op=stop>Turn sharing off</button> "
+                       "<span class=hint>Nothing moves between boxes while it is off. What each box holds stays where it is.</span>"
+                       "<span class=press-res role=status></span></p>")
+        det = [f"Sharing software: version {e(str(snap.get('version', '')).lstrip('v'))}",
+               f"This box's identity: {e(str(snap.get('myID', '')))}",
+               f"Read at {e(_hhmm(as_of))}",
+               f"Announcing on the network: {'on' if conf.get('discovery') else 'off'}",
+               f"Relay servers: {'on' if conf.get('relays') else 'off'}",
+               f"Router traversal: {'on' if conf.get('nat') else 'off'}",
+               "Listening for boxes: " + e(", ".join(("every network" if "0.0.0.0" in x or "[::]" in x else x.replace("tcp://", "")) + (", port " + x.rsplit(":", 1)[-1] + " (tcp)" if ":" in x else "") for x in (conf.get("listen") or [])) or "nowhere"),
+               f"Sharing's own control page: {'this box only, ' if str(conf.get('gui', '')).startswith('127.0.0.1') else ''}{e(str(conf.get('gui') or 'not set'))}"]
+        fids = [f"{e(str(f.get('label') or f.get('id')))}: {e(str(f.get('id')))}" for f in snap.get("folders", []) or []]
+        if fids:
+            det.append("Folder names sharing uses: " + "; ".join(fids))
+        doc.append("<details class=sync-support><summary>Details for support</summary><ul>"
+                   + "".join(f"<li>{d}</li>" for d in det) + "</ul></details>")
+    elif not err:
+        doc.append("<p class=doct>Sharing has not been read yet.</p>")
+    doc.append("</section>")
+    return "".join(doc)
+
 DEB_MAX = int(os.environ.get("VANTAGE_CONSOLE_DEB_MAX", str(2 * 1024 * 1024 * 1024)))
 # Docker image tarballs (CloudTAK/MediaMTX, for offline deploy) are larger than a .deb.
 IMG_MAX = int(os.environ.get("VANTAGE_CONSOLE_IMG_MAX", str(6 * 1024 * 1024 * 1024)))
+
+def render_sync_progress(state):
+    """Where each folder has got to: the shared pairs from sharing's own account, a glance word
+    first, then the two facts with their times; unshared pairs counted, not listed."""
+    e = html.escape
+    snap, err, as_of = sync_snapshot()
+    doc = ["<section id=syncprogress aria-label='Where each folder has got to' class=sync-progress>"]
+    doc.append("<h3 class=sync-h>Where each folder has got to</h3>")
+    if not snap:
+        doc.append("<p class=doct>Nothing to show until sharing can be read.</p></section>")
+        return "".join(doc)
+    collector = sync_collector(state)
+    rows = sync_rows(snap, collector)
+    stale = bool(err)
+    shared = [r for r in rows if r.get("shared") or r.get("alarm")]
+    unshared = len(rows) - len(shared)
+    if stale:
+        doc.append(f"<p class=meta>Sharing cannot be read now. Below is what was shared when it was last read, at {e(_hhmm(as_of))}.</p>")
+    if shared:
+        doc.append("<table class='sync-rows sync-account'><thead><tr><th>Folder</th><th>Box</th><th>What is happening</th></tr></thead><tbody>")
+        for r in shared:
+            cls = "sync-row" + (" alarm" if r["alarm"] else "") + (" conflict" if r["conflict"] else "") + (" shared" if r["shared"] else " unshared")
+            word = _sync_state_word(r)
+            words = r["words"]
+            if stale:
+                words = f"At {_hhmm(as_of)}: {words}"
+            doc.append(f"<tr class='{cls}' data-box='{e(r['box'])}' data-folder='{e(r['folder'])}'>"
+                       f"<td>{e(str(r['label']))}</td><td>{e(r['box'])}</td>"
+                       f"<td class=sync-words><b class='sync-state s-{e(word.replace(' ', '-'))}'>{e(word)}</b> {e(words)}</td></tr>")
+        doc.append("</tbody></table>")
+    else:
+        doc.append("<p class=doct>Nothing is shared yet. Pair a box above, then tick the folders it should get.</p>")
+    if unshared:
+        doc.append(f"<p class=meta>{unshared} folder-and-box pair{'s' if unshared != 1 else ''} not shared.</p>")
+    doc.append(f"<p class=meta>Every line here was read from sharing itself at {e(_hhmm(as_of))}. "
+               "A note written in the last minute may not have been picked up yet.</p>")
+    doc.append("</section>")
+    return "".join(doc)
 
 
 def store_ensure():
@@ -3597,6 +4860,10 @@ def vault_restore(data, client):
 
 
 def store_delete(rel, client, area="store"):
+    if area == "vault":
+        _gcode, _gerr = sync_guard(rel, "deleting")
+        if _gcode:
+            return _gcode, {"error": _gerr}
     p = store_resolve(rel, area)
     root = os.path.realpath(area_root(area))
     if p is None or p == root:
@@ -3919,6 +5186,9 @@ def agent_vault_write(rel, content, mode, client):
 def vault_rename(from_rel, to_name, client):
     """Rename one vault note in place. The new name is a basename (no path); the extension
     is kept if the caller omits one. Refuses to overwrite."""
+    _gcode, _gerr = sync_guard(from_rel, "renaming")
+    if _gcode:
+        return _gcode, {"error": _gerr}
     src = store_resolve(from_rel, "vault")
     if not src or not os.path.exists(src):
         return 404, {"error": "no such note or folder"}
@@ -4223,7 +5493,7 @@ def setup_api(path, data, client):
         # works whether or not the box still exists. Passphrase-gated - it stops the box
         # being monitored and unbinds its actions.
         if not verify_passphrase(load_actions_config(), data.get("passphrase")):
-            return 403, {"error": "operator passphrase required to remove a server"}
+            return 403, {"error": "operator password required to remove a server"}
         ok, out = setup_helper("unenrol", name)
         audit({"action": "unenrol", "target": name, "result": "OK" if ok else "ERROR",
                "client": client})
@@ -4531,7 +5801,7 @@ def start_setup_job(data, client, authed=False):
     # gate there is.
     if creds and ACTIONS["enrol-device"]["needs_passphrase"] and not authed \
        and not verify_passphrase(load_actions_config(), passphrase):
-        return 400, {"error": "first-run credentials need the operator passphrase"}
+        return 400, {"error": "first-run credentials need the operator password"}
 
     job_id = "j" + os.urandom(6).hex()
     os.makedirs(JOBS_DIR, exist_ok=True)
@@ -8796,7 +10066,7 @@ def nav_html(state, active, inst=None):
     if not console_is_admin(inst):
         items = [("/", "Overview", active == "estate", "Overview"),
                  ("/operations", "Operations", active == "operations", "Operations"),
-                 ("/sync", "Sync", active == "sync", "Sync"),
+                 ("/sync", "Sharing", active == "sync", "Sharing"),
                  ("/store", "File store", active == "store", "File store"),
                  ("/vault", "Knowledge Vault", active == "vault", "Knowledge Vault")]
         links = "".join(
@@ -8809,7 +10079,7 @@ def nav_html(state, active, inst=None):
              ("/operations", "Operations", active == "operations", "Operations"),
              ("/store", "File store", active == "store", "File store"),
              ("/vault", "Knowledge Vault", active == "vault", "Knowledge Vault")]
-    items.append(("/sync", "Sync", active == "sync", "Sync"))
+    items.append(("/sync", "Sharing", active == "sync", "Sharing"))
     if inst.get("console_mode", "admin") != "client":
         items.append(("/deploy", "Deploy", active == "deploy", "Deploy"))
     if inst["agent_enabled"]:
@@ -9733,7 +11003,7 @@ def render_estate(state):
                "<label class=fl id=fr-passwrap hidden>Operator password"
                "<input type=password id=fr-pass autocomplete=current-password>"
                "<span class=hint>this console runs open, so minting credentials asks "
-               "for the action passphrase</span>"
+               "for the operator password</span>"
                "</label>") + "</div>"
             "<div class=fr-acts>"
             "<button type=button class='a-go confirm' id=fr-go disabled>"
@@ -10052,7 +11322,7 @@ def build_enrol_artifacts(server_label, devices):
 def enrol_batch_api(data, client):
     """Bulk-enrol N devices into one group, then build the QR sheet PDF + a cert ZIP.
     Names come as an explicit list or a prefix+count. Session-gated; on an open console the
-    operator passphrase gates it, exactly as single enrol does. Synchronous, capped at 30."""
+    operator password gates it, exactly as single enrol does. Synchronous, capped at 30."""
     target = str(data.get("target", ""))
     group = str(data.get("group", ""))
     cfg = load_actions_config()
@@ -10087,7 +11357,7 @@ def enrol_batch_api(data, client):
         return 400, {"error": "at most 30 devices at once"}
     authed = auth_configured()
     if not authed and not verify_passphrase(cfg, data.get("passphrase")):
-        return 403, {"error": "operator passphrase required for enrolment"}
+        return 403, {"error": "operator password required for enrolment"}
     devices, errors = [], []
     for u in clean:
         code, res = run_action("enrol-device", target, {"user": u, "group": group},
@@ -10396,7 +11666,7 @@ def software_current_api(data, client):
 
 def destroy_api(data, client):
     """ERASE the estate footprint from a box. Gated hard: a typed DESTROY and the operator
-    passphrase. Runs tak-destroy on the box as a job that streams the wipe back (the operator's
+    operator password. Runs tak-destroy on the box as a job that streams the wipe back (the operator's
     confirmation). If the box is unreachable the job fails cleanly - Remove from monitoring is
     the console-side fallback."""
     target = str(data.get("target", ""))
@@ -10663,7 +11933,7 @@ def set_console_mode_api(data, client):
     out = (p.stdout or "").strip()
     err = (p.stderr or "").strip()
     if p.returncode != 0 or not out.startswith("OK"):
-        reason = ((err or out or "the box refused the change").splitlines() or [""])[-1][:200]
+        reason = ((err or out or "the box the box refused it, code the change").splitlines() or [""])[-1][:200]
         audit({"action": "console-mode", "target": target, "detail": mode,
                "result": "FAIL", "reason": reason, "client": client})
         return 502, {"error": f"the box did not change role: {reason}"}
@@ -10721,7 +11991,7 @@ def set_kiosk_api(data, client):
                "result": "OK", "client": client})
         return 200, {"installed": st.get("installed", False), "on": st.get("on", False)}
     if p.returncode != 0 or not out.startswith("OK"):
-        reason = ((err or out or "the box refused the change").splitlines() or [""])[-1][:200]
+        reason = ((err or out or "the box the box refused it, code the change").splitlines() or [""])[-1][:200]
         audit({"action": "kiosk", "target": target, "detail": op,
                "result": "FAIL", "reason": reason, "client": client})
         return 502, {"error": f"the box did not change the kiosk: {reason}"}
@@ -11100,7 +12370,7 @@ CREDENTIALS_JS = """
     function show(h){viewEl.innerHTML=h;viewEl.scrollIntoView({block:'nearest',behavior:'smooth'});}
   function fetchCred(c){
     if(needpass && passInp && !passInp.value){
-      show('<div class="a-res error">Enter the operator passphrase (the box next to '
+      show('<div class="a-res error">Enter the operator password (the box next to '
         +'List credentials), then press Download again.</div>');
       passInp.focus();passInp.scrollIntoView({block:'center',behavior:'smooth'});return;}
     show('<div class="a-res">Fetching '+esc(c.name)+'\\u2026</div>');
@@ -11774,7 +13044,7 @@ def remove_staged_release(fname, client):
     """Delete one staged release archive and its checksum from this console's shelf.
 
     Staged archives accumulate: five superseded ones had built up with no way to remove
-    them from the page that created them. This touches no box, so it is not passphrase
+    them from the page that created them. This touches no box, so it is not operator password
     gated - but the name is validated against the exact shape the pull writes, and the
     resolved path must sit inside UPDATES_DIR, so no traversal can name anything else.
     """
@@ -13867,7 +15137,7 @@ SETUP_JS = """
       msg(r,'','Testing '+esc(dest)+'\\u2026');
       J('/api/setup/test',{name:S.key,dest:dest}).then(function(x){
         if(x.code!==200){
-          msg(r,'error',x.j.error||'unreachable');
+          msg(r,'error',x.j.error||'could not reach the box');
           if(/host key/i.test(x.j.error||'')){
             var b=document.createElement('button');b.type='button';b.className='cred-refresh';
             b.style.marginTop='8px';b.textContent='The box was rebuilt - forget the old key and test again';
@@ -14032,7 +15302,7 @@ SETUP_JS = """
               password_b64:(pw&&pw.value)?btoa(pw.value):''};
     }).filter(function(c){return c.user&&c.group;});
     if(creds.length&&!$('#wz-pass').value){
-      msg(r,'error','Credentials need the operator passphrase - step 4.');
+      msg(r,'error','Credentials need the operator password - step 4.');
       $('#wz-passwrap').hidden=false; $('#wz-pass').focus();
       $('#wz-go').disabled=false; return;
     }
@@ -15087,182 +16357,82 @@ reload();
 
 SYNC_JS = r"""
 (function(){
-  // A tick is a push to the far console, now; an untick stops the rule and says the copy
-  // stays. Both report what actually happened, from the far side's own answer.
+  // The Sharing page (Spec 010). Every press answers where it was pressed, within a second, and
+  // the answer stays; a press that reaches a box counts the seconds and gives up in words; a
+  // reload never erases the last answer (the server keeps the last change); success is never
+  // proved by something disappearing. No password on this page: the signed-in session is the gate.
   function J(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){return{code:r.status,j:j};});});}
-  document.querySelectorAll('.sync-peer[data-id] .tick-folder').forEach(function(cb){
-    var row=cb.closest('.tick-row'), card=cb.closest('.sync-peer'), pid=card.getAttribute('data-id'),
-        folder=row.getAttribute('data-folder'), note=row.querySelector('.tick-note'),
-        send=row.querySelector('.tick-send'), res=card.querySelector('.sp-res');
-    function push(){
-      cb.disabled=true; note.textContent='sending…';
-      J('/api/vault/push',{peer:pid,folder:folder}).then(function(x){
-        cb.disabled=false;
-        if(x.code===200){
-          send.hidden=false; cb.checked=true;
-          note.textContent=x.j.created.length+' new, '+x.j.updated.length+' updated, '+x.j.kept.length+' kept - just now';
-          res.className='a-res ok sp-res'; res.textContent='Sent '+folder+' to '+x.j.peer+'.';
-        } else {
-          cb.checked=false; send.hidden=true; note.textContent='not shared';
-          res.className='a-res error sp-res'; res.textContent='Could not send '+folder+': '+(x.j.error||'unknown error');
-        }
-      }).catch(function(){cb.disabled=false;cb.checked=false;res.className='a-res error sp-res';res.textContent='Could not reach the console.';});
-    }
-    cb.addEventListener('change',function(){
-      if(cb.checked){push();return;}
-      cb.disabled=true;
-      J('/api/vault/unshare',{peer:pid,folder:folder}).then(function(x){
-        cb.disabled=false;
-        if(x.code===200){send.hidden=true; note.textContent='not shared';
-          res.className='a-res sp-res'; res.textContent='Stopped sharing '+folder+'. '+(x.j.note||'');}
-        else{cb.checked=true; res.className='a-res error sp-res'; res.textContent=x.j.error||'Could not stop sharing.';}
+  var sf=document.getElementById('syncfolders'), eng=document.getElementById('syncengine');
+  var foot=sf?sf.querySelector('.sf-res'):null;
+  function near(el){ var p=el; while(p&&p!==document.body){ var r=p.querySelector?p.querySelector('.press-res'):null; if(r&&(p.tagName==='P'||p.tagName==='TD'||p.tagName==='TH'||p.tagName==='LABEL'))return r; p=p.parentNode; } return null; }
+  function say(x,el){ var t=(x.j&&(x.j.words||x.j.error))||('HTTP '+x.code); var ok=x.code===200;
+    var r=el?near(el):null; if(r){ r.textContent=' '+t; r.className='press-res '+(ok?'ok':'fail'); }
+    if(foot){ foot.textContent=t; foot.className='a-res sf-res '+(ok?'ok':'fail'); }
+    if(!r&&!foot){ alert(t); } }
+  function progress(el,text){ var r=el?near(el):null; if(r){ r.textContent=' '+text; r.className='press-res'; } if(foot){ foot.textContent=text; foot.className='a-res sf-res'; } }
+  function longPress(b, url, body, verb, before, after){
+    var t0=Date.now(), stop=false, ctrl=('AbortController' in window)?new AbortController():null, orig=b.textContent;
+    b.disabled=true; b.textContent=verb+'…'; progress(b, before+' This can take a minute.');
+    var clock=setInterval(function(){ if(stop)return; var sec=Math.round((Date.now()-t0)/1000); b.textContent=verb+'… '+sec+' s'; progress(b, before+' '+sec+' s so far.'); },1000);
+    var timer=setTimeout(function(){ if(ctrl)ctrl.abort(); },250000);
+    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctrl?ctrl.signal:undefined})
+      .then(function(r){return r.json().then(function(j){return{code:r.status,j:j};});})
+      .then(function(x){ stop=true; clearInterval(clock); clearTimeout(timer); say(x,b); b.textContent=x.code===200?'done':orig; b.disabled=x.code===200; if(after)after(x); return x; })
+      .catch(function(){ stop=true; clearInterval(clock); clearTimeout(timer); b.disabled=false; b.textContent=orig;
+        progress(b,'No answer from this console after four minutes. The box may still be working. Reload the page to see where it stands.'); });
+  }
+  if(eng){
+    setInterval(function(){
+      fetch('/api/sync/state').then(function(r){return r.json();}).then(function(j){
+        (j.rows||[]).forEach(function(r){
+          var tr=document.querySelector("tr[data-box='"+r.box+"'][data-folder='"+r.folder+"']");
+          if(tr){ var w=tr.querySelector('.sync-words'); if(w){ var b=w.querySelector('.sync-state'); w.textContent=(b?b.textContent+' ':'')+r.words; if(b)w.insertBefore(b,w.firstChild); }
+            tr.classList.toggle('alarm',!!r.alarm); tr.classList.toggle('conflict',!!r.conflict); }
+        });
+      }).catch(function(){});
+    },10000);
+  }
+  document.querySelectorAll('.sync-engine-op').forEach(function(b){b.addEventListener('click',function(){
+    var op=b.getAttribute('data-op');
+    if(op==='stop'&&!confirm('Turn sharing off? Nothing moves between boxes until you turn it back on. The folders stay shared and every box keeps what it has.'))return;
+    b.disabled=true; progress(b, op==='start'?'Turning sharing on.':(op==='stop'?'Turning sharing off.':'Setting sharing to come back on by itself.'));
+    J('/api/sync/engine',{op:op,confirm:true}).then(function(x){ say(x,b);
+      if(x.code===200&&op!=='enable'){ setTimeout(function(){location.reload();},3000); }
+      else if(x.code===200){ var p=b.closest('p'); if(p){ p.className='sync-finding done'; b.remove(); } }
+      else { b.disabled=false; } });
+  });});
+  document.querySelectorAll('.sync-fix').forEach(function(b){b.addEventListener('click',function(){
+    var op=b.getAttribute('data-op'); b.disabled=true; progress(b, op==='protect'?'Protecting the folder.':'Turning announcing off.');
+    J(op==='protect'?'/api/sync/protect':'/api/sync/harden',{folder:b.getAttribute('data-folder')||'',confirm:true}).then(function(x){ say(x,b);
+      if(x.code===200){ var p=b.closest('p'); if(p){ p.className='sync-finding done'; var h=p.querySelector('.hint'); if(h)h.remove(); b.remove(); } }
+      else { b.disabled=false; } });
+  });});
+  if(sf){
+    sf.querySelectorAll('.sync-tick').forEach(function(cb){
+      cb.addEventListener('change',function(){
+        var want=cb.checked, note=cb.parentNode.querySelector('.tick-note'), box=cb.getAttribute('data-box'), dir=cb.getAttribute('data-dir');
+        cb.disabled=true; note.textContent=want?'sharing…':'stopping…';
+        var t0=Date.now(), stop=false;
+        progress(cb, (want?('Sharing '+dir+' with '+box+'. This console shares it, then the box makes its own copy.'):('Stopping '+dir+' for '+box+'. The box keeps its copy.'))+' This can take a minute.');
+        var clock=setInterval(function(){ if(stop)return; note.textContent=(want?'sharing… ':'stopping… ')+Math.round((Date.now()-t0)/1000)+' s'; },1000);
+        J(want?'/api/sync/share':'/api/sync/unshare',{box:box,dir:dir,confirm:true})
+        .then(function(x){ stop=true; clearInterval(clock); say(x,cb); if(x.code!==200&&!(x.j&&x.j.shared===want)){cb.checked=!want;}
+          note.textContent=(x.j&&x.j.shared)?'shared':(want?'not shared':'not shared; the box keeps its copy'); cb.disabled=false;
+          var tr=cb.closest('tr'); if(tr&&x.code===200&&x.j&&x.j.holders){ var h=tr.querySelector('.sync-holders'); if(h){ h.textContent=x.j.holders; } } })
+        .catch(function(){ stop=true; clearInterval(clock); cb.checked=!want;cb.disabled=false;note.textContent='no answer';});
       });
     });
-    send.addEventListener('click',push);
-  });
-})();
-
-(function(){
-var root=document.getElementById('syncpage'); if(!root) return;
-function escapeHtml(x){var d=document.createElement('div');d.textContent=x==null?'':x;return d.innerHTML;}
-function reload(){location.reload();}
-function syncApi(url,body,el,ok){
-  el.className='a-res';el.textContent='Working\u2026';
-  return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(body)})
-  .then(function(r){return r.json().then(function(j){return{code:r.status,j:j};});})
-  .then(function(x){
-    el.className='a-res '+(x.code===200?'ok':'error');
-    el.textContent=x.code===200?ok(x.j):(x.j.error||'failed');
-    return x;});
-}
-root.querySelectorAll('.sync-peer[data-id]').forEach(function(card){
-  var id=card.getAttribute('data-id'), res=card.querySelector('.sp-res');
-  var pull=card.querySelector('.sp-pull');
-  if(pull)pull.onclick=function(){
-    syncApi('/api/peers/pull',{id:id},res,function(j){
-      return 'Estate refreshed: '+j.servers+' server(s), vault folders: '
-        +((j.vault_folders||[]).join(', ')||'none');
-    }).then(function(x){if(x.code===200)setTimeout(function(){location.reload();},900);});
-  };
-  var vp=card.querySelector('.sp-vpull');
-  if(vp)vp.onclick=function(){
-    var f=card.querySelector('.sp-folder').value; if(!f){res.textContent='pull the estate first';return;}
-    syncApi('/api/vault/pull',{peer:id,folder:f},res,function(j){
-      return 'Pulled '+f+': '+(j.created||[]).length+' new, '+(j.updated||[]).length
-        +' updated, '+(j.kept||[]).length+' local kept (newer here).';
-    }).then(function(x){if(x.code===200)setTimeout(function(){location.reload();},900);});
-  };
-});
-var sa=root.querySelector('.sync-add');
-if(sa)sa.addEventListener('submit',function(ev){ev.preventDefault();
-  syncApi('/api/peers/add',{name:sa.querySelector('.pa-name').value.trim(),
-    url:sa.querySelector('.pa-url').value.trim(),
-    token:sa.querySelector('.pa-token').value.trim()},
-    sa.querySelector('.pa-res'),function(j){
-      return 'Added '+j.name+' - first pull '+j.first_pull+'. Reloading\u2026';})
-  .then(function(x){if(x.code===200)setTimeout(function(){location.reload();},1200);});
-});
-var sm=root.querySelector('.sync-mint');
-if(sm)sm.addEventListener('submit',function(ev){ev.preventDefault();
-  var out=sm.querySelector('.pm-out');
-  fetch('/api/peers/mint',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name:sm.querySelector('.pm-name').value.trim()})})
-  .then(function(r){return r.json().then(function(j){return{code:r.status,j:j};});})
-  .then(function(x){
-    if(x.code!==200){out.innerHTML='<div class="a-res error">'+escapeHtml(x.j.error||'failed')+'</div>';return;}
-    out.innerHTML='<div class=conn-new><b>Token for '+escapeHtml(x.j.name)
-      +' - shown once.</b><div class=cn-field><span>Token</span><code class=cn-tok>'
-      +escapeHtml(x.j.token)+'</code></div>'
-      +'<p class=meta>On the other console: Knowledge Vault \u2192 Estate sync \u2192 '
-      +'Add console, with this console\u2019s URL and this token.</p></div>';
-  });
-});
-function peersCount(d){ return ((d||{}).peers||[]).length; }
-function drawSyncMap(){
-  var svg=root.querySelector('.sync-map'), el=document.getElementById('sync-data');
-  if(!svg||!el)return;
-  var d=JSON.parse(el.textContent);
-  var cs=getComputedStyle(document.documentElement);
-  var green=(cs.getPropertyValue('--ok')||'#113308').trim(),
-      gold=(cs.getPropertyValue('--gold')||'#B5B171').trim(),
-      warm='#A35C17', mute=(cs.getPropertyValue('--mute')||'#586F7C').trim(),
-      ink=getComputedStyle(document.body).color;
-  // Height follows the peer count: three peers on a fixed 300 put their folder
-  // stacks 45px apart, which is less than a stack is tall, so they collided.
-  var W=900, H=Math.max(300, 110+(peersCount(d))*100), cx=W/2, cy=H/2;
-  svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  function node(x,y,label,sub,color,r){
-    return '<circle cx="'+x+'" cy="'+y+'" r="'+(r||26)+'" fill="'+color+'" opacity="0.92"/>'
-      +'<text x="'+x+'" y="'+(y+(r||26)+16)+'" text-anchor="middle" fill="'+ink+'" '
-      +'font-size="13" font-weight="600">'+escapeHtml(label)+'</text>'
-      +(sub?'<text x="'+x+'" y="'+(y+(r||26)+31)+'" text-anchor="middle" fill="'+mute+'" font-size="11">'+escapeHtml(sub)+'</text>':'');
+    sf.querySelectorAll('.sync-pair').forEach(function(b){b.addEventListener('click',function(){
+      var box=b.getAttribute('data-box');
+      longPress(b,'/api/sync/pair',{box:box,confirm:true},'pairing','Pairing '+box+': reaching the box now.',function(x){ if(x.code===200){setTimeout(function(){location.reload();},2500);} });
+    });});
+    sf.querySelectorAll('.sync-retire').forEach(function(b){b.addEventListener('click',function(){
+      if(!confirm('Stop sharing the whole vault? Every box keeps the files it already has. Nothing is deleted, and nothing more is sent.'))return;
+      longPress(b,'/api/sync/retire',{folder:b.getAttribute('data-folder'),confirm:true},'stopping','Stopping the whole-vault share. Each box is told to stop keeping its copy up to date, then this box stops too. The files stay where they are.',function(x){ if(x.code===200){setTimeout(function(){location.reload();},3000);} });
+    });});
   }
-  var out='';
-  var peers=d.peers||[], n=peers.length;
-  peers.forEach(function(p,i){
-    var px=W-120, py=n>1?70+i*(H-140)/(n-1):cy;
-    p._x=px;p._y=py;
-    out+='<line x1="'+(cx+30)+'" y1="'+cy+'" x2="'+(px-30)+'" y2="'+py+'" stroke="'+mute+'" stroke-width="1.2" stroke-dasharray="5 4"/>';
-  });
-  // One arrow per peer, with that peer's folders stacked along it. Drawing per RULE
-  // put every folder label at the same midpoint and re-drew the arrow underneath each
-  // one, so a peer pulling three folders rendered as an unreadable smear.
-  var byPeer={};
-  (d.rules||[]).forEach(function(r){(byPeer[r.peer]=byPeer[r.peer]||[]).push(r);});
-  Object.keys(byPeer).forEach(function(pid){
-    var p=peers.filter(function(x){return x.id===pid;})[0]; if(!p)return;
-    var rs=byPeer[pid], mx=(cx+p._x)/2, my=(cy+p._y)/2;
-    out+='<line x1="'+(p._x-30)+'" y1="'+p._y+'" x2="'+(cx+30)+'" y2="'+cy+'" stroke="'+warm+'" stroke-width="2.4" marker-end="url(#syncarrow)"/>';
-    var top=my-6-(rs.length-1)*7;
-    rs.forEach(function(r,i){
-      out+='<text x="'+mx+'" y="'+(top+i*14)+'" text-anchor="middle" fill="'+warm+'" font-size="11.5" font-weight="600">'+escapeHtml(r.folder)+' \u2192</text>';
-    });
-    var last=rs.map(function(r){return r.last_pull||'';}).sort().pop();
-    out+='<text x="'+mx+'" y="'+(top+rs.length*14)+'" text-anchor="middle" fill="'+mute+'" font-size="10">'+escapeHtml(last.slice(5,16))+'</text>';
-  });
-  out+='<line x1="'+(cx-30)+'" y1="'+cy+'" x2="150" y2="'+cy+'" stroke="'+gold+'" stroke-width="1.6"/>';
-  out+=node(cx,cy,d.me+(d.mode==='client'?' (client)':' (admin)'),
-    d.local_servers+' server(s) here',green,30);
-  peers.forEach(function(p){out+=node(p._x,p._y,p.name,p.servers+' server(s)',gold);});
-  out+=node(110,cy,'devices','phones + EUDs via /eud',warm,20);
-  svg.innerHTML='<defs><marker id="syncarrow" viewBox="0 0 10 10" refX="9" refY="5" '
-    +'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
-    +'<path d="M0 0L10 5L0 10z" fill="'+warm+'"/></marker></defs>'+out;
-}
-
-/* discovery: dropdown of real nodes, free text only behind 'somewhere else' */
-var nodeSel=root.querySelector('.pa-node'), urlInp=root.querySelector('.pa-url'),
-    urlWrap=root.querySelector('.pa-urlwrap'), probeBtn=root.querySelector('.pa-probe');
-function loadNodes(){
-  if(!nodeSel)return;
-  nodeSel.innerHTML='<option value="">probing known nodes\u2026</option>';
-  fetch('/api/peers/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-  .then(function(r){return r.json();}).then(function(j){
-    var found=j.consoles||[];
-    nodeSel.innerHTML=found.map(function(c){
-      return '<option value="'+escapeHtml(c.url)+'"'+(c.already_peered?' disabled':'')+'>'
-        +escapeHtml(c.label)+' \u2014 '+escapeHtml(c.url)+(c.already_peered?' (already added)':'')+'</option>';
-    }).join('')+'<option value="__other">somewhere else (type a URL)\u2026</option>';
-    if(urlWrap)urlWrap.hidden=true;
-    var first=found.filter(function(c){return !c.already_peered;})[0];
-    if(first&&urlInp)urlInp.value=first.url;
-    if(!found.length){nodeSel.selectedIndex=nodeSel.options.length-1;if(urlWrap)urlWrap.hidden=false;}
-  }).catch(function(){nodeSel.innerHTML='<option value="__other">type a URL\u2026</option>';if(urlWrap)urlWrap.hidden=false;});
-}
-if(nodeSel){
-  nodeSel.addEventListener('change',function(){
-    if(nodeSel.value==='__other'){if(urlWrap)urlWrap.hidden=false;if(urlInp)urlInp.value='';}
-    else{if(urlWrap)urlWrap.hidden=true;if(urlInp)urlInp.value=nodeSel.value;}
-  });
-  loadNodes();
-}
-if(probeBtn)probeBtn.onclick=loadNodes;
-// The map is the page's whole point: what syncs with what, and what moved. It was
-// written, styled and then never called, so the Sync page has been shipping an empty
-// 900x300 box. Draw it.
-drawSyncMap();
+  setTimeout(function(){ document.querySelectorAll('.vd-body').forEach(function(d){ if((d.textContent||'').trim()==='Loading...'){ d.textContent='Nothing came back from this console in ten seconds. Reload to try again.'; } }); },10000);
 })();
 """
 
@@ -15274,27 +16444,27 @@ DEVICES_SYNC_JS = r"""
   var mv=document.querySelector('#vd-moves .vd-body');
   if(!dv||!mv)return;
   function el(t,c,txt){var n=document.createElement(t); if(c)n.className=c; if(txt!=null)n.textContent=txt; return n;}
-  function post(p,obj,cb){fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj||{})}).then(function(r){return r.json().then(function(j){cb(r.status,j);});}).catch(function(){cb(0,{error:'unreachable'});});}
+  function post(p,obj,cb){fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj||{})}).then(function(r){return r.json().then(function(j){cb(r.status,j);});}).catch(function(){cb(0,{error:'could not reach the box'});});}
   var lastSeen='';
   function load(){fetch('/api/deployed/overview').then(function(r){return r.text().then(function(t){
     if(r.status===200&&t===lastSeen)return;      // nothing changed: leave the page alone
     lastSeen=(r.status===200)?t:'';
-    var j; try{j=JSON.parse(t);}catch(e){j={error:'bad reply'};}
-    render(r.status,j);});}).catch(function(){render(0,{error:'unreachable'});});}
+    var j; try{j=JSON.parse(t);}catch(e){j={error:'the box answered in a way this console could not read'};}
+    render(r.status,j);});}).catch(function(){render(0,{error:'could not reach the box'});});}
   // The section keeps itself current: a scan on a handset surfaces its code here within
   // seconds, with no reload. Unchanged data never re-renders, so typing is not disturbed.
   setInterval(load, 5000);
   function linkForm(msg){
     dv.textContent=''; mv.textContent='';
-    mv.appendChild(el('p','meta','Link the box first: the form is under Devices, below.'));
-    dv.appendChild(el('p','doct','This console is not yet linked to the box\u2019s device-sync surface. '+
+    mv.appendChild(el('p','meta','Link the box first. The form is under Handsets on this box, below.'));
+    dv.appendChild(el('p','doct','This console is not linked to the box\u2019s handset service yet. '+
       'On the box, run  vd-ops config  and copy the URL and admin token here.'));
     if(msg){dv.appendChild(el('p','vd-err',msg));}
     var u=el('input','vd-in'); u.placeholder='http://box:8095';
     var t=el('input','vd-in'); t.placeholder='admin token';
     var b=el('button','cred-refresh','Link the box'); b.type='button';
     b.onclick=function(){post('/api/deployed/link',{url:u.value.trim(),token:t.value.trim()},function(st,j){
-      if(st===200){load();}else{linkForm((j&&j.error)||('refused '+st));}});};
+      if(st===200){load();}else{linkForm((j&&j.error)||('the box refused it, code '+st));}});};
     dv.appendChild(u); dv.appendChild(t); dv.appendChild(b);
   }
   function render(st,j){
@@ -15304,16 +16474,16 @@ DEVICES_SYNC_JS = r"""
 
     (o.pending||[]).forEach(function(pd){
       var c=el('div','vd-card');
-      c.appendChild(el('b',null,'Awaiting confirmation: '+pd.device+' / '+pd.holder+'  ('+pd.deployment+')'));
+      c.appendChild(el('b',null,'Waiting for you to confirm: '+pd.device+' / '+pd.holder+'  ('+pd.deployment+')'));
       c.appendChild(el('div','vd-code',pd.code.slice(0,3)+' '+pd.code.slice(3)));
-      c.appendChild(el('p','meta','Confirm ONLY if the holder reads this code from their handset.'));
+      c.appendChild(el('p','meta','Confirm only if the holder reads out this same code from their handset.'));
       var cb=el('button','cred-refresh','Confirm'); cb.type='button';
       cb.onclick=function(){post('/api/deployed/confirm',{fingerprint:pd.fingerprint},function(){load();});};
       var rb=el('button','cred-del','Reject'); rb.type='button';
       rb.onclick=function(){post('/api/deployed/reject',{fingerprint:pd.fingerprint},function(){load();});};
       c.appendChild(cb); c.appendChild(rb); dv.appendChild(c);});
 
-    if(!(o.devices||[]).length){dv.appendChild(el('p','meta','No devices enrolled yet.'));}
+    if(!(o.devices||[]).length){dv.appendChild(el('p','meta','No handsets joined yet.'));}
     (o.devices||[]).forEach(function(d){
       var c=el('div','vd-card');
       c.appendChild(el('b',null,d.label+' / '+d.holder));
@@ -15325,11 +16495,11 @@ DEVICES_SYNC_JS = r"""
         c.appendChild(vb);}
       dv.appendChild(c);});
 
-    var det=el('details'); det.appendChild(el('summary','onto-sum','Enrol a device'));
+    var det=el('details'); det.appendChild(el('summary','onto-sum','Enrol a handset'));
     var f={};
-    [['device','Device (e.g. S23)'],['holder','Holder (optional: who carries it)']].forEach(function(pr){
+    [['device','Handset (e.g. S23)'],['holder','Holder (optional: who carries it)']].forEach(function(pr){
       var i=el('input','vd-in'); i.placeholder=pr[1]; f[pr[0]]=i; det.appendChild(i);});
-    det.appendChild(el('p','meta','Deployments this device carries (pick one or more):'));
+    det.appendChild(el('p','meta','Which deployments this handset carries (pick one or more):'));
     var checks=[];
     (o.deployments||[]).forEach(function(d2){
       var lab=el('label'); lab.style.display='block';
@@ -15338,7 +16508,7 @@ DEVICES_SYNC_JS = r"""
       checks.push(cb2); det.appendChild(lab);});
     var extra=el('input','vd-in'); extra.placeholder='Or a new deployment name';
     det.appendChild(extra);
-    var mb=el('button','cred-refresh','Mint enrolment QR'); mb.type='button';
+    var mb=el('button','cred-refresh','Make a joining QR'); mb.type='button';
     var out=el('div');
     mb.onclick=function(){
       var deps=checks.filter(function(c2){return c2.checked;}).map(function(c2){return c2.value;});
@@ -15347,10 +16517,10 @@ DEVICES_SYNC_JS = r"""
       post('/api/deployed/mint',{device:f.device.value,holder:f.holder.value,
       deployment:deps.join('|'),ceiling:'OFFICIAL'},function(st2,j2){
       out.textContent='';
-      if(st2!==200){out.appendChild(el('p','vd-err',(j2&&j2.error)||('refused '+st2)));return;}
+      if(st2!==200){out.appendChild(el('p','vd-err',(j2&&j2.error)||('the box refused it, code '+st2)));return;}
       if(j2.qr_png_b64){var im=el('img','cred-qr'); im.alt='Enrolment QR'; im.src='data:image/png;base64,'+j2.qr_png_b64; out.appendChild(im);}
       else{out.appendChild(el('pre','vd-payload',j2.payload||''));}
-      out.appendChild(el('p','meta','Single use, expires in minutes. The holder scans it in '+
+      out.appendChild(el('p','meta','One use only, and it expires in a few minutes. The holder scans it in '+
         'Vantage Deployed (Settings, Join a box); their six-digit code then appears above.'));});};
     det.appendChild(mb); det.appendChild(out); dv.appendChild(det);
 
@@ -15360,7 +16530,7 @@ DEVICES_SYNC_JS = r"""
     // deployed box now; an untick removes it. The far box's answer is what the row shows.
     var shelf=[]; try{shelf=JSON.parse(document.getElementById('store-packs').textContent);}catch(e){}
     var deps=(o.deployments||[]);
-    if(!deps.length){mv.appendChild(el('p','meta','No deployment yet. Enrol a device below and name its deployment; it appears here.'));}
+    if(!deps.length){mv.appendChild(el('p','meta','No deployment yet. Enrol a handset below and name its deployment; it appears here.'));}
     deps.forEach(function(dep){
       var c=el('div','vd-card'); c.appendChild(el('b',null,dep));
       var have={}; ((o.manifest&&o.manifest[dep])||[]).forEach(function(pp){have[pp.name]=pp;});
@@ -15368,29 +16538,29 @@ DEVICES_SYNC_JS = r"""
       var vrow=el('label','tick-row locked');
       var vcb=el('input'); vcb.type='checkbox'; vcb.checked=true; vcb.disabled=true;
       vrow.appendChild(vcb); vrow.appendChild(el('span','tick-name','Knowledge Vault: "'+dep+'"'));
-      vrow.appendChild(el('span','tick-note','always: the folder of the same name, carried by the vault sync'));
+      vrow.appendChild(el('span','tick-note','always sent: the folder of the same name, carried by the sharing on the box'));
       list.appendChild(vrow);
-      if(!shelf.length){list.appendChild(el('p','meta','No packs on the File store yet - build or upload one there and it appears here.'));}
+      if(!shelf.length){list.appendChild(el('p','meta','No packs on the File store yet. Build or upload one there and it appears here.'));}
       shelf.forEach(function(pk){
         var row=el('label','tick-row'); var cb=el('input'); cb.type='checkbox'; cb.className='tick-pack';
         cb.checked=!!have[pk.name];
-        var note=el('span','tick-note', have[pk.name] ? ('on the box, '+Math.round((have[pk.name].size||pk.bytes)/1024)+' KB') : 'not assigned');
+        var note=el('span','tick-note', have[pk.name] ? ('on the box, '+Math.round((have[pk.name].size||pk.bytes)/1024)+' KB') : 'not on the box');
         row.appendChild(cb); row.appendChild(el('span','tick-name',pk.name+'  ('+pk.kind+' pack)')); row.appendChild(note);
         cb.onchange=function(){
           cb.disabled=true;
           if(cb.checked){
-            note.textContent='assigning…';
+            note.textContent='sending…';
             post('/api/deployed/pack-assign',{deployment:dep,kind:pk.kind,store_path:pk.path},function(st,j){
               cb.disabled=false;
               if(st===200){note.textContent='on the box, just now';}
-              else{cb.checked=false; note.textContent='could not assign: '+((j&&(j.error||j.reason))||st);}
+              else{cb.checked=false; note.textContent='could not send it: '+((j&&(j.error||j.reason))||st);}
             });
           } else {
-            note.textContent='removing…';
+            note.textContent='taking it off…';
             post('/api/deployed/pack-remove',{deployment:dep,name:pk.name},function(st,j){
               cb.disabled=false;
-              if(st===200){note.textContent='not assigned';}
-              else{cb.checked=true; note.textContent='could not remove: '+((j&&(j.error||j.reason))||st);}
+              if(st===200){note.textContent='not on the box';}
+              else{cb.checked=true; note.textContent='could not take it off: '+((j&&(j.error||j.reason))||st);}
             });
           }
         };
@@ -15398,7 +16568,7 @@ DEVICES_SYNC_JS = r"""
       });
       c.appendChild(list);
       var who=(o.devices||[]).filter(function(d){return !d.revoked && (d.deployment||'').split('|').map(function(x){return x.trim();}).indexOf(dep)>=0;});
-      c.appendChild(el('p','meta', who.length ? ('Reaches: '+who.map(function(d){return d.label;}).join(', ')) : 'No device on this deployment yet.'));
+      c.appendChild(el('p','meta', who.length ? ('Goes to: '+who.map(function(d){return d.label;}).join(', ')) : 'No handset on this deployment yet.'));
       mv.appendChild(c);});
     var rl=el('button','cred-refresh','Refresh'); rl.type='button'; rl.onclick=load;
     dv.appendChild(rl);
@@ -15437,182 +16607,52 @@ def render_sync(state):
             _packs.append({"name": f["name"], "path": f["path"], "kind": kind,
                            "bytes": f.get("bytes", 0)})
 
-    doc.append("<section id=syncpage aria-label='Sync'><div class=ah>"
-               "<h2 class=title>Sync</h2><span class=meta>"
-               f"<b>{_e2(inst.get('product_name', 'This console'))}</b> holds the master copy: "
-               f"{len(_mine)} Knowledge Vault folder{'s' if len(_mine) != 1 else ''} and "
-               f"{len(_packs)} pack{'s' if len(_packs) != 1 else ''} on the File store. Tick what "
-               "each other box should receive. A tick sends it now; the far box keeps any newer "
-               "edits of its own.</span></div>")
+    doc.append("<section id=syncpage aria-label='Sharing'><div class=ah>"
+               "<h2 class=title>Sharing</h2><span class=meta>"
+               f"This box holds the master copy of the Knowledge Vault: {len(_mine)} folder{'s' if len(_mine) != 1 else ''}, "
+               f"and {len(_packs)} pack{'s' if len(_packs) != 1 else ''} on the File store. Pair a box, then tick the folders "
+               "it should get. A box gets exactly what is ticked for it, and nothing else.</span></div>")
 
-    # ---- to the estate's own boxes: every enrolled box with a console, no pairing ------------
-    # The deployed edition listens on loopback and cannot mint a token, so the peer handshake
-    # can never reach it; the enrolment channel can. A box appears here the moment its
-    # collector reports a console, and a tick sends the folder over the install-console key.
-    def _card(pid, title, sub, rows, extra=""):
-        doc.append(
-            f"<div class=sync-peer data-id='{_e2(pid)}'>"
-            f"<div class=sync-peer-h><b>{_e2(title)}</b><span class=meta>{_e2(sub)}</span></div>"
-            f"<div class=tick-list>{''.join(rows)}</div>"
-            f"<div class='a-res sp-res' role=status></div>{extra}</div>")
-
-    def _rows(pid):
-        out = []
-        for f in _mine:
-            r = _rule_for.get((pid, f))
-            on = bool(r and r.get("direction", "pull") == "push")
-            if r:
-                when = str(r.get("last_pull", ""))[:16].replace("T", " ")
-                what = (f"{r.get('created', 0)} new, {r.get('updated', 0)} updated, "
-                        f"{r.get('kept', 0)} kept - {when}")
-                if r.get("direction", "pull") == "pull":
-                    what = "pulled from there, not sent - " + what
-            else:
-                what = "not shared"
-            out.append(
-                f"<label class=tick-row data-folder='{_e2(f)}'>"
-                f"<input type=checkbox class=tick-folder{' checked' if on else ''}>"
-                f"<span class=tick-name>{_e2(f)}</span>"
-                f"<span class=tick-note>{_e2(what)}</span>"
-                f"<button type=button class='tick-send cred-refresh'{'' if on else ' hidden'}>"
-                f"Send now</button></label>")
-        return out or ["<p class=meta>This console's vault has no folders yet.</p>"]
-
-    _tcfg = (cfg or {}).get("targets") or {}
-    _self_hosts = ("127.0.0.1", "localhost", "::1")
-    boxes = [t for t in state.get("targets", [])
-             if t.get("name") in _tcfg and t.get("console_version")
-             and str(_tcfg[t["name"]]).rsplit("@", 1)[-1] not in _self_hosts]
-    doc.append("<h3 class=sync-h>To the estate's boxes</h3>")
-    if "push-vault" not in acts:
-        doc.append("<p class=doct>Sending to a box needs the install-console action, which "
-                   "arrives with enrolment. None is enabled on this console.</p>")
-    elif not boxes:
-        doc.append("<p class=doct>No enrolled box reports a console yet. Install one from a "
-                   "box's page (Install a console on this box) and it appears here on the "
-                   "next poll.</p>")
-    for t in boxes:
-        pid = "box:" + t["name"]
-        _card(pid, t.get("label") or t["name"],
-              f"console {t.get('console_version')} · over the enrolment channel", _rows(pid))
-
-    # ---- other consoles, reached by a token they minted ----------------------------------------
-    doc.append("<h3 class=sync-h>Other consoles, by token</h3>")
-    if not _pout:
-        doc.append("<p class=doct>None. This is for a console outside the estate's enrolment - "
-                   "another organisation's, say. Open <b>Set up a console</b> below: it takes "
-                   "the far console's address and a token it mints, once.</p>")
-    for p_ in _pout:
-        pid = p_.get("id", "")
-        far = (((_pc.get(pid) or {}).get("snapshot") or {}).get("vault_folders", []))
-        rows = []
-        for f in _mine:
-            r = _rule_for.get((pid, f))
-            on = bool(r and r.get("direction", "pull") == "push")
-            if r:
-                when = str(r.get("last_pull", ""))[:16].replace("T", " ")
-                what = (f"{r.get('created', 0)} new, {r.get('updated', 0)} updated, "
-                        f"{r.get('kept', 0)} kept - {when}")
-                if r.get("direction", "pull") == "pull":
-                    what = "pulled from there, not sent - " + what
-            else:
-                what = "not shared"
-            rows.append(
-                f"<label class=tick-row data-folder='{_e2(f)}'>"
-                f"<input type=checkbox class=tick-folder{' checked' if on else ''}>"
-                f"<span class=tick-name>{_e2(f)}</span>"
-                f"<span class=tick-note>{_e2(what)}</span>"
-                f"<button type=button class='tick-send cred-refresh'{'' if on else ' hidden'}>"
-                f"Send now</button></label>")
-        if not rows:
-            rows.append("<p class=meta>This console's vault has no folders yet.</p>")
-        far_opts = "".join(f"<option>{_e2(f)}</option>" for f in far) or \
-                   "<option value=''>refresh first</option>"
-        doc.append(
-            f"<div class=sync-peer data-id='{_e2(pid)}'>"
-            f"<div class=sync-peer-h><b>{_e2(p_.get('name', ''))}</b>"
-            f"<span class=meta>{_e2(p_.get('url', ''))}</span></div>"
-            f"<div class=tick-list>{''.join(rows)}</div>"
-            f"<div class='a-res sp-res' role=status></div>"
-            f"<details class=sync-more><summary>Pull from this console instead</summary>"
-            f"<div class=cred-pkg-why>The other direction: take a folder that console offers. "
-            f"Your own newer edits are kept.</div>"
-            f"<div class=sync-peer-acts>"
-            f"<button type=button class='sp-pull cred-refresh'>Refresh estate</button>"
-            f"<select class=sp-folder>{far_opts}</select>"
-            f"<button type=button class='sp-vpull cred-refresh'>Pull folder</button>"
-            f"</div></details></div>")
+    # ---- the engine's own account leads (Spec 010): rows with sources and times, or the
+    # sentence for why it could not be read. Everything below it is the older transport.
+    doc.append("<h3 class=sync-h>Sharing on this box</h3>")
+    doc.append(render_sync_engine(state))
+    _snap, _serr, _ = sync_snapshot()
+    doc.append(render_sync_folders(state, _snap, _serr))
+    doc.append(render_sync_progress(state))
 
     # ---- to devices: per deployment, tick the packs; the vault folder is fixed by name -------
-    doc.append("<h3 class=sync-h>To devices</h3>")
-    doc.append("<section id=vd-moves aria-label='What moves to devices'>"
-               "<div class=cred-pkg-why>Each deployment's devices receive the Knowledge Vault "
-               "folder of the same name, carried by the vault sync on the box, plus every pack "
-               "ticked here. A tick assigns the pack on the deployed box now; an untick removes "
-               "it from the next sync.</div>"
+    doc.append("<h3 class=sync-h>What the handsets get</h3>")
+    doc.append("<section id=vd-moves aria-label='What the handsets get'>"
+               "<div class=cred-pkg-why>The handsets on a deployment get the vault folder of the same "
+               "name, carried by the sharing on the box, plus every pack ticked here. A tick puts the "
+               "pack on the box now; an untick takes it off now.</div>"
                "<div class=vd-body>Loading...</div></section>")
     doc.append("<script type=application/json id=store-packs>"
                + json.dumps(_packs).replace("<", "\\u003c") + "</script>")
-    doc.append("<h3 class=sync-h>Devices</h3>")
-    doc.append("<section id=vd-devices aria-label='Synchronised devices'>"
-               "<div class=cred-pkg-why>The phones and tablets synchronised to this box. Enrol "
-               "one with a QR, confirm it against the six-digit code the holder reads out, "
-               "revoke it when the deployment ends.</div>"
+    doc.append("<h3 class=sync-h>Handsets on this box</h3>")
+    doc.append("<section id=vd-devices aria-label='Handsets on this box'>"
+               "<div class=cred-pkg-why>The phones and tablets joined to this box. Enrol one with a QR "
+               "code. Confirm it against the six-digit code the holder reads out. Revoke it when the "
+               "deployment ends.</div>"
                "<div class=vd-body>Loading...</div></section>")
 
-    # ---- the map, from the rules ------------------------------------------------------------
-    doc.append("<h3 class=sync-h>Sync map</h3>"
-               "<svg class=sync-map viewBox='0 0 900 300' role=img "
-               "aria-label='What syncs between consoles and devices'></svg>")
-    doc.append("<script type=application/json id=sync-data>" + json.dumps({
-        "me": inst.get("product_name", "Vantage"),
-        "mode": inst.get("console_mode", "admin"),
-        "peers": [{"id": p_.get("id"), "name": p_.get("name"),
-                   "servers": len(((_pc.get(p_.get("id")) or {}).get("snapshot") or {})
-                                  .get("servers", []))} for p_ in _pout],
-        "granted": [p_.get("name") for p_ in _pin],
-        "rules": _rules,
-        "local_servers": len(state.get("targets", []))}) + "</script>")
-
-    # ---- set up a console: the once-per-box mechanics, folded -------------------------------
-    doc.append("<details class=sync-setup><summary class=sync-h>Set up a console</summary>"
-               "<div class=cred-pkg-why>Sync happens between Vantage consoles, over a token the "
-               "far console mints for this one. A plain TAK server with no console cannot take "
-               "part. Add a console once; after that everything is a tick above.</div>"
-               "<div class=sync-cols><div>")
-    doc.append("<h4 class=sync-h>Add a console this one sends to</h4>")
-    doc.append("<form class=sync-add>"
-               "<label class=fl>Console"
-               "<select class=pa-node></select>"
-               "<span class=hint>found by probing the nodes this estate already knows - "
-               "enrolled boxes and peers' servers</span></label>"
-               "<div class=fedpop-act style='margin:0 0 8px'>"
-               "<button type=button class='pa-probe cred-refresh'>Probe again</button></div>"
-               "<label class='fl pa-urlwrap' hidden>URL"
-               "<input class=pa-url placeholder='http://host:8090'></label>"
-               "<label class=fl>Name<input class=pa-name maxlength=40 "
-               "placeholder='what you call that console'></label>"
-               "<label class=fl>Their token<input class=pa-token autocomplete=off>"
-               "<span class=hint>minted on that console's Sync page - the handshake "
-               "stays deliberate</span></label>"
-               "<div class=fedpop-act><button type=submit class='a-go confirm'>"
-               "Add console</button></div><div class='a-res pa-res' role=status></div></form>")
-    doc.append("</div><div>")
-    doc.append("<h4 class=sync-h>Consoles allowed to read from, and send to, this one</h4>")
-    if _pin:
-        for p_ in _pin:
-            doc.append(f"<div class=sync-peer><div class=sync-peer-h>"
-                       f"<b>{_e2(p_.get('name', ''))}</b>"
-                       f"<span class=meta>{p_.get('pulls', 0)} uses"
-                       + (f" · last {_e2(str(p_.get('last_seen', ''))[:16])}"
-                          if p_.get("last_seen") else " · never used")
-                       + "</span></div></div>")
-    doc.append("<form class=sync-mint>"
-               "<label class=fl>Grant a console access"
-               "<input class=pm-name maxlength=40 placeholder='name the console'></label>"
-               "<div class=fedpop-act><button type=submit class=cred-refresh>"
-               "Mint peer token</button></div><div class=pm-out></div></form>")
-    doc.append("</div></div></details></section>")
+    doc.append("</section>")
+    doc.append("<style>.sync-engine{margin:6px 0 14px}.sync-err{padding:8px 10px;border-left:4px solid "
+               "var(--fail);background:var(--panel)}.sync-finding{color:var(--fail);font-weight:600;margin:4px 0}"
+               ".sync-rows{width:100%;border-collapse:collapse;margin:8px 0}.sync-rows th,.sync-rows td{text-align:left;"
+               "padding:5px 8px;border-bottom:1px solid var(--line)}.sync-rows tr.alarm td{color:var(--fail);font-weight:600}"
+               ".sync-rows tr.conflict td{background:rgba(178,58,72,.08)}.sync-rows tr.unshared td{color:var(--muted)}"
+               ".sync-steps{margin:6px 0 10px 18px;padding:0}.sync-steps li{margin:3px 0}"
+               ".sync-verdict{font-weight:700;margin:4px 0 8px}.sync-support{margin:8px 0}.sync-support summary{cursor:pointer}"
+               ".sync-support li{font-family:monospace;font-size:12px;word-break:break-all}.press-res{font-size:12px;margin-left:6px}"
+               ".press-res.ok{color:var(--acc)}.press-res.fail{color:var(--fail)}.sync-finding.done{color:var(--muted);font-weight:400}"
+               ".sync-state{margin-right:4px}.s-up-to-date{color:var(--acc)}.s-catching-up{color:#B5B171}.s-not-connected,.s-identity-changed{color:var(--fail)}"
+               ".sync-grid input.sync-tick{width:20px;height:20px}.sync-holders{font-size:12px}"
+               ".sync-grid th{vertical-align:top;white-space:nowrap}.sync-grid th:first-child{width:22%}"
+               ".sync-grid .sync-box{font-weight:700}.sync-grid .sync-id{font-family:monospace;font-size:11px}"
+               ".sync-grid td.sync-cell{white-space:nowrap}.sync-grid .tick-row{display:inline-flex;gap:6px;align-items:center}"
+               ".sync-grid .tick-note{font-size:12px}.sync-note{margin:4px 0}</style>")
     doc.append("<style>.vd-code{font-family:monospace;font-size:40px;font-weight:700;"
                "margin:4px 0}.vd-in{display:block;margin:6px 0;padding:8px;min-width:260px}"
                ".vd-card{margin:10px 0;padding:10px;border:1px solid #D2C78D;"
@@ -15639,7 +16679,7 @@ def deployed_api(path, data, client):
         try:
             with urllib.request.urlopen(req, timeout=6) as r:
                 if r.status != 200:
-                    return 502, {"error": f"the box refused ({r.status})"}
+                    return 502, {"error": f"the box the box refused it, code ({r.status})"}
         except Exception as e2:
             return 502, {"error": f"could not reach the box: {e2.__class__.__name__}"}
         tmp = DEPLOYED_LINK_FILE + ".tmp"
@@ -15772,7 +16812,7 @@ STORE_SHARE_JS = r"""
 (function(){
   var root=document.querySelector('#store-share .vd-body'); if(!root)return;
   function el(t,c,txt){var n=document.createElement(t); if(c)n.className=c; if(txt!=null)n.textContent=txt; return n;}
-  function post(p,obj,cb){fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj||{})}).then(function(r){return r.json().then(function(j){cb(r.status,j);});}).catch(function(){cb(0,{error:'unreachable'});});}
+  function post(p,obj,cb){fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj||{})}).then(function(r){return r.json().then(function(j){cb(r.status,j);});}).catch(function(){cb(0,{error:'could not reach the box'});});}
   function load(){fetch('/api/deployed/overview').then(function(r){return r.json().then(function(j){render(r.status,j);});}).catch(function(){render(0,{});});}
   function render(st,j){
     root.textContent='';
@@ -15798,7 +16838,7 @@ STORE_SHARE_JS = r"""
     (o.deployments||[]).forEach(function(d){var op=el('option'); op.value=d; dl.appendChild(op);});
     var ab=el('button','cred-refresh','Share'); ab.type='button';
     ab.onclick=function(){post('/api/deployed/pack-assign',{deployment:dsi.value.trim(),kind:ks.value,store_path:fs.value},
-      function(st2,j2){if(st2===200){load();}else{alert((j2&&j2.error)||('refused '+st2));}});};
+      function(st2,j2){if(st2===200){load();}else{alert((j2&&j2.error)||('the box refused it, code '+st2));}});};
     det.appendChild(fs); det.appendChild(ks); det.appendChild(dsi); det.appendChild(dl); det.appendChild(ab);
     root.appendChild(det);
   }
@@ -16690,7 +17730,7 @@ class Handler(BaseHTTPRequestHandler):
                         why = {}
                     self._send(502, json.dumps(
                         {"error": why.get("error") or why.get("reason")
-                         or f"the box refused ({st})"}), "application/json")
+                         or f"the box the box refused it, code ({st})"}), "application/json")
                 else:
                     files = []
                     root = store_resolve("", "store")
@@ -16746,6 +17786,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._send(200, json.dumps({"fqdn": _fq, "addrs": []}),
                            "application/json")
+            return
+        elif path == "/api/sync/state":
+            code, res = sync_state_api(state)
+            self._send(code, json.dumps(res), "application/json")
             return
         elif path == "/api/vault/graph":
             import urllib.parse as _up
@@ -16988,6 +18032,7 @@ class Handler(BaseHTTPRequestHandler):
         if not (path.startswith("/api/action/") or path.startswith("/api/setup/")
                 or path.startswith("/api/agent/") or path.startswith("/api/vault/")
                 or path.startswith("/api/peers/") or path.startswith("/api/deployed/")
+                or path.startswith("/api/sync/")
                 or path in ("/api/propose", "/api/propose/dismiss", "/api/fedlink/forget",
                             "/api/sam/chat", "/api/fedmap/pos",
                             "/api/library/delete", "/api/library/fetch",
@@ -17217,6 +18262,18 @@ class Handler(BaseHTTPRequestHandler):
             code, res = vault_restore(data, client)
         elif path.startswith("/api/deployed/"):
             code, res = deployed_api(path, data, client)
+        elif path in ("/api/sync/share", "/api/sync/unshare", "/api/sync/retire", "/api/sync/engine",
+                      "/api/sync/protect", "/api/sync/harden", "/api/sync/resolve", "/api/sync/pair"):
+            try:
+                code, res = sync_api(path, data, client)
+            except Exception as ex:  # the page must always get an answer in words
+                sys.stderr.write("sync route %s failed: %r\n" % (path, ex))
+                audit({"action": "sync-fault", "target": str(data.get("box", "-")), "result": "ERROR",
+                       "detail": f"{path} {type(ex).__name__}: {str(ex)[:160]}", "client": client})
+                code, res = 500, {"error": "This console could not finish that press. Nothing was changed on the box. "
+                                           "The fault is in this console's log."}
+        elif not path.startswith("/api/action/"):
+            code, res = 404, {"error": "This console has no such action."}
         else:
             aid = path.split("/api/action/", 1)[1]
             if aid == "upgrade-server":
@@ -17313,7 +18370,10 @@ def sweep_orphaned_jobs():
 if __name__ == "__main__":
     sweep_orphaned_jobs()
     sweep_seeded_agent_context()
-    srv = ThreadingHTTPServer((BIND, PORT), Handler)
+    _bind_host, _bind_note = resolve_bind(BIND, PORT)
+    if _bind_note:
+        sys.stderr.write("WARNING: " + _bind_note + "\n")
+    srv = ThreadingHTTPServer((_bind_host, PORT), Handler)
     scheme = "http"
     tls_dir = os.environ.get("VANTAGE_CONSOLE_TLS_DIR", "/etc/vantage-console/tls")
     cert = os.path.join(tls_dir, "fullchain.pem")

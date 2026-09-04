@@ -245,6 +245,37 @@ One folder is special: **Agent Context** seeds itself with three notes - Identit
 Standing Orders, About this estate - and every connected AI reads them before answering.
 Shaping your assistant is just editing notes.
 
+## Sharing: the vault between boxes
+
+The Sharing page is where the vault travels from this box to the others. It leads with a
+one-line verdict on sharing on this box - on, off, or not readable, and why - with each
+warning carrying the button that fixes it (**Protect it**, **Turn it off**, **Start at
+boot**) and the control that turns sharing on or off. Sharing on means the boxes reconnect
+and catch up on their own, and it comes back on by itself after a restart.
+
+**Which boxes get which folders** is a grid: one row per folder in the vault, one column
+per box, a tick in each cell. Tick a folder for a box and that box takes it and puts its copy
+in its own vault; from then on the two keep it current both ways, and a note edited on the
+box comes back here. Untick and the box keeps what it has; nothing is deleted. Tick the same
+folder for a second box and the console introduces the boxes to each other for that folder,
+so two forward boxes keep each other current while the firm base is out of reach, and both
+reach back when they can. A box the engine does not know yet shows **Pair** in its column:
+one press, over the enrolment channel the box already holds, and the box has the engine
+(installed from the release if it had none), is hardened, and is known here by the identity
+it reported. There is no password on this page; the sign-in that reached it is the gate, and
+every press is audited with the folder, the box and who pressed.
+
+**Where each folder has got to** lists only the shared pairs, a glance word first (current,
+catching up, waiting, conflict), with when each line was last read. If sharing cannot be
+read, every line says when it was read last and nothing shows a zero it did not read.
+Earlier versions of a changed file are kept on the box for twelve months; a conflict keeps
+both copies and asks a person to settle it, here, with **Keep this console's copy** or
+**Keep the box's copy**.
+
+Every press answers where it was pressed, in words, and the answer stays across a reload.
+The engine's own name and the folder ids live under "Details for support", not in the
+sentences you read.
+
 ## Vantage Deployed: knowledge on the handset
 
 Vantage Deployed is the companion Android app. It carries a deployment's knowledge vault
@@ -253,8 +284,8 @@ a signed link, and lets an operator read, search, edit and query the vault in th
 offline. Its source is under `deployed/`; the app itself reaches devices from the File
 store, never from the console over the wire.
 
-**Enrol a device.** The Sync page has a Devices section: this is where handsets join the
-box. Enrol a device names it and the deployment or deployments it should carry, and mints
+**Enrol a handset.** The Sharing page ends with Handsets on this box: this is where handsets
+join the box. Enrol a device names it and the deployment or deployments it should carry, and mints
 a single-use QR that lives for minutes. The holder opens Vantage Deployed, scans it, and
 reads back a six-digit code shown large on their screen. You confirm that code against the
 one on the page, and only then is the device on the roll. It is the Bluetooth-pairing
@@ -263,8 +294,8 @@ ends the binding when a deployment finishes; the device is refused from then on.
 
 **What a device receives.** Exactly its deployment's folder from the Knowledge Vault, at
 or below the content ceiling it was enrolled with, together with every pack shared to that
-deployment from the File store. The What moves section on the Sync page spells this out per
-device. Sharing is decided where the content lives: a folder in the vault, and Shared to
+deployment from the File store. What the handsets get, on the Sharing page, spells this out
+per handset. Sharing is decided where the content lives: a folder in the vault, and Shared to
 deployments on the File store. Nothing else on the box is visible to the device.
 
 **On the handset**, the app opens on the vault's ways of working. Ask gives a grounded

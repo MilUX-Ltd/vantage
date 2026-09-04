@@ -44,9 +44,13 @@ whole estate, and it does three things.
 - **Carry the knowledge.** A Knowledge Vault holds the estate's orders, locations, people
   and reference, moves with the estate, and is what an AI assistant reads to answer "what
   do I need to know here?".
+- **Between boxes.** Folders of the vault are shared box by box from the console's Sharing
+  page: tick a folder for a box and the two keep it current both ways; tick it for several
+  and those boxes keep each other current when the firm base is out of reach. The sync
+  engine ships inside the release and pairs a box with one press.
 - **Onto the handset.** Vantage Deployed, the companion Android app, carries a deployment's
   vault and its mission and map packs to a phone: a device joins by scanning a QR from the
-  console's Sync page, stays in step over a signed link, reads, searches, edits and answers
+  console's Sharing page, stays in step over a signed link, reads, searches, edits and answers
   questions from the vault offline, and hands packs to ATAK. Over LoRa it keeps syncing with
   no network at all. Source under `deployed/`.
 

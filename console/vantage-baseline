@@ -39,6 +39,7 @@ JSON_OUT = os.path.join(ROOT, "console", "third-party.json")
 PINNING_SCRIPTS = [
     "console/provision/vantage-tak-provision.sh",
     "console/provision/vantage-infratak-provision.sh",
+    "console/pins.sh",
 ]
 PIN_RE = re.compile(r"^([A-Z][A-Z0-9_]*)=\"([^\"]*)\"", re.M)
 # A constant naming a version is one whose name ends this way. Anything else in those
@@ -80,6 +81,16 @@ COMPONENTS = [
         "releases": None,
         "licence": "GPL-2.0 with Classpath Exception",
         "offline": "yes, in the offline bundle",
+    },
+    {
+        "id": "syncthing",
+        "name": "Syncthing",
+        "what": "the sync engine behind the Sharing page: carries Knowledge Vault folders between boxes (ADR-006)",
+        "pin": ("console/pins.sh", "SYNCTHING_VER"),
+        "project": "https://github.com/syncthing/syncthing",
+        "releases": "https://api.github.com/repos/syncthing/syncthing/releases/latest",
+        "licence": "MPL-2.0",
+        "offline": "yes, the release tarball carries the pinned linux-amd64 package onto the software shelf; Pair sends it to a box that has none",
     },
     {
         "id": "mediamtx",

@@ -43,8 +43,8 @@ if [[ -z "$PROFILE" ]]; then
 fi
 case "$PROFILE" in
     cloud)              TCP="8089 8443 8446"; PUBLIC=1 ;;
-    firmbase|nuc)       TCP="8089 8443 8446"; PUBLIC=0 ;;
-    deployed)           TCP="8089 8443 8446 1935 8554 8888 8080"; PUBLIC=0 ;;
+    firmbase|nuc)       TCP="8089 8443 8446 22000"; PUBLIC=0 ;;   # 22000: the sync engine (ADR-006), scoped, private
+    deployed)           TCP="8089 8443 8446 1935 8554 8888 8080 22000"; PUBLIC=0 ;;
     *)                  deny "unknown profile '$PROFILE'" ;;
 esac
 

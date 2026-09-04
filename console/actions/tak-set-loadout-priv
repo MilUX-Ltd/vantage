@@ -34,7 +34,7 @@ fi
 
 # Whole-line vocabulary check, duplicates refused, takserver required: a TAK box
 # whose declaration omits its TAK server is a mistake, not a choice.
-VOCAB=" takserver cloudtak mediamtx maps takbot mosquitto nodered ollama lanntp mesh tailscale docker "
+VOCAB=" takserver cloudtak mediamtx maps takbot mosquitto nodered ollama lanntp mesh tailscale docker syncthing "
 seen=" "
 IFS=, read -ra _toks <<<"$comps"
 for t in "${_toks[@]}"; do

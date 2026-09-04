@@ -37,6 +37,18 @@
       "pinned_by": null
     },
     {
+      "id": "syncthing",
+      "name": "Syncthing",
+      "what": "the sync engine behind the Sharing page: carries Knowledge Vault folders between boxes (ADR-006)",
+      "project": "https://github.com/syncthing/syncthing",
+      "releases": "https://api.github.com/repos/syncthing/syncthing/releases/latest",
+      "licence": "MPL-2.0",
+      "offline": "yes, the release tarball carries the pinned linux-amd64 package onto the software shelf; Pair sends it to a box that has none",
+      "note": null,
+      "version": "v2.1.3",
+      "pinned_by": "console/pins.sh:SYNCTHING_VER"
+    },
+    {
       "id": "mediamtx",
       "name": "MediaMTX",
       "what": "the video server behind the Streams page",

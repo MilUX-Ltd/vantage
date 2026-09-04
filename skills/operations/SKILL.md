@@ -1,7 +1,7 @@
 ---
 name: operations
 description: The day-to-day running of a TAK server. Issue and revoke certificates, enrol devices, manage users and groups, read and back up the configuration, restart a service, pull logs. Use when someone needs to get on the network, someone needs to be taken off it, a certificate is expiring, or a service needs a look. Covers what each action really does and the ways each one goes quietly wrong.
-audited: 2026-08-31
+audited: 2026-09-03
 audit_verdict: pass
 audited_with: skill-safety-audit v3
 audit_note_2026-09-03_teardown: |
@@ -32,8 +32,8 @@ audit_note_2026-09-03: |
   provider-specific action it referred to has been removed from the product. No
   executable content, no new commands, no new credential paths. Hash updated by the
   maintainer; a full re-audit with skill-safety-audit is still owed.
-audit_sha: 2a6a303ff63c428d
-audit_sha_source: 7570a53f5f2bd22e
+audit_sha: 642ec0edef3e10a4
+audit_sha_source: 8a250449df6246bf
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -277,7 +277,7 @@ sshd, networking and the VPN. A teardown that strands the box is not a teardown.
 ## Sending a vault folder to a box
 
 `push-vault` sends one of this console's Knowledge Vault folders to an enrolled box, over the
-same install-console key that put the console there. Use it from the Sync page (a tick per
+same install-console key that put the console there. Use it from the Sharing page (a tick per
 folder per box), or as an action against a box. The folder lands in the box's vault under the
 never-clobber rule: anything newer on the box is kept and reported, everything else is written
 whole. It changes nothing but that folder.
@@ -286,3 +286,16 @@ It exists because the deployed edition's console listens on loopback and cannot 
 token, so the token handshake between consoles can never reach it. A box appears on the Sync
 page the moment its collector reports a console; nothing has to be paired.
 
+## Sharing vault folders with a box (the sync engine)
+
+From console 2.60.0 the Sharing page leads with the sync engine (Syncthing, ADR-006) and lists
+every folder in the Knowledge Vault with a tick per box. A tick shares that one folder with
+that one box: the console's root helper (console-sync-priv, not an action) adds the box to the folder on
+this side, and the `sync-share` action carries the box's half over the install-console key
+(the box creates the folder at its own vault path and shares it back). The reply is the
+result of the configuration writes, never a claim that data has moved; the row's words are
+the engine's own, each with a time. Untick stops sharing; the copy already on the box stays.
+
+A box that the engine does not know yet shows **Pair** in its column: `sync-pair` sets up the box's engine over the install-console key (the engine it has, or the pinned package sent to it), hardens it, gives it the vault and introduces this console; the id the box reports over that authenticated channel is pinned. A tick on a folder not yet in the engine creates it first. A hand-built
+share of the whole vault root is flagged: tick the folders you want, then press retire, which is the migration in one press: this console stops sharing it with every box, `sync-retire` tells each box's engine to forget its copy of the root folder, and the console forgets it; files stay on every side. Renaming or deleting a vault folder a box holds is refused, naming the box. Share, unshare, make and retire take
+the operator password and are audited. The console never holds the engine's key.
