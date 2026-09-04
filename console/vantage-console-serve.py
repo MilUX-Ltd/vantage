@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.68.2"
+VERSION = "2.68.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.62-beta"
+VANTAGE_RELEASE = "0.9.63-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -982,6 +982,9 @@ def human_age(sec):
     if sec is None:
         return "unknown"
     sec = int(sec)
+    if sec < 0:
+        # a box whose clock runs ahead of this one read "-1374s ago", which is not a thing
+        return "just now"
     if sec < 60:
         return f"{sec}s ago"
     if sec < 3600:
@@ -4360,6 +4363,11 @@ def _sync_api(path, data, client):
             if why.startswith("needs-package"):
                 why = (f"{box} does not have the sharing software, and the file {SYNC_ENGINE_FILE} is not on it. "
                        f"Put that file on the File store's software shelf, send it to {box}, then pair again.")
+            if not why.strip():
+                # a colon with nothing after it is not an answer: say what is known, and where
+                # the rest is (Matt, 4 Sep 2026: "Could not pair edge:" on the page)
+                why = (f"{box} was reached but said nothing this console could read. Nothing was "
+                       "changed on the box. The detail is in this console's log.")
             sync_pairlog_set(box, False, why)
             return 502, {"error": f"Could not pair {box}: {why}"}
         try:
@@ -4541,15 +4549,29 @@ def render_sync_folders(state, snap, err):
     wr = fmap.get("whole_root")
     wr_holders = {}
     if wr:
-        for did in (wr.get("devices") or []):
+        # the engine reports a folder's devices as ids; tolerate the object form rather than
+        # answering 500 on the page an operator is standing in front of
+        for entry in (wr.get("devices") or []):
+            did = entry.get("deviceID") if isinstance(entry, dict) else entry
+            if not did:
+                continue
             who = next((bx for bx in boxes if (_device_for(bx, collector.get(bx), snap, pins) or {}).get("deviceID") == did), None)
-            wr_holders[who or did[:7]] = did
-        names = ", ".join(labels.get(bx, bx) for bx in wr_holders)
-        doc.append(f"<p class=sync-finding data-code=whole-vault>The whole vault is shared with {e(names) if names else 'no box'} as one lump. "
-                   "While that stands you cannot choose folders one at a time. Tick the folders you want below, "
-                   "then stop the whole-vault share. No files are deleted."
-                   + ("" if not live else f" <button type=button class=sync-retire data-folder='{e(str(wr.get('id')))}'>Stop sharing the whole vault</button><span class=press-res role=status></span>")
-                   + "</p>")
+            wr_holders[who or str(did)[:7]] = did
+        stop = ("" if not live else
+                f" <button type=button class=sync-retire data-folder='{e(str(wr.get('id')))}'>Stop sharing the whole vault</button>"
+                "<span class=press-res role=status></span>")
+        if wr_holders:
+            names = ", ".join(labels.get(bx, bx) for bx in wr_holders)
+            doc.append(f"<p class=sync-finding data-code=whole-vault>The whole vault is shared with {e(names)} as one lump. "
+                       "While that stands you cannot choose folders one at a time. Tick the folders you want below, "
+                       "then stop the whole-vault share. No files are deleted." + stop + "</p>")
+        else:
+            # It exists here and no box holds it, so it blocks nothing. Saying "shared with no
+            # box" in red, above a warning that folders cannot be chosen one at a time, was
+            # simply untrue (Matt, 4 Sep 2026).
+            doc.append("<p class='meta sync-support' data-code=whole-vault-idle>The whole vault is still set up here "
+                       "as one shared folder, but no box holds it, so it is not in your way. Stop it to tidy up if you "
+                       "like. No files are deleted." + stop + "</p>")
     if not boxes:
         doc.append("<p class=doct>No box is enrolled on this console yet, so there is nothing to share with. "
                    "Enrol a box from its server page and it appears here as a column.</p>")
@@ -4576,8 +4598,13 @@ def render_sync_folders(state, snap, err):
                 notes.append(f"<b>{e(labels.get(bx, bx))}</b>: pairing failed at {e(_hhmm(str(last.get('at', ''))))}. {e(str(last.get('words', '')))}")
         else:
             under = "<span class=hint>not paired</span>"
+        # a box in store cannot take anything until it is switched on again; say so here rather
+        # than let an operator tick a folder and wonder why nothing moves
+        if (collector.get(bx) or {}).get("expected_offline"):
+            under += " <span class='hint sync-off'>turned off</span>"
         lab = labels.get(bx, bx)
         heads.append(f"<th><span class=sync-box>{e(lab)}</span>" + (f" <span class=hint>({e(bx)})</span>" if lab != bx else "") + f"<br>{under}</th>")
+    doc.append("<div class=sync-grid-wrap>")
     doc.append("<table class='sync-rows sync-grid'><thead><tr><th>Folder</th>" + "".join(heads) + "<th>Held by</th></tr></thead><tbody>")
     for d in dirs:
         f = fmap["by_dir"].get(d)
@@ -4606,7 +4633,11 @@ def render_sync_folders(state, snap, err):
         doc.append(f"<td class='sync-cell meta sync-holders'>{('on ' + e(', '.join(holders)) + ', and here') if holders else 'here only'}</td></tr>")
     if not dirs:
         doc.append(f"<tr><td colspan={2 + len(boxes)} class=meta>The vault has no folders yet.</td></tr>")
-    doc.append("</tbody></table>")
+    doc.append("</tbody></table></div>")
+    # Where a long answer goes. A press in a column header used to write its whole sentence into
+    # the heading, which stretched the grid wider than the page and pushed every other box off
+    # screen (Matt, 4 Sep 2026). The header keeps a short mark; the sentence lands here.
+    doc.append("<p id=pair-note class='meta sync-support' role=status hidden></p>")
     for n_ in notes:
         doc.append(f"<p class='meta sync-note'>{n_}</p>")
     doc.append("<p class=meta>A paired box can receive any folder you tick for it. If that box is lost, treat every folder "
@@ -16497,7 +16528,12 @@ SYNC_JS = r"""
     });
     sf.querySelectorAll('.sync-pair').forEach(function(b){b.addEventListener('click',function(){
       var box=b.getAttribute('data-box');
-      longPress(b,'/api/sync/pair',{box:box,confirm:true},'pairing','Pairing '+box+': reaching the box now.',function(x){ if(x.code===200){setTimeout(function(){location.reload();},2500);} });
+      longPress(b,'/api/sync/pair',{box:box,confirm:true},'pairing','Pairing '+box+': reaching the box now.',function(x){
+        if(x.code===200){setTimeout(function(){location.reload();},2500);return;}
+        // keep the heading narrow: the sentence goes under the table, where there is room
+        var res=b.parentNode?b.parentNode.querySelector('.press-res'):null, pn=document.getElementById('pair-note');
+        if(res&&pn){var words=(res.textContent||'').trim(); if(words){pn.textContent=words; pn.hidden=false;} res.textContent='could not pair';}
+      });
     });});
     sf.querySelectorAll('.sync-retire').forEach(function(b){b.addEventListener('click',function(){
       if(!confirm('Stop sharing the whole vault? Every box keeps the files it already has. Nothing is deleted, and nothing more is sent.'))return;
@@ -16661,8 +16697,8 @@ def render_sync(state):
     cfg = load_actions_config()
     acts = enabled_actions(cfg)
     inst = load_instance()
-    doc = page_head("Sync — " + inst["product_name"])
-    doc.append(header_html(state, ev, age, "sync", crumb="Sync"))
+    doc = page_head("Sharing — " + inst["product_name"])
+    doc.append(header_html(state, ev, age, "sync", crumb="Sharing"))
     doc.append("<main id=main class=wrap>")
     _pin = _load_json_list(PEERS_IN_FILE)
     _pout = _load_json_list(PEERS_OUT_FILE)
@@ -16716,12 +16752,15 @@ def render_sync(state):
                "padding:5px 8px;border-bottom:1px solid var(--line)}.sync-rows tr.alarm td{color:var(--fail);font-weight:600}"
                ".sync-rows tr.conflict td{background:rgba(178,58,72,.08)}.sync-rows tr.unshared td{color:var(--muted)}"
                ".sync-steps{margin:6px 0 10px 18px;padding:0}.sync-steps li{margin:3px 0}"
+               ".sync-grid-wrap{overflow-x:auto;max-width:100%}"
+               ".sync-grid th .press-res{display:block;max-width:26ch;white-space:normal;font-weight:400;font-size:.85em}"
                ".sync-verdict{font-weight:700;margin:4px 0 8px}.sync-support{margin:8px 0}.sync-support summary{cursor:pointer}"
                ".sync-support li{font-family:monospace;font-size:12px;word-break:break-all}.press-res{font-size:12px;margin-left:6px}"
                ".press-res.ok{color:var(--acc)}.press-res.fail{color:var(--fail)}.sync-finding.done{color:var(--muted);font-weight:400}"
                ".sync-state{margin-right:4px}.s-up-to-date{color:var(--acc)}.s-catching-up{color:#B5B171}.s-not-connected,.s-identity-changed{color:var(--fail)}"
                ".sync-grid input.sync-tick{width:20px;height:20px}.sync-holders{font-size:12px}"
-               ".sync-grid th{vertical-align:top;white-space:nowrap}.sync-grid th:first-child{width:22%}"
+               ".sync-grid th{vertical-align:top}.sync-grid th .sync-box{white-space:nowrap}"
+               ".sync-grid th:first-child{width:22%}"
                ".sync-grid .sync-box{font-weight:700}.sync-grid .sync-id{font-family:monospace;font-size:11px}"
                ".sync-grid td.sync-cell{white-space:nowrap}.sync-grid .tick-row{display:inline-flex;gap:6px;align-items:center}"
                ".sync-grid .tick-note{font-size:12px}.sync-note{margin:4px 0}</style>")

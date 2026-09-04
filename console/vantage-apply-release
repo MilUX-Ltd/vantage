@@ -156,6 +156,22 @@ fi
 [[ -f "$ROOT/common/build-enrollment-dp.py" ]] && \
     install -m 0755 "$ROOT/common/build-enrollment-dp.py" "$BIN/build-enrollment-dp.py"
 
+# The pinned sync engine rides inside the release, at third-party/. An in-place update copied
+# code and nothing else, so a console updated this way had an empty software shelf and Pair
+# could never work on it - which is exactly what the NUC showed on 4 Sep 2026 after being taken
+# to 0.9.62-beta. The shelf is part of the release, so it is part of applying one.
+SHELF="$STATE_DIR/agent/store/software"
+if [[ -d "$ROOT/third-party" ]]; then
+    mkdir -p "$SHELF"
+    for _tp in "$ROOT/third-party"/*.tar.gz; do
+        [[ -r "$_tp" ]] || continue
+        if install -m 0640 "$_tp" "$SHELF/$(basename "$_tp")" 2>/dev/null; then
+            chown vantage-console:vantage-console "$SHELF/$(basename "$_tp")" 2>/dev/null || true
+            say "shelved $(basename "$_tp")"
+        fi
+    done
+fi
+
 # ---- 4. restart and wait for it to actually answer ---------------------------------------
 say "restarting $UNIT"
 systemctl daemon-reload 2>/dev/null || true

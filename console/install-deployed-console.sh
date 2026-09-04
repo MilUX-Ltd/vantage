@@ -138,6 +138,13 @@ echo "[4/6] seed the store shelves"
 for d in tak-server mission-packs map-packs software; do
   install -d -o vantage-console -g vantage-console -m 750 "/var/lib/vantage-console/agent/store/$d"
 done
+# the pinned sync engine ships inside the release, at ../third-party; the software shelf is
+# where the console looks for it when it pairs a box
+for _tp in "$HERE/../third-party"/*.tar.gz; do
+  [[ -r "$_tp" ]] || continue
+  install -m 0640 -o vantage-console -g vantage-console "$_tp" \
+    "/var/lib/vantage-console/agent/store/software/$(basename "$_tp")"
+done
 
 echo "[5/6] services"
 install -m 644 "$HERE/systemd/vantage-console-deployed.service" /etc/systemd/system/vantage-console-deployed.service

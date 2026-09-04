@@ -101,6 +101,15 @@ chown "$USER_NAME:$USER_NAME" "$VAR/state.json"
 for d in tak-server mission-packs map-packs software updates; do
     install -d -m 0750 -o "$USER_NAME" -g "$USER_NAME" "$VAR/agent/store/$d"
 done
+# The pinned sync engine ships INSIDE the release, at ../third-party. The software shelf is
+# where the console looks for it when it pairs a box, so if nothing copies it there, Pair can
+# never work and the page tells the operator it "ships with every Vantage release" while there
+# is no way to reach it. Found on the NUC, 4 Sep 2026, with an empty shelf.
+for _tp in "$SRC/../third-party"/*.tar.gz; do
+    [[ -r "$_tp" ]] || continue
+    install -m 0640 -o "$USER_NAME" -g "$USER_NAME" "$_tp" "$VAR/agent/store/software/$(basename "$_tp")"
+    echo "    shelved $(basename "$_tp")"
+done
 
 echo "==> [3/8] code + helpers"
 install -m 0755 "$SRC/vantage-console-serve.py"   "$LIB/"
