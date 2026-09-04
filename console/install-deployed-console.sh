@@ -179,7 +179,11 @@ TMR
 systemctl daemon-reload
 systemctl enable --now vantage-console-deployed-collect.timer
 systemctl start vantage-console-deployed-collect.service || true
-systemctl enable --now vantage-console-deployed.service
+# enable so it survives a reboot, RESTART so this upgrade actually takes effect: enable --now
+# does nothing to a service that is already running, which would leave the box serving the
+# version you just replaced and reporting success (LESSONS 52).
+systemctl enable vantage-console-deployed.service
+systemctl restart vantage-console-deployed.service
 
 echo "[6/6] done"
 echo "Vantage Deployed is on http://$BIND:$PORT (edition=deployed, profile=$PROFILE)."
