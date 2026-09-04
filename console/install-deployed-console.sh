@@ -17,7 +17,12 @@ set -euo pipefail
 die() { echo "ERROR: $*" >&2; exit 2; }
 [[ "$(id -u)" == 0 ]] || die "run as root"
 
-BIND="127.0.0.1"; PORT="8092"; PROFILE="deployed"
+# An install over an existing one KEEPS this box's own address and port unless it is told
+# otherwise. Same property as the estate installer, and the same reason: a deployed box that
+# serves its operator on the kit's own address goes quiet if an upgrade quietly moves it to
+# loopback, and nothing says why. Held by test-install-preserves.py. (4 Sep 2026: found while
+# taking the estate to 0.9.60-beta, on a box serving 66.96.83.139:8090.)
+BIND=""; PORT=""; PROFILE="deployed"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bind) BIND="${2:-}"; shift 2 ;;
@@ -26,6 +31,33 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown option: $1" ;;
   esac
 done
+UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
+# the drop-in is where this installer records it; the unit itself is where older boxes carry
+# it, sometimes with both variables on one line
+for f in "$UNIT_DIR/vantage-console-deployed.service.d/bind.conf" \
+         "$UNIT_DIR/vantage-console-deployed.service"; do
+    [[ -r "$f" ]] || continue
+    if [[ -z "$BIND" ]]; then
+        was=$(grep -m1 -o 'VANTAGE_CONSOLE_BIND=[^ ]*' "$f" 2>/dev/null | cut -d= -f2)
+        if [[ -n "$was" ]]; then
+            [[ "$was" =~ ^[0-9a-fA-F.:]+$ ]] || die "this box records an address this script \
+will not accept ($was). Reinstall with an explicit --bind."
+            BIND="$was"
+            echo "==> keeping this box's address: $BIND"
+        fi
+    fi
+    if [[ -z "$PORT" ]]; then
+        wasp=$(grep -m1 -o 'VANTAGE_CONSOLE_PORT=[^ ]*' "$f" 2>/dev/null | cut -d= -f2)
+        if [[ -n "$wasp" ]]; then
+            [[ "$wasp" =~ ^[0-9]{2,5}$ ]] || die "this box records a port this script will not \
+accept ($wasp). Reinstall with an explicit --port."
+            PORT="$wasp"
+        fi
+    fi
+done
+BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-8092}"
+[[ "$BIND" =~ ^[0-9a-fA-F.:]+$ ]] || die "bad --bind"
+[[ "$PORT" =~ ^[0-9]{2,5}$ ]] || die "bad --port"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [[ -f "$HERE/vantage-console-serve.py" ]] || die "run this from the console/ directory"
 [[ -x /usr/local/bin/tak-health ]] || die "tak-health is not installed on this box"
@@ -125,6 +157,12 @@ Type=oneshot
 User=vantage-console
 Group=vantage-console
 Environment=VANTAGE_CONSOLE_STATE=/var/lib/vantage-console/agent/state.json
+# History lives beside the state, inside the one carve this unit is allowed to write. Left at
+# its default it lands in /var/lib/vantage-console, which ProtectSystem=strict makes read-only
+# here: every poll wrote state and then died on history, on every deployed box. History is also
+# where the flap debounce reads the previous poll from, so without it a real outage never
+# escalates past WARN.
+Environment=VANTAGE_CONSOLE_HISTORY=/var/lib/vantage-console/agent/history.ndjson
 ExecStart=/usr/bin/python3 /usr/local/lib/vantage-console/vantage-console-collect.py
 ProtectSystem=strict
 ReadWritePaths=/var/lib/vantage-console/agent
