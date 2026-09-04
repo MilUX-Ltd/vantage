@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.67.0"
+VERSION = "2.68.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.59-beta"
+VANTAGE_RELEASE = "0.9.60-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -5507,6 +5507,20 @@ def setup_api(path, data, client):
         ok, out = setup_helper("rename", name,
                                base64.b64encode(label.encode()).decode())
         return (200, {"renamed": name, "label": label}) if ok else (400, {"error": out[:200]})
+    if path == "/api/setup/power":
+        # Mark a box turned off, or turned back on. Boxes live in store between deployments
+        # (Matt, 4 September 2026: "boxes will be off when stored"), and a box in store that
+        # is absent on purpose must not read as a fault. NOTHING IS DONE TO THE BOX: this is
+        # the console's own note about it, written where the collector reads it, so it works
+        # whether the box is on, off or gone. The signed-in session is the gate, as it is for
+        # renaming a box; the press is audited with the box and who pressed.
+        want = str(data.get("state", "")).strip().lower()
+        if want not in ("on", "off"):
+            return 400, {"error": "state must be on or off"}
+        ok, out = setup_helper("power", name, want)
+        audit({"action": "power", "target": name, "detail": f"turned {want}",
+               "result": "OK" if ok else "ERROR", "client": client})
+        return (200, {"name": name, "turned": want}) if ok else (400, {"error": out[:200]})
     if path == "/api/setup/have":
         # read-only: does a bootstrap key already exist under this name? A reloaded
         # wizard page uses this to rediscover a key adopted before the reload.
@@ -9930,11 +9944,22 @@ def estate_summary(state, ev, stale, age):
     n = len(tgts)
     if stale:
         return f"Last checked {human_age(age)}. Data may be wrong."
-    bad = [t for t in tgts if t.get("result") != "OK"]
-    if not bad:
-        return f"All {n} servers healthy." if n else "No servers configured."
-    names = ", ".join(t.get("label", t.get("name", "?")) for t in bad)
-    return f"{len(bad)} of {n} need attention: {names}."
+    # A box marked turned off is in store and absent on purpose. It is not one of the boxes
+    # that need attention, and saying so plainly is the whole point of the mark: an estate
+    # that reads red because three boxes are on a shelf teaches its operator to ignore red.
+    off = {t.get("name") for t in tgts
+           if t.get("expected_offline") and t.get("result") == "OFFLINE"}
+    tail = f" {len(off)} turned off." if off else ""
+    bad = [t for t in tgts if t.get("result") != "OK" and t.get("name") not in off]
+    if bad:
+        names = ", ".join(t.get("label", t.get("name", "?")) for t in bad)
+        return f"{len(bad)} of {n} need attention: {names}." + tail
+    if not n:
+        return "No servers configured."
+    live = n - len(off)
+    if not live:
+        return f"Every box is turned off ({n})."
+    return f"All {live} server{'s' if live != 1 else ''} healthy." + tail
 
 
 # ---------- pages (1.2.0: the portal) ----------------------------------------------------------
@@ -10829,6 +10854,12 @@ def server_board_html(state, history=None, desired=None, cfg=None, quick=False):
         if name in awaiting:
             res_cls, chip = "BUILD", "AWAITING BUILD"
             sub = "enrolled - TAK Server not yet installed"
+        elif res == "OFFLINE" and t.get("expected_offline"):
+            res_cls, chip = "OFFLINE", "TURNED OFF"
+            sub = "in store - not counted against the estate"
+        elif t.get("mark_stale"):
+            res_cls, chip = res, res
+            sub = "marked turned off, but it answered"
         else:
             res_cls, chip = res, res
             sub = str(t.get("fqdn") or t.get("profile") or "")
@@ -12437,7 +12468,9 @@ def render_server(state, name):
 
     doc = page_head(f"{label} — " + load_instance()["product_name"])
     doc.append(header_html(state, res, age, f"server:{name}", crumb=e(label)))
-    line = (f"{label}: {res}. Checker {t.get('checker_version') or '?'}. "
+    off_marked = bool(t.get("expected_offline"))
+    res_word = "TURNED OFF" if (res == "OFFLINE" and off_marked) else res
+    line = (f"{label}: {res_word}. Checker {t.get('checker_version') or '?'}. "
             f"Checked {human_age(age_seconds(t.get('checked_at', '')))}.")
     doc.append(f"<div class='vband {e(res)}'><span class=vdot></span>{e(line)}</div>")
     doc.append("<main id=main class=wrap>")
@@ -12446,6 +12479,45 @@ def render_server(state, name):
                f"value='{e(label)}'></label><button class=cred-refresh type=submit>"
                "Rename</button><span id=rename-res class=lib-status role=status></span>"
                "</form></div>")
+    # Turned off: the mark that stops a box in store reading as a fault. Beside the display
+    # name because it is routine operator housekeeping, not a danger zone - it changes only
+    # how this console reads the box, and it is reversible in one press. Never offered for
+    # the box this console runs on: a console cannot report its own box being down, so the
+    # mark there would be a lie the operator could not see through.
+    if tile_is_admin_box(t, str(state.get("console_host") or "")):
+        pwords = None
+    elif t.get("mark_stale"):
+        pwords = ("This box is marked <b>turned off</b>, but it answered. Its own verdict "
+                  "stands, because a box that is on and failing is a fault. Mark it turned "
+                  "on if it is back in service.")
+    elif off_marked:
+        pwords = ("This box is <b>turned off</b>. While it is, an absent box is not reported "
+                  "as a fault and does not count against the estate. What the box holds is "
+                  "still there.")
+    else:
+        pwords = ("Mark this box <b>turned off</b> when it goes into store. While it is "
+                  "turned off, this console does not report it as a fault for being absent. "
+                  "Nothing is done to the box.")
+    if pwords:
+        doc.append(f"<div class=power-row><form id=powerform data-name='{e(name)}' "
+                   f"data-want='{'on' if off_marked else 'off'}'>"
+                   f"<p class=meta>{pwords}</p>"
+                   "<button class=cred-refresh type=submit>"
+                   f"{'Mark as turned on' if off_marked else 'Mark as turned off'}</button>"
+                   "<span id=power-res class=lib-status role=status></span></form></div>")
+        doc.append("""<script>(function(){
+var f=document.getElementById('powerform'); if(!f)return;
+f.addEventListener('submit',function(ev){ev.preventDefault();
+  var r=document.getElementById('power-res');r.textContent='Saving\u2026';
+  fetch('/api/setup/power',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:f.dataset.name,state:f.dataset.want})})
+  .then(function(x){return x.json().then(function(j){return {code:x.status,j:j};});})
+  .then(function(x){
+    if(x.code===200){r.textContent=(x.j.turned==='off'?'Turned off.':'Turned on.')
+      +' Reading the box again\u2026';setTimeout(function(){location.reload();},2500);}
+    else{r.textContent=x.j.error||'failed';}
+  }).catch(function(){r.textContent='could not reach the console';});
+});})();</script>""")
     doc.append("""<script>(function(){
 var f=document.getElementById('renameform'); if(!f)return;
 f.addEventListener('submit',function(ev){ev.preventDefault();

@@ -48,7 +48,7 @@ name="${1:-}"; shift || true
 # reading past the end and silently gets nothing, which is how "rotate" was accepted,
 # ignored, and reported as working.
 arg1="${1:-}"
-[[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import|usb-export|kiosk-exit|apply-release)$ ]] || deny "unknown operation"
+[[ "$op" =~ ^(keygen|userkey|test|enrol|push-deb|shred|have|rename|power|forget-host|instance|unenrol|set-password|self-authorize|vaultdir|tlscert|baseline|usb-copy|usb-import|usb-export|kiosk-exit|apply-release)$ ]] || deny "unknown operation"
 [[ "$name" =~ ^[a-z0-9-]{1,24}$ ]] || deny "key name must match [a-z0-9-], max 24"
 key="$STORE/$name"
 install -d -m 700 -o root -g root /var/lib/console-setup "$STORE"
@@ -117,6 +117,20 @@ hit = False
 for t in d.get("targets", []):
     if t.get("name") == name:
         t["label"] = label
+        hit = True
+if not hit:
+    print("NOSUCH"); sys.exit(0)
+json.dump(d, open(p, "w"), indent=2)
+print("OK")'
+
+PY_SNIPPET_POWER='import json, sys
+name, want = sys.argv[1], sys.argv[2] == "off"
+p = "/etc/vantage-console/targets.json"
+d = json.load(open(p))
+hit = False
+for t in d.get("targets", []):
+    if t.get("name") == name:
+        t["expected_offline"] = want
         hit = True
 if not hit:
     print("NOSUCH"); sys.exit(0)
@@ -512,6 +526,22 @@ rename)
     systemctl start vantage-console-collect.service 2>/dev/null || true
     log "rename $name -> '$label'"
     echo "OK renamed"
+    ;;
+power)
+    # A box in store is turned off on purpose. The mark rides in the collector's own
+    # targets.json as expected_offline, which the collector has always honoured; what was
+    # missing was any way to set it after enrolment. Nothing is done to the box: this is
+    # this console's note about it, so it works whether the box is on, off or gone.
+    state="${1:-}"
+    [[ "$state" =~ ^(on|off)$ ]] || deny "state must be on or off"
+    exec 9>/etc/vantage-console/.enrol.lock
+    flock 9
+    out=$(python3 -c "$PY_SNIPPET_POWER" "$name" "$state"
+)
+    [[ "$out" == "OK" ]] || deny "no enrolled server called '$name'"
+    systemctl start vantage-console-collect.service 2>/dev/null || true
+    log "power $name $state"
+    echo "OK turned $state"
     ;;
 forget-host)
     # a rebuilt box has a new host key; forgetting the old one is deliberate, operator-driven

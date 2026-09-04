@@ -95,6 +95,15 @@ to change; the estate name stays the stable identifier), health checks in full, 
 software inventory against the baseline, modules, security posture - then the two panels
 the page exists for:
 
+**Turned off.** Beside the display name. Mark a box turned off when it goes into store:
+while it is turned off, this console does not report it as a fault for being absent, it is
+left out of the "needs attention" line, and its tile reads TURNED OFF. Nothing is done to
+the box, so it works whether the box is on, off or already gone, and one press marks it
+turned on again. The mark mutes absence only: if the box answers, its own verdict stands
+and the page says the mark and the box disagree, because a box that is on and failing is a
+fault wherever it is stored. The box running the console you are looking at is never offered
+the mark - a console cannot report its own box being down.
+
 **Add a device.** The promoted card: name, group, confirm with the operator password, and
 you get a QR code (with Save QR and Save iTAK line buttons) plus the device's one-time
 password. Groups matter: devices see only their own group's traffic.

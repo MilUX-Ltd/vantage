@@ -30,6 +30,17 @@ STATE  = os.environ.get("VANTAGE_CONSOLE_STATE",  "/var/lib/vantage-console/stat
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
 RETAIN_DAYS = int(os.environ.get("VANTAGE_CONSOLE_RETAIN_DAYS", "30"))
 TIMEOUT = int(os.environ.get("VANTAGE_CONSOLE_TIMEOUT", "45"))
+# A box marked turned off is expected not to answer, and the poll is sequential: waiting the
+# full timeout on every box in store would push one cycle past the next. It is still probed,
+# briefly, so a box someone switched on is not invisible.
+OFF_TIMEOUT = int(os.environ.get("VANTAGE_CONSOLE_OFF_TIMEOUT", "5"))
+
+
+def probe_timeout(t):
+    """How long to wait on this target. A box marked turned off gets a knock, not a vigil."""
+    if t.get("expected_offline"):
+        return min(OFF_TIMEOUT, int(t.get("timeout", TIMEOUT)))
+    return int(t.get("timeout", TIMEOUT))
 
 
 def now_iso():
@@ -82,7 +93,7 @@ def collect_one(t):
         return {"name": t["name"], "reachable": False, "result": "UNKNOWN",
                 "error": f"unknown target kind '{kind}'", "checked_at": now_iso()}
 
-    rc, out, err = run(cmd, t.get("timeout", TIMEOUT))
+    rc, out, err = run(cmd, probe_timeout(t))
     elapsed = round(time.time() - started, 2)
 
     rec = {
@@ -143,6 +154,48 @@ def collect_one(t):
     return rec
 
 
+def roll_up(records, prev_raw):
+    """Set each record's final result and return the estate verdict. Three things keep it
+    from crying wolf:
+
+    1. A box marked TURNED OFF that does not answer is not a fault - a box in store is off
+       on purpose (Matt, 4 September 2026: "boxes will be off when stored"). The mark is the
+       operator's, set from the box's page, and it mutes absence only: a box that ANSWERED
+       keeps whatever verdict it gave, because a box someone switched on in the store and
+       that is failing is a real fault. When the box answers, the mark is stale and the
+       console says so.
+    2. FLAP DEBOUNCE. A target that failed only THIS poll, having been healthy on the
+       previous one, is UNCONFIRMED: shown as WARN, not FAIL, and not counted as a hard
+       failure against the estate. A public TAK server's 8089 accept queue briefly overflows
+       under scanner bursts and drops a SYN, and the one-shot health probe must not turn the
+       whole estate red for it (cloud flapped FAIL->OK seven times in four hours,
+       25 Aug 2026, "100 SYNs to LISTEN dropped", while every real client stayed connected).
+       A genuine outage fails a second consecutive poll and escalates within one cycle; a
+       blip never does. result_raw keeps the checker's true verdict for the record.
+    3. Rank, not order: the worst verdict present is the estate's, and OFFLINE ranks with OK.
+    """
+    worst = "OK"
+    rank = {"OK": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 1, "UNREACHABLE": 2, "OFFLINE": 0}
+    for r in records:
+        r["result_raw"] = r.get("result")
+        v = r.get("result", "UNKNOWN")
+        if v == "UNREACHABLE" and r.get("expected_offline"):
+            r["result"] = "OFFLINE"
+            r["note"] = "turned off; not counted against the estate"
+        elif v in ("FAIL", "UNREACHABLE") and prev_raw.get(r["name"]) not in ("FAIL", "UNREACHABLE"):
+            r["unconfirmed"] = True
+            r["result"] = "WARN"
+            r["note"] = f"failed one poll ({v.lower()}); holding until the next poll confirms"
+        if r.get("expected_offline") and r.get("reachable"):
+            # the mark says one thing and the box did another; the console shows both
+            r["mark_stale"] = True
+            r.setdefault("note", "marked turned off, but it answered")
+        vr = r["result"]
+        if rank.get(vr, 1) > rank.get(worst, 0):
+            worst = vr
+    return worst
+
+
 def main():
     try:
         with open(CONFIG) as fh:
@@ -164,34 +217,7 @@ def main():
     except Exception:
         pass
 
-    # Estate verdict. Two things keep it from crying wolf:
-    #
-    # 1. An expected-offline target that is unreachable is NOT a fault - the
-    #    deployable kit going dark is its designed behaviour.
-    # 2. FLAP DEBOUNCE. A target that failed only THIS poll, having been healthy
-    #    on the previous one, is UNCONFIRMED: shown as WARN, not FAIL, and not
-    #    counted as a hard failure against the estate. A public TAK server's 8089
-    #    accept queue briefly overflows under scanner bursts and drops a SYN, and
-    #    the one-shot health probe must not turn the whole estate red for it (cloud
-    #    flapped FAIL->OK seven times in four hours, 25 Aug 2026, "100 SYNs to
-    #    LISTEN dropped", while every real client stayed connected). A genuine
-    #    outage fails a second consecutive poll and escalates within one cycle; a
-    #    blip never does. result_raw keeps the checker's true verdict for the record.
-    worst = "OK"
-    rank = {"OK": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 1, "UNREACHABLE": 2, "OFFLINE": 0}
-    for r in records:
-        r["result_raw"] = r.get("result")
-        v = r.get("result", "UNKNOWN")
-        if v == "UNREACHABLE" and r.get("expected_offline"):
-            r["result"] = "OFFLINE"
-            r["note"] = "offline by design, not counted against the estate"
-        elif v in ("FAIL", "UNREACHABLE") and prev_raw.get(r["name"]) not in ("FAIL", "UNREACHABLE"):
-            r["unconfirmed"] = True
-            r["result"] = "WARN"
-            r["note"] = f"failed one poll ({v.lower()}); holding until the next poll confirms"
-        vr = r["result"]
-        if rank.get(vr, 1) > rank.get(worst, 0):
-            worst = vr
+    worst = roll_up(records, prev_raw)
 
     # A box running an old checker reports old truths. That is invisible unless
     # something compares the versions, and the deployable kit is away with the first

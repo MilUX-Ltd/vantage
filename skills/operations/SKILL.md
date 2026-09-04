@@ -1,7 +1,7 @@
 ---
 name: operations
 description: The day-to-day running of a TAK server. Issue and revoke certificates, enrol devices, manage users and groups, read and back up the configuration, restart a service, pull logs. Use when someone needs to get on the network, someone needs to be taken off it, a certificate is expiring, or a service needs a look. Covers what each action really does and the ways each one goes quietly wrong.
-audited: 2026-09-03
+audited: 2026-09-04
 audit_verdict: pass
 audited_with: skill-safety-audit v3
 audit_note_2026-09-03_teardown: |
@@ -32,8 +32,17 @@ audit_note_2026-09-03: |
   provider-specific action it referred to has been removed from the product. No
   executable content, no new commands, no new credential paths. Hash updated by the
   maintainer; a full re-audit with skill-safety-audit is still owed.
-audit_sha: 642ec0edef3e10a4
-audit_sha_source: 8a250449df6246bf
+audit_note_2026-09-04_turned_off: |
+  Delta audit, 4 Sep 2026 (MilUX), of the added section "A box that is in store" and nothing
+  else. Prose only: no command, no path, no network call, no credential handling, no new tool
+  and no change to any existing instruction. One finding, LOW, recorded because it is the kind
+  of line an auditor should look twice at: the section tells an agent NOT to raise a
+  turned-off box as a fault, which is alert suppression. It is bounded - the mark is the
+  operator's own, set from the console and audited there, it mutes absence only, and the same
+  section REQUIRES reporting a marked box that answered. Verdict on the delta: pass. The full
+  re-audit with skill-safety-audit noted below is still owed and this does not discharge it.
+audit_sha: 32c2176ae0843bae
+audit_sha_source: 4c569015f8d408cf
 origin: the development repository/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -273,6 +282,20 @@ build it again from Deploy as a new box.
 
 What a teardown keeps, deliberately: the operating system, your login account and its keys,
 sshd, networking and the VPN. A teardown that strands the box is not a teardown.
+
+## A box that is in store
+
+A box marked **turned off** is in store on purpose. It reads TURNED OFF, not FAIL, it is left
+out of the estate's "needs attention" line, and it does not move the estate verdict. Do not
+raise it as a fault, do not try to fix it, and do not suggest turning sharing on for it.
+
+Marking is the operator's, from the box's own page: **Mark as turned off** when it goes into
+store, **Mark as turned on** when it comes out. Nothing is done to the box either way, so it
+works whether the box is on, off or gone.
+
+One case is worth reporting: a box marked turned off that **answered**. The page says so, its
+own verdict stands, and a box that is on and failing is a real fault however it is marked.
+Report that as a fault and say the mark looks stale.
 
 ## Sending a vault folder to a box
 
