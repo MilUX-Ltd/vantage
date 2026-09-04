@@ -62,8 +62,8 @@ the skills under [`skills/`](skills/) can be used on your own kit without instal
 Vantage at all.
 
 ![A server's page, live: health in full, software against the baseline, modules, security posture, Add a device](assets/screens/06-a-server-s-page-health-in-full-software-against-.png)
-*A server's page, live. The [user guide](USER-GUIDE.md) walks every screen with captures
-from a real end-to-end build.*
+*A server's page, live. The [user guide](USER-GUIDE.md) walks every screen: the build
+sequence from a real end-to-end build, the rest from the console as it is now.*
 
 The rest of this guide is the practical path: install the console, build your first
 server, get a device on the map, then grow the estate.

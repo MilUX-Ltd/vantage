@@ -3,9 +3,11 @@
 # Vantage Field Guide
 
 What the console does, screen by screen, and what happens underneath when you press the
-button - illustrated with live captures from a real end-to-end build (a fresh Ubuntu box
-to a device on the map, entirely through the browser). Captured against console
-1.57.2 on a fresh Ubuntu 22.04 box, built end to end through the browser.
+button, illustrated with the console's own screens. The build sequence (the welcome gate,
+the empty overview, the build running, the estate after it) was captured from a real
+end-to-end build on a fresh Ubuntu 22.04 box. The screens after it were captured on
+4 September 2026 from console 2.58.0 running against the reference estate, the same
+seven fictional servers the walkthrough uses, so they show the console as it is now.
 
 Vantage is MilUX's operations console for a whole TAK estate: one place to build, watch,
 operate, upgrade and federate every TAK server you run, from a browser. It turns a fresh
@@ -152,7 +154,7 @@ its own console then manages.
 
 ## Operations
 
-![Operations with the TAK server group open - and below, the audit log carrying the day's actual trail, denials included.](assets/screens/08-operations-with-the-tak-server-group-open-real-a.png)
+![Operations: every box in the estate, the updates panel, and below, the audit log carrying the day's actual trail, denials and failures included.](assets/screens/08-operations-with-the-tak-server-group-open-real-a.png)
 *Operations with the TAK server group open - and below, the audit log carrying the day's actual trail, denials included.*
 
 The estate, and the trail of what has been done to it. Operations lists the same servers
@@ -290,10 +292,10 @@ for landscape, because the device is expected to ride on the chest.
 
 ## The Agent
 
-![AI Connections: the autonomy dial explained, the connection routes, and the live activity feed below.](assets/screens/13-the-agent-hub-the-autonomy-dial-explained-three-.png)
+![AI Connections: what is connected first, then the three routes in, and the autonomy level a new connection gets.](assets/screens/13-the-agent-hub-the-autonomy-dial-explained-three-.png)
 *AI Connections: the autonomy dial explained, the connection routes, and the live activity feed below.*
 
-The Agent tab is a connection hub: you decide how AI connects and how much it may do. No
+The AI Connections tab is a connection hub: you decide how AI connects and how much it may do. No
 route bills you for the AI itself - the model that thinks is always the one you bring.
 
 **The autonomy dial**, set per connection: **Observe** reads the estate and vault and
