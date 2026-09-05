@@ -156,6 +156,13 @@ fi
 [[ -f "$ROOT/common/build-enrollment-dp.py" ]] && \
     install -m 0755 "$ROOT/common/build-enrollment-dp.py" "$BIN/build-enrollment-dp.py"
 
+# the files the console serves from beside itself: pins.sh, third-party.json, and the planner
+# (planner.html at /planner). Left out, /planner answered 404 on every box updated in place.
+for _f in pins.sh third-party.json; do
+    [[ -r "$ROOT/console/$_f" ]] && install -m 0644 "$ROOT/console/$_f" "$LIB/$_f"
+done
+[[ -r "$ROOT/PRE-INSTALL-PLANNER.html" ]] && install -m 0644 "$ROOT/PRE-INSTALL-PLANNER.html" "$LIB/planner.html"
+
 # The pinned sync engine rides inside the release, at third-party/. An in-place update copied
 # code and nothing else, so a console updated this way had an empty software shelf and Pair
 # could never work on it - which is exactly what the NUC showed on 4 Sep 2026 after being taken

@@ -95,7 +95,12 @@ fi
 # must match the tokens the provisioner's components stage installs (its case dispatch) and
 # the console's provision-server 'components' input; the provisioner allowlists again. Drift
 # here rejected the new modules on the box with "bad components" after the console let them by.
-[[ "${P[components]}" =~ ^((cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp)(,(cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp))*)?$ ]] || deny "bad components"
+[[ "${P[components]}" =~ ^((cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp|mesh)(,(cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp|mesh))*)?$ ]] || deny "bad components"
+# Mesh Manager needs the radio and the TAK group. By-id only: a ttyACM number moves when the
+# box is re-cabled and the bridge would then own the wrong radio (mesh LESSONS). Both optional
+# here because every other component takes neither; the provisioner refuses mesh without a serial.
+[[ -z "${P[mesh_serial]}" || "${P[mesh_serial]}" =~ ^/dev/serial/by-id/[A-Za-z0-9._:-]{4,180}$ ]] || deny "bad mesh_serial"
+[[ -z "${P[mesh_filter_group]}" || "${P[mesh_filter_group]}" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || deny "bad mesh_filter_group"
 [[ "${P[dry_run]}" =~ ^[01]$ ]]                    || deny "bad dry_run"
 # stage scoping: empty = the full build; "components" = install extras on a built box
 # (the server page's Modules panel). Other single stages stay operator-SSH territory.
@@ -107,6 +112,8 @@ args=(--fqdn "${P[fqdn]}" --org "${P[org]}"
       --city "${P[city]}" --deb "${P[deb]}")
 [[ -n "${P[le_email]}" ]] && args+=(--le-email "${P[le_email]}")
 [[ -n "${P[components]}" ]] && args+=(--components "${P[components]}")
+[[ -n "${P[mesh_serial]}" ]] && args+=(--mesh-serial "${P[mesh_serial]}")
+[[ -n "${P[mesh_filter_group]}" ]] && args+=(--mesh-filter-group "${P[mesh_filter_group]}")
 # The answer given in the planner, arriving at the build. Without it the box
 # spends two minutes on a challenge that cannot succeed behind a router and prints a
 # wall of red that reads like a fault, which is exactly what it did on 3 Sep 2026.

@@ -120,6 +120,13 @@ install -d -m 755 /etc/vantage-console
 echo "[2/6] code"
 install -m 644 "$HERE/vantage-console-serve.py" /usr/local/lib/vantage-console/vantage-console-serve.py
 install -m 644 "$HERE/vantage-console-collect.py" /usr/local/lib/vantage-console/vantage-console-collect.py
+# the files the console serves from beside itself, the same on every path that installs one
+# (test-usability.py): the pins the sharing engine is checked against, the third-party record,
+# and the build planner at /planner
+for _f in pins.sh third-party.json; do
+  [[ -r "$HERE/$_f" ]] && install -m 644 "$HERE/$_f" /usr/local/lib/vantage-console/
+done
+[[ -r "$HERE/../PRE-INSTALL-PLANNER.html" ]] && install -m 644 "$HERE/../PRE-INSTALL-PLANNER.html" /usr/local/lib/vantage-console/planner.html
 
 echo "[3/6] this box as the one local target"
 LABEL=$(hostname -s)

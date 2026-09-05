@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.68.3"
+VERSION = "2.70.0"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.63-beta"
+VANTAGE_RELEASE = "0.9.64-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -329,6 +329,9 @@ COMPONENTS = [
      "local models on loopback (needs internet: the archive is ~1.4GB; models pulled deliberately later)", True),
     ("takbot", "TAKBOT", "positions and messages posted onto the map on their own",
      "CoT chat bot; needs the MilUX-vendored artefact staged from the Store first", True),
+    ("mesh", "Mesh Manager", "£40 radios on the map, and the mesh they ride, managed from this box",
+     "Meshtastic gateway, fleet management and a TAK bridge on :8093; needs the MilUX release "
+     "staged from the Store first, plus the radio's by-id path and a TAK filter group", True),
 ]
 
 
@@ -482,10 +485,19 @@ ACTIONS = {
              # (the case dispatch in vantage-tak-provision.sh); the box re-validates and
              # rejects anything unknown. Keep the two lists in step - drift here is what
              # made the Modules Install button fail with "invalid components".
-             "pattern": r"^((cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp)"
-                        r"(,(cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp))*)?$",
+             "pattern": r"^((cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp|mesh)"
+                        r"(,(cloudtak|mediamtx|maps|mosquitto|nodered|ollama|takbot|lanntp|mesh))*)?$",
              "help": "optional module tokens: cloudtak, mediamtx, maps, mosquitto, nodered, "
-                     "ollama, takbot, lanntp - or leave empty"},
+                     "ollama, takbot, lanntp, mesh - or leave empty"},
+            {"name": "mesh_serial", "label": "Mesh Manager: radio",
+             "pattern": r"^$|^/dev/serial/by-id/[A-Za-z0-9._:-]{4,180}$", "optional": True,
+             "help": "only for the mesh module: the gateway radio's /dev/serial/by-id path "
+                     "(ls -l /dev/serial/by-id/ on the box). A ttyACM number is refused, "
+                     "because it moves when the box is re-cabled"},
+            {"name": "mesh_filter_group", "label": "Mesh Manager: TAK filter group",
+             "pattern": r"^$|^[A-Za-z0-9._-]{1,40}$", "optional": True,
+             "help": "only for the mesh module: the TAK input's filter group, without which "
+                     "the server accepts the mesh and shows it to nobody"},
             {"name": "ca_pass", "label": "Certificate password",
              "pattern": r"^$|^[A-Za-z0-9._!-]{8,64}$", "optional": True, "secret": True,
              "input_type": "password",
@@ -664,7 +676,7 @@ ACTIONS = {
         "confirm": "Issue certificate “{name}” on {target}. This creates a new credential.",
     },
     "enrol-device": {
-        "label": "Enrol device (QR)", "verb": "enrol-device", "key": "id_action_enrol", "group": "tak", "needs": "takserver",
+        "label": "Enrol handset (QR)", "verb": "enrol-device", "key": "id_action_enrol", "group": "tak", "needs": "takserver",
         "desc": "Creates an enrolment credential and returns a QR code a phone scans to join this server.",
         "risk": "write", "tag": "New credential", "needs_passphrase": True, "result": "img",
         "inputs": [{"name": "user", "label": "Username", "pattern": r"^[A-Za-z0-9._-]{1,40}$",
@@ -696,7 +708,7 @@ ACTIONS = {
         # Pairing a box (Spec 010, slice 5): over the install-console key, the box's engine is
         # used or installed from the pinned package, hardened, given the vault, and introduced
         # to this console. The id it reports over that authenticated channel is the id pinned.
-        "label": "Pair this box's sync engine", "verb": "install-console",
+        "label": "Pair this box for sharing", "verb": "install-console",
         "key": "id_action_install_console", "group": "box", "needs": "",
         "desc": "Sets up the sync engine on the box and introduces it to this console.",
         "inputs": [{"name": "master_id", "label": "Master id", "pattern": r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}"},
@@ -715,7 +727,7 @@ ACTIONS = {
         "desc": "The box's engine forgets the folder that covers its whole vault; files stay.",
         "inputs": [{"name": "master_id", "label": "Master id", "pattern": r"(?:[A-Z2-7]{7}-){7}[A-Z2-7]{7}"}],
         "confirm": "Stop sharing the whole vault on {target}.",
-        "risk": "write", "tag": "Changes sync scope", "needs_passphrase": False,
+        "risk": "write", "tag": "Changes what is shared", "needs_passphrase": False,
         "result": "text", "gen_artifact": "retire", "timeout": 120, "keep_output": True,
     },
     "sync-share": {
@@ -723,7 +735,7 @@ ACTIONS = {
         # copy of console-sync-priv creates the folder at its vault path and shares it back
         # with the master. No far-side HTTP surface, no token; the same channel the console
         # arrived by. The master's half is the console's own helper.
-        "label": "Accept a sync folder on this box", "verb": "install-console",
+        "label": "Accept a shared folder on this box", "verb": "install-console",
         "key": "id_action_install_console", "group": "box", "needs": "",
         "desc": "Creates the matching sync folder on the box and shares it with this console.",
         "inputs": [{"name": "folder_id", "label": "Folder id", "pattern": r"[a-z0-9][a-z0-9-]{0,63}"},
@@ -742,7 +754,7 @@ ACTIONS = {
         # and demands the installer marker, both of which this payload carries. So the
         # vault reaches every enrolled console box with NO re-enrol and no change on the
         # box - and no far-side HTTP surface, which the deployed edition does not offer.
-        "label": "Copy a vault folder to this box (one-shot, for folders the sync engine does not carry)", "verb": "install-console",
+        "label": "Copy a vault folder to this box (one-off, for folders sharing does not carry)", "verb": "install-console",
         "key": "id_action_install_console", "group": "box", "needs": "",
         "desc": "Lands one of this console's Knowledge Vault folders on the box, under the "
                 "never-clobber rule: anything newer on the box is kept.",
@@ -976,6 +988,14 @@ def age_seconds(iso):
         return (datetime.now(timezone.utc) - t).total_seconds()
     except Exception:
         return None
+
+
+def _vtuple(v):
+    """A version as a tuple for ordering; non-numeric parts sort low."""
+    out = []
+    for part in re.split(r"[.-]", str(v or "")):
+        out.append(int(part) if part.isdigit() else -1)
+    return tuple(out)
 
 
 def human_age(sec):
@@ -1274,7 +1294,8 @@ def validate_action_request(aid, target, inputs, cfg):
     for f in a["inputs"]:
         v = str((inputs or {}).get(f["name"], ""))
         if not re.match(f["pattern"], v):
-            return False, f"invalid {f['name']}", None, None
+            # "invalid lines" told the operator nothing; the label and the help do
+            return False, f"{f.get('label', f['name'])}: {f.get('help') or 'not in the shape this action accepts'}", None, None
         argv.append(v)
     # fixed_args are the action's own trailing positional args - a fixed mode word the
     # console (not the caller) supplies. Several actions share one forced-command key and
@@ -1313,6 +1334,31 @@ def artifact_missing_error(a):
             + '": the installer script it needs (' + str(a.get("artifact", "")) + ") is not "
             "on this console. Re-run the console installer on this box to restore it, then "
             "try again."}
+
+
+def action_failure_words(label, target, raw):
+    """What the operator reads when an action did not succeed. ssh's own text ("Warning:
+    Identity file ... not accessible", "Permission denied (publickey)") was the whole answer
+    until the usability review of 4 Sep 2026; it now says what happened in the operator's
+    words, and the raw text rides beside it as detail for support."""
+    low = raw.lower()
+    if "could not resolve hostname" in low or "name or service not known" in low:
+        return (f"This console cannot find {target} by name, so {label} did not start. Check the "
+                "box's address on its page; nothing was changed on the box.")
+    if "connection timed out" in low or "no route to host" in low or "connection refused" in low:
+        return (f"This console could not reach {target}, so {label} did not start. If the box is in "
+                "store, mark it turned off on its page; if it should be on, check its power and "
+                "network. Nothing was changed on the box.")
+    if "permission denied" in low or "identity file" in low or "publickey" in low:
+        return (f"{target} did not accept this console's key, so {label} did not start. Re-authorise "
+                "this console from the box, or enrol the box again. Nothing was changed on the box.")
+    if "host key verification failed" in low or "remote host identification has changed" in low:
+        return (f"{target}'s identity has changed since this console last spoke to it, so {label} was "
+                "not sent. If the box was rebuilt, forget its old identity on the Deploy page and try "
+                "again. Nothing was changed on the box.")
+    first = raw.splitlines()[0] if raw else ""
+    return (f"{label} on {target} did not succeed. The box said: {first[:200]}" if first
+            else f"{label} on {target} did not succeed and gave no reason. Check the box's page and its logs.")
 
 
 def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=False):
@@ -1403,10 +1449,17 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
                            input=payload, timeout=a.get("timeout", 90))
-    except Exception as e:
+    except subprocess.TimeoutExpired:
         audit({"action": aid, "target": target, "inputs": safe_inputs,
-               "result": "ERROR", "reason": str(e)[:200], "client": client})
-        return 502, {"error": f"action failed: {e}"}
+               "result": "ERROR", "reason": "timeout", "client": client})
+        return 504, {"error": f"{a.get('label', aid)} on {target} did not finish in time. Nothing was changed "
+                              "that this console can see; check the box's page and its logs before pressing again."}
+    except Exception as e:
+        # a Python error is not an answer; the class and text go to the log for support
+        audit({"action": aid, "target": target, "inputs": safe_inputs,
+               "result": "ERROR", "reason": f"{type(e).__name__}: {str(e)[:200]}", "client": client})
+        return 502, {"error": f"This console could not start {a.get('label', aid)} on {target}. Nothing was "
+                              "changed on the box. The detail is in this console's log."}
 
     ok = p.returncode == 0
     out = {"status": "ok" if ok else "error"}
@@ -1415,7 +1468,9 @@ def run_action(aid, target, inputs, passphrase, confirm, client, passphrase_ok=F
         k, _, v = ln.partition(" ")
         parsed[k] = v
     if not ok:
-        out["message"] = (p.stderr or p.stdout or f"rc={p.returncode}").strip()[:400]
+        raw = (p.stderr or p.stdout or f"rc={p.returncode}").strip()[:400]
+        out["message"] = action_failure_words(a.get("label", aid), target, raw)
+        out["detail"] = raw
     elif a["result"] == "p12":
         out["name"] = parsed.get("OK", "")
         out["fingerprint"] = parsed.get("FP", "")
@@ -3553,11 +3608,21 @@ SYNC_PINS = os.environ.get("VANTAGE_CONSOLE_SYNC_PINS", "/var/lib/vantage-consol
 SYNC_BUDGET = float(os.environ.get("VANTAGE_CONSOLE_SYNC_BUDGET", "6"))
 SYNC_MUTATION_BUDGET = 15
 SYNC_CACHE_TTL = float(os.environ.get("VANTAGE_CONSOLE_SYNC_CACHE_TTL", "5"))
+# what support needs, under its own fold: the operator's sentence never names a file
+SYNC_ERROR_DETAIL = {
+    "helper_missing": "console-sync-priv is not at /usr/local/bin on this box",
+    "helper_denied": "the sudoers rule for console-sync-priv is missing here (sudo -n was refused)",
+    "engine_down": "the engine did not answer on its local API",
+    "unauthorised": "the engine refused the API key the helper holds",
+    "timeout": "the helper did not answer within the budget",
+    "bad_reply": "the helper's reply was not JSON",
+    "refused": "the helper exited 2",
+}
 SYNC_ERROR_WORDS = {
-    "helper_missing": "This console cannot control sharing on this box: a piece of the console software "
-                      "(console-sync-priv) is not installed here. It comes with the console installer.",
-    "helper_denied": "This console is not allowed to control sharing on this box: the permission it needs "
-                     "(the sudoers rule for console-sync-priv) is missing here.",
+    "helper_missing": "Sharing cannot be controlled from this console: part of the console software is "
+                      "missing on this box. Re-run the console installer here; it puts it back.",
+    "helper_denied": "Sharing cannot be controlled from this console: a permission is missing on this box. "
+                     "Re-run the console installer here; it sets it.",
     "engine_down": "Sharing is off on this box. Nothing is moving between boxes. "
                    "What each box already holds is still there and still readable.",
     "unauthorised": "Sharing would not accept the credentials this console holds for it. Nothing below was read.",
@@ -4513,6 +4578,15 @@ def sync_boxes(state, tcfg):
     return out
 
 
+def _sync_err():
+    """The cached snapshot's error word, for sections rendered outside the sync page's own scope."""
+    try:
+        snap = sync_snapshot()
+        return snap[1] if isinstance(snap, tuple) else (snap or {}).get("err")
+    except Exception:
+        return "helper_missing"
+
+
 def render_sync_folders(state, snap, err):
     """Which boxes get which folders: one row per folder, one column per box, a tick where the
     decision is. A box holding the whole vault shows every folder as shared through it, so the
@@ -4539,8 +4613,8 @@ def render_sync_folders(state, snap, err):
                        "<button type=button class=sync-engine-op data-op=start>Turn sharing on</button>"
                        "<span class=press-res role=status></span></p>")
         else:
-            doc.append(f"<p class='sync-err' role=alert>{e(SYNC_ERROR_WORDS.get(err, 'Sharing could not be read.'))} "
-                       "Nothing here can be changed until it can be read.</p>")
+            doc.append("<p class='sync-err' role=alert>Sharing cannot be read on this box (see above), so "
+                       "nothing here can be changed until it can.</p>")
         if snap:
             doc.append(f"<p class=meta>Below is what was shared when sharing was last read, at {e(_hhmm(str(snap.get('as_of', ''))))}.</p>")
     else:
@@ -4576,7 +4650,7 @@ def render_sync_folders(state, snap, err):
         doc.append("<p class=doct>No box is enrolled on this console yet, so there is nothing to share with. "
                    "Enrol a box from its server page and it appears here as a column.</p>")
     elif not snap or not any(_device_for(bx, collector.get(bx), snap, pins) for bx in boxes):
-        doc.append("<p class=doct>Start with Pair under a box. Pairing lets that box take folders from here.</p>")
+        doc.append("<p class=doct>" + ("Pairing becomes available once sharing can be read." if _sync_err() else "Start with Pair under a box. Pairing lets that box take folders from here.") + "</p>")
     heads, notes = [], []
     plog = sync_pairlog()
     devs = {}
@@ -4590,6 +4664,8 @@ def render_sync_folders(state, snap, err):
         elif bx in _SYNC_INFLIGHT:
             since = _hhmm(datetime.fromtimestamp(_SYNC_INFLIGHT[bx], timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
             under = f"<span class='hint sync-inflight' data-box='{e(bx)}'>pairing since {e(since)}…</span>"
+        elif live and (collector.get(bx) or {}).get("expected_offline"):
+            under = "<span class=hint>not paired; turned off, pair it when it is back on</span>"
         elif live:
             under = (f"<span class=hint>not paired</span> <button type=button class=sync-pair data-box='{e(bx)}'>Pair</button>"
                      f"<span class=press-res role=status></span>")
@@ -4600,7 +4676,7 @@ def render_sync_folders(state, snap, err):
             under = "<span class=hint>not paired</span>"
         # a box in store cannot take anything until it is switched on again; say so here rather
         # than let an operator tick a folder and wonder why nothing moves
-        if (collector.get(bx) or {}).get("expected_offline"):
+        if (collector.get(bx) or {}).get("expected_offline") and "turned off" not in under:
             under += " <span class='hint sync-off'>turned off</span>"
         lab = labels.get(bx, bx)
         heads.append(f"<th><span class=sync-box>{e(lab)}</span>" + (f" <span class=hint>({e(bx)})</span>" if lab != bx else "") + f"<br>{under}</th>")
@@ -4721,6 +4797,9 @@ def render_sync_engine(state):
                    + "".join(f"<li>{d}</li>" for d in det) + "</ul></details>")
     elif not err:
         doc.append("<p class=doct>Sharing has not been read yet.</p>")
+    if err and SYNC_ERROR_DETAIL.get(err):
+        doc.append("<details class=sync-support><summary>Details for support</summary><ul><li>"
+                   f"{e(SYNC_ERROR_DETAIL[err])}</li></ul></details>")
     doc.append("</section>")
     return "".join(doc)
 
@@ -5830,7 +5909,7 @@ def start_setup_job(data, client, authed=False):
     if not enrol_only:
         for f in a["inputs"]:
             if not re.match(f["pattern"], prov.get(f["name"], "")):
-                return 400, {"error": f"invalid {f['name']}"}
+                return 400, {"error": f"{f.get('label', f['name'])}: {f.get('help') or 'not in the shape this action accepts'}"}
     if len(creds) > 20:
         return 400, {"error": "at most 20 first-run credentials"}
     for c in creds:
@@ -7605,7 +7684,7 @@ header:before{content:"";position:absolute;inset:0;pointer-events:none;
 .verdict{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-display);font-weight:700;
  font-size:12px;letter-spacing:.1em;padding:6px 13px;border-radius:var(--r-pill);color:var(--chip-fg)}
 .verdict .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
-.v-OK{background:var(--ok)}.v-WARN{background:var(--warn)}.v-FAIL,.v-UNREACHABLE{background:var(--fail)}
+.v-BUILD{background:#B5B171;color:#113308}.v-OK{background:var(--ok)}.v-WARN{background:var(--warn)}.v-FAIL,.v-UNREACHABLE{background:var(--fail)}
 .v-OFFLINE,.v-UNKNOWN{background:var(--off)}
 /* banners */
 .banner{margin:18px 0 0;padding:12px 15px;border-radius:var(--r-card);font-size:13.5px;display:flex;gap:10px;align-items:flex-start}
@@ -8539,7 +8618,7 @@ label.cred-dl{cursor:pointer}
 /* 1.18.0 the Library page (Finder-like filestore) */
 .brand{font-family:var(--font-display);font-weight:800;font-size:19px;letter-spacing:-.01em;
  color:var(--hdr-fg);margin-left:2px}
-.themebtn{background:transparent;border:1px solid var(--hdr-mute);color:var(--hdr-fg);
+.outword-t{font-size:11px;margin-right:4px}.themebtn.outword{width:auto;padding:0 10px;border-radius:14px}.themebtn{background:transparent;border:1px solid var(--hdr-mute);color:var(--hdr-fg);
  border-radius:var(--r-pill);width:32px;height:32px;font-size:15px;cursor:pointer;
  margin-left:14px;line-height:1;flex:0 0 auto;display:inline-flex;
  align-items:center;justify-content:center;text-decoration:none}
@@ -9971,26 +10050,54 @@ WORDMARK = '<svg class=mark viewBox="25 25 250 150" role=img aria-label="MilUX">
 
 
 def estate_summary(state, ev, stale, age):
+    """The one sentence under the band. It separates what the operator should act on (failed,
+    cannot be reached) from what the console is handling for them (a WARN it is holding on for
+    one more poll, a box awaiting its first build, a box turned off), so the real faults are
+    never buried in a list of six names (usability review, 4 Sep 2026)."""
     tgts = state.get("targets", [])
     n = len(tgts)
     if stale:
-        return f"Last checked {human_age(age)}. Data may be wrong."
-    # A box marked turned off is in store and absent on purpose. It is not one of the boxes
-    # that need attention, and saying so plainly is the whole point of the mark: an estate
-    # that reads red because three boxes are on a shelf teaches its operator to ignore red.
-    off = {t.get("name") for t in tgts
-           if t.get("expected_offline") and t.get("result") == "OFFLINE"}
-    tail = f" {len(off)} turned off." if off else ""
-    bad = [t for t in tgts if t.get("result") != "OK" and t.get("name") not in off]
-    if bad:
-        names = ", ".join(t.get("label", t.get("name", "?")) for t in bad)
-        return f"{len(bad)} of {n} need attention: {names}." + tail
+        n_await = sum(1 for t in tgts if tile_awaiting(t))
+        return (f"Last checked {human_age(age)}. Data may be wrong."
+                + (f" {n_await} awaiting first build." if n_await else ""))
+    off, awaiting, holding, failed, unreachable, warn = [], [], [], [], [], []
+    for t in tgts:
+        lab = t.get("label", t.get("name", "?"))
+        r = t.get("result")
+        if t.get("expected_offline") and r == "OFFLINE":
+            off.append(lab)
+        elif tile_awaiting(t):
+            awaiting.append(lab)
+        elif t.get("unconfirmed"):
+            holding.append(lab)
+        elif r == "UNREACHABLE":
+            unreachable.append(lab)
+        elif r == "FAIL":
+            failed.append(lab)
+        elif r not in ("OK", None):
+            warn.append(lab)
     if not n:
         return "No servers configured."
-    live = n - len(off)
-    if not live:
-        return f"Every box is turned off ({n})."
-    return f"All {live} server{'s' if live != 1 else ''} healthy." + tail
+    parts = []
+    if failed:
+        parts.append(f"{len(failed)} failed: {', '.join(failed)}.")
+    if unreachable:
+        parts.append(f"{len(unreachable)} cannot be reached: {', '.join(unreachable)}.")
+    if warn:
+        parts.append(f"{len(warn)} need a look: {', '.join(warn)}.")
+    if not parts:
+        live = n - len(off) - len(awaiting)
+        if live:
+            parts.append(f"All {live} server{'s' if live != 1 else ''} healthy.")
+        elif not awaiting:
+            return f"Every box is turned off ({n})."
+    if holding:
+        parts.append(f"{len(holding)} holding (failed one poll, checking again): {', '.join(holding)}.")
+    if awaiting:
+        parts.append(f"{len(awaiting)} awaiting first build.")
+    if off:
+        parts.append(f"{len(off)} turned off.")
+    return " ".join(parts)
 
 
 # ---------- pages (1.2.0: the portal) ----------------------------------------------------------
@@ -10156,27 +10263,33 @@ def nav_html(state, active, inst=None):
             f"{' selected' if t.get('name') == cur else ''}>"
             f"{e(t.get('label', t.get('name', '?')))}</option>"
             for t in (state or {}).get("targets", []))
-        jump = ("<label class=navjump><span class=sr-only>Switch server</span>"
+        jump = ("<label class=navjump><span class=sr-only>Switch box</span>"
                 f"<select onchange='location.href=this.value'>{opts}</select></label>")
     return f"<nav class=topnav aria-label='Console sections'>{links}{jump}</nav>"
 
 
-def header_html(state, ev, age, active, crumb="Overview"):
+# the verdict words an operator reads on the badge; the collector's own tokens stay in the data
+VERDICT_WORDS = {"OFFLINE": "TURNED OFF", "UNREACHABLE": "CANNOT BE REACHED", "UNKNOWN": "NOT CHECKED HERE"}
+
+
+def header_html(state, ev, age, active, crumb="Overview", word=None):
     e = html.escape
     inst = load_instance()
     return ("<header><div class=head>" + brand_mark(inst)
             + f"<span class=brand>{e(inst['product_name'])}</span>"
             + f"<h1 class=eyebrow-h>{crumb}</h1>"
-            f"<span class='verdict v-{e(ev)}'><span class=dot></span>{e(ev)}</span>"
+            f"<span class='verdict v-{e(ev)}'><span class=dot></span>{e(word or VERDICT_WORDS.get(ev, ev))}</span>"
             "<div class=spacer></div>"
             f"<div class=checked><span title='{e(state.get('generated_at', ''))}'>"
-            f"Checked <b>{e(human_age(age))}</b></span></div>"
-            + ("<a id=gearbtn class=themebtn href='/customization' title='Customize this "
-               "console' aria-label='Customize'"
+            f"Estate checked <b>{e(human_age(age))}</b></span></div>"
+            + ("<a id=gearbtn class=themebtn href='/customization' title='Customise this "
+               "console' aria-label='Customise'"
                + (" aria-current=page" if active == "customization" else "")
                + ">⚙</a>")   # Customize is the box's own settings (password, design, console role) - both modes
-            + ("<a id=outbtn class=themebtn href='/logout' title='Sign out' "
-               "aria-label='Sign out'>"
+            + ("<a id=helpbtn class=themebtn href='https://github.com/MilUX-Ltd/vantage/blob/main/USER-GUIDE.md' "
+               "title='The field guide' aria-label='Field guide'>?</a>")
+            + ("<a id=outbtn class='themebtn outword' href='/logout' title='Sign out' "
+               "aria-label='Sign out'><span class=outword-t>Sign out</span>"
                "<svg viewBox='0 0 24 24' width=15 height=15 fill=none stroke=currentColor "
                "stroke-width=2.2 stroke-linecap=round stroke-linejoin=round aria-hidden=true>"
                "<path d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/>"
@@ -10311,7 +10424,7 @@ def action_form_html(aid, targets=None, fixed=None, prefill=None):
            f"data-confirm=\"{e(a.get('confirm', ''))}\" data-result='{e(a.get('result', 'text'))}'>"
            f"<div class=a-h><h3 class=a-t>{e(a['label'])}</h3><span class=a-tags>"
            f"<span class='a-tag {e(risk)}'>{e(a.get('tag', risk))}</span>"
-           + ("<span class='a-tag pass'>Passphrase</span>" if a['needs_passphrase'] else "")
+           + ("<span class='a-tag pass'>Operator password</span>" if a['needs_passphrase'] else "")
            + f"</span></div><div class=a-d>{e(a['desc'])}</div>"
            # trusted registry HTML (never user input): the longer how-to under the desc
            + (f"<div class='a-d a-more'>{a['more']}</div>" if a.get("more") else "")]
@@ -10557,10 +10670,10 @@ def render_customization(state):
     ev = state.get("estate_result", "UNKNOWN")
     cfg = load_actions_config()
     acts = enabled_actions(cfg)
-    doc = page_head("Customization — " + inst["product_name"], inst)
-    doc.append(header_html(state, ev, age, "customization", crumb="Customization"))
+    doc = page_head("Customisation — " + inst["product_name"], inst)
+    doc.append(header_html(state, ev, age, "customization", crumb="Customisation"))
     doc.append("<main id=main class=wrap>")
-    doc.append("<section aria-label='Customization'><div class=ah><h2 class=title>"
+    doc.append("<section aria-label='Customisation'><div class=ah><h2 class=title>"
                "Make this console your own</h2><span class=meta>Colours, typeface, and "
                "the defaults a new server build starts from - change them and the whole "
                "console, its downloads page and its favicon follow. AI assistant set-up "
@@ -10707,7 +10820,7 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
     return "".join(doc)
 
 
-def render_error(err, active="estate"):
+def render_error(err, active="estate", title="Board unavailable."):
     e = html.escape
     inst = load_instance()
     doc = page_head(inst["product_name"], inst)
@@ -10716,7 +10829,7 @@ def render_error(err, active="estate"):
                + "<h1 class=eyebrow-h>Overview</h1></div>"
                + nav_html({}, active, inst) + "</header>"
                f"<main id=main class=wrap><div class='banner stale'>"
-               f"<b>Board unavailable.</b> {e(err)}</div></main></body></html>")
+               f"<b>{e(title)}</b> {e(err)} <a href='/'>Back to Overview</a></div></main></body></html>")
     return "".join(doc)
 
 
@@ -10750,7 +10863,7 @@ _SVC_ICONS = {
 
 
 QUICK_ACTIONS = (("tail-logs", "Logs"), ("restart-service", "Restart"),
-                 ("list-certs", "Certificates"), ("enrol-device", "Add device"))
+                 ("list-certs", "Certificates"), ("enrol-device", "Add handset"))
 
 
 def tile_awaiting(t):
@@ -10854,12 +10967,15 @@ def _tile_inventory(t, desired):
             "<th>Baseline</th></tr>" + "".join(rows) + "</table>")
 
 
-def _tile_quick(name, acts, act_targets):
+def _tile_quick(name, acts, act_targets, t=None):
     """A few one-click links into this box's own page. Only actions this console actually
-    has enabled, and only for a box it can act on."""
+    has enabled, and only for a box it can act on. None for a box that cannot be reached:
+    every one of them goes over the connection that has just timed out."""
     e = html.escape
     if name not in act_targets:
         return ""
+    if t and t.get("result") == "UNREACHABLE":
+        return "<div class=tquick><span class=hint>needs the box back first</span></div>"
     links = [f"<a class=qa href='/server/{e(name)}#act-{e(aid)}' "
              f"onclick='event.stopPropagation()'>{e(label)}</a>"
              for aid, label in QUICK_ACTIONS if aid in acts]
@@ -10879,12 +10995,22 @@ def server_board_html(state, history=None, desired=None, cfg=None, quick=False):
     acts = enabled_actions(cfg) if quick else []
     act_targets = set((cfg or {}).get("targets", {}).keys()) if quick else set()
     out = ["<div class=board>"]
+    # worst first: on a twenty-box estate the dead one must not sit below three screens of
+    # green (usability review, 4 Sep 2026); the chips carry the state, the order carries the urgency
+    def _rank(t):
+        r = t.get("result", "UNKNOWN")
+        if t.get("expected_offline") and r == "OFFLINE":
+            return 6
+        if t.get("name") in awaiting:
+            return 4
+        return {"FAIL": 0, "UNREACHABLE": 1, "WARN": 2, "UNKNOWN": 3, "OK": 5}.get(r, 3)
+    targets = sorted(targets, key=_rank)
     for t in targets:
         res, name = t.get("result", "UNKNOWN"), t.get("name", "?")
         c = t.get("counts") or {}
         if name in awaiting:
             res_cls, chip = "BUILD", "AWAITING BUILD"
-            sub = "enrolled - TAK Server not yet installed"
+            sub = "in the estate, no TAK Server on it yet"
         elif res == "OFFLINE" and t.get("expected_offline"):
             res_cls, chip = "OFFLINE", "TURNED OFF"
             sub = "in store - not counted against the estate"
@@ -10910,14 +11036,14 @@ def server_board_html(state, history=None, desired=None, cfg=None, quick=False):
         if history is not None:
             out.append(uptime_strip(history, name, 48, mini=True))
         if quick:
-            out.append(_tile_quick(name, acts, act_targets))
+            out.append(_tile_quick(name, acts, act_targets, t))
         # The way into a box, on the face of the card. It used to live at the bottom of
         # the collapsed section, so reaching a server meant opening "what's installed",
         # scrolling past an inventory nobody wanted, and finding a link. The one thing
         # every tile is for should not be the hardest thing on it.
         # stopPropagation because the whole summary toggles the fold on click.
         out.append(f"<a class=tile-open-face href='/server/{e(name)}' "
-                   "onclick='event.stopPropagation()'>Open server &rsaquo;</a>")
+                   "onclick='event.stopPropagation()'>Open box &rsaquo;</a>")
         out.append("<div class=tile-toggle><span class=chev></span>"
                    "What's installed &amp; baseline</div></summary>")
         out.append("<div class=tile-body>" + _tile_inventory(t, desired) + "</div></details>")
@@ -10953,8 +11079,7 @@ def render_estate(state):
             ev = "WARN"
         elif rest:
             ev = "OK"
-        n = len(awaiting)
-        band_note = f" · {n} box{'es' if n != 1 else ''} awaiting first build"
+        band_note = ""
 
     doc = page_head(load_instance()["product_name"])
     doc.append(header_html(state, ev, age, "estate"))
@@ -11060,7 +11185,7 @@ def render_estate(state):
             "the build finishes - scan and you are on the map. You can always add more "
             "later from the server's page.</span>"
             "<div id=fr-creds></div>"
-            "<button type=button class=cred-refresh id=fr-addcred>+ Add a device</button>"
+            "<button type=button class=cred-refresh id=fr-addcred>+ Add a handset</button>"
             + ("" if auth_configured() else
                "<label class=fl id=fr-passwrap hidden>Operator password"
                "<input type=password id=fr-pass autocomplete=current-password>"
@@ -11080,6 +11205,19 @@ def render_estate(state):
             f"<script>{FIRSTRUN_JS}</script>")
     doc.append(stale_banner(age, stale))
 
+
+    # tile decorations: which box runs THIS console (admin), and what services each box
+    # carries - tiny icons from the health inventory, each with a hover tooltip. Only what
+    # the inventory can prove; a box running a deployed-edition console is not detectable
+    # from here, so no false "client" badges.
+    _chost = str(state.get("console_host") or "")
+    doc.append("<h2 class=sec-eye>Boxes</h2>")
+    # Overview shows what Operations shows. The two pages are different routes to the
+    # same boxes, so a box that offers one-click Logs on one page and nothing on the
+    # other teaches the operator to distrust the thinner one. One renderer, one set of
+    # affordances, both pages.
+    doc.append(server_board_html(state, history=history, desired=desired,
+                                 cfg=cfg, quick=True))
     if drift_sw:
         items = []
         for name, lbl, comp, rep, want in drift_sw:
@@ -11087,29 +11225,16 @@ def render_estate(state):
             link = (f" <a class=driftlink href='/server/{e(name)}#act-{e(aid)}'>update</a>"
                     if aid in acts and name in act_targets else "")
             items.append(f"{e(lbl)}: {e(comp)} {e(rep)} → {e(want)}{link}")
-        doc.append("<div class='banner drift'><b>Software drift.</b><span>"
-                   f"{len(drift_sw)} component{'s' if len(drift_sw) != 1 else ''} differ from "
-                   "the baseline. " + "; ".join(items) + ". Set the baseline below to what you "
-                   "run.</span></div>")
+        doc.append("<div class='banner drift'><b>Software out of step.</b><span>"
+                   f"{len(drift_sw)} piece{'s' if len(drift_sw) != 1 else ''} of software "
+                   "not at the version set for the estate. " + "; ".join(items) + ". If these are the "
+                   "versions you mean to run, set the baseline below to match.</span></div>")
     elif not desired:
         drift = state.get("checker_drift") or []
         if drift:
-            doc.append("<div class='banner drift'><b>Checker drift.</b><span>Boxes are on "
-                       f"different tak-health versions ({e(', '.join(drift))}). Push the "
+            doc.append("<div class='banner drift'><b>Health checkers out of step.</b><span>Boxes are on "
+                       f"different health checker versions ({e(', '.join(drift))}). Push the "
                        "latest to all boxes.</span></div>")
-
-    # tile decorations: which box runs THIS console (admin), and what services each box
-    # carries - tiny icons from the health inventory, each with a hover tooltip. Only what
-    # the inventory can prove; a box running a deployed-edition console is not detectable
-    # from here, so no false "client" badges.
-    _chost = str(state.get("console_host") or "")
-    doc.append("<h2 class=sec-eye>Servers</h2>")
-    # Overview shows what Operations shows. The two pages are different routes to the
-    # same boxes, so a box that offers one-click Logs on one page and nothing on the
-    # other teaches the operator to distrust the thinner one. One renderer, one set of
-    # affordances, both pages.
-    doc.append(server_board_html(state, history=history, desired=desired,
-                                 cfg=cfg, quick=True))
 
     # the key: name every marker the tiles above actually carry, because a hover tooltip
     # is easy to miss. Only the services present somewhere in the estate, plus the admin
@@ -12455,7 +12580,7 @@ CREDENTIALS_JS = """
     }).catch(function(e){viewEl.innerHTML='<div class="a-res error">Could not reach the console. '+e+'</div>';});
   }
   function render(creds){
-    if(!creds.length){listEl.innerHTML='<div class=cred-empty>No credentials issued on this box yet. Use <b>Add a device</b> above to create the first one.</div>';return;}
+    if(!creds.length){listEl.innerHTML='<div class=cred-empty>No credentials issued on this box yet. Use <b>Add a handset</b> above to create the first one.</div>';return;}
     var rows=creds.map(function(c){
       var meta=c.ctype==='cert'?('certificate \\u00b7 expires '+esc(c.expires||'?')):('enrolment \\u00b7 group '+esc(c.group||'?'));
       return '<div class=cred-row><span class=cred-name>'+esc(c.name)+'</span>'
@@ -12497,14 +12622,436 @@ def render_server(state, name):
     label = t.get("label", name)
     checks = t.get("checks") or []
 
-    doc = page_head(f"{label} — " + load_instance()["product_name"])
-    doc.append(header_html(state, res, age, f"server:{name}", crumb=e(label)))
     off_marked = bool(t.get("expected_offline"))
-    res_word = "TURNED OFF" if (res == "OFFLINE" and off_marked) else res
-    line = (f"{label}: {res_word}. Checker {t.get('checker_version') or '?'}. "
+    awaiting = tile_awaiting(t)
+    res_word = "TURNED OFF" if (res == "OFFLINE" and off_marked) else ("AWAITING BUILD" if awaiting else VERDICT_WORDS.get(res, res))
+    doc = page_head(f"{label} — " + load_instance()["product_name"])
+    doc.append(header_html(state, "BUILD" if awaiting else res, age, f"server:{name}", crumb=e(label),
+                           word=res_word))
+    line = (f"{label}: {res_word}. Health checker {t.get('checker_version') or '?'}. "
             f"Checked {human_age(age_seconds(t.get('checked_at', '')))}.")
     doc.append(f"<div class='vband {e(res)}'><span class=vdot></span>{e(line)}</div>")
     doc.append("<main id=main class=wrap>")
+    doc.append(stale_banner(age, stale))
+    if awaiting:
+        doc.append("<div class='banner drift'><b>Not built yet.</b><span>This box is enrolled and answering, "
+                   "and TAK Server is not installed on it. The checks below are what an unbuilt box looks "
+                   "like, not faults. Build it from <a href='/deploy'>Deploy</a>; it takes its place in the "
+                   "estate when the build finishes.</span></div>")
+    if res == "UNREACHABLE" and not t.get("reachable"):
+        seen_u = last_seen(history, name)
+        ago_u = human_age(age_seconds(seen_u)) if seen_u else "not in recent history"
+        doc.append("<div class='banner stale'><b>Cannot be reached.</b><span>This console could not reach "
+                   f"{e(label)} on its last poll; it last answered {e(ago_u)}. If the box is in store, mark it "
+                   "turned off under <a href='#housekeeping'>Housekeeping</a> and it stops counting as a fault. "
+                   "If it should be on, check its power and its network; it is read again on the next poll."
+                   + (f" <details class=sync-support><summary>Details for support</summary><code>{e(t['error'])}</code></details>" if t.get("error") else "")
+                   + "</span></div>")
+    newest = max((v for v in (state.get("checker_versions") or []) if v), key=_vtuple, default=None)
+    mine = t.get("checker_version")
+    if newest and mine and _vtuple(mine) < _vtuple(newest):
+        doc.append("<div class='banner drift'><b>Old health checker.</b><span>This box checks itself with "
+                   f"health checker {e(mine)}; the estate runs {e(newest)}. Some checks below are older, and some "
+                   "newer checks are missing, so treat this page as an incomplete picture. "
+                   + ("<a href='#act-push-checker'>Update the health checker</a>: about thirty seconds, no outage."
+                      if "push-checker" in acts and name in act_targets else "Update the health checker from Operations.")
+                   + "</span></div>")
+    if t.get("unconfirmed"):
+        doc.append("<div class='banner drift'><b>One check failed. Waiting for the next one.</b><span>"
+                   "A single failed check is often nothing: a box on the public internet can stop answering "
+                   "for a moment while it is being scanned. The console holds the estate's verdict until the "
+                   "next check confirms it, because a real fault fails that one too. Nothing to do until then."
+                   "</span></div>")
+    if t.get("error") and res != "UNREACHABLE":
+        doc.append(f"<div class='banner stale'><b>The box answered with an error:</b><span>{e(t['error'])}</span></div>")
+    if res == "OFFLINE":
+        seen = last_seen(history, name)
+        ago = (f"Last answered {human_age(age_seconds(seen))}." if seen
+               else "Not seen since it was turned off, which is expected for a box in store.")
+        doc.append(f"<div class='banner drift'><b>Turned off.</b><span>{e(ago)}"
+                   + (f" {e(t['note'])}." if t.get("note") and not seen else "") + "</span></div>")
+
+    flip = changed_since_last(history, name)
+    meta = (f"{t.get('fqdn') or t.get('profile') or ''} &middot; profile "
+            f"{t.get('profile') or '?'} &middot; last check took {t.get('elapsed_s', '?')}s"
+            + (f" &middot; {flip}" if flip else ""))
+    doc.append(f"<div class=meta style='margin-top:14px'>{meta}</div>")
+
+    strip = uptime_strip(history, name, 48)
+    if strip:
+        doc.append(f"<h2 class=sec-eye>Recent polls</h2>{strip}"
+                   "<div class=striplab><span>older</span><span>now</span></div>")
+
+    bad = [c for c in checks if c.get("status") in ("FAIL", "WARN")]
+    if bad:
+        bad.sort(key=lambda c: 0 if c.get("status") == "FAIL" else 1)
+        doc.append("<h2 class=sec-eye>" + ("Expected until the box is built" if awaiting else "Needs attention")
+                   + "</h2><div class=rows>")
+        cert_expired = any((c.get("category") or "") == "cert" and c.get("status") == "FAIL"
+                           and "expired" in str(c.get("detail") or "") for c in bad)
+        for c in bad:
+            fix = ""
+            rec = recovery_for(c)
+            if rec and cert_expired and rec[0] == "restart-service":
+                # a restart will not hold while the certificate the service presents has expired;
+                # the only proposal on the page must not be the one that cannot work (review A1)
+                rec = None
+                fix = "<div class=hint style='margin-top:4px'>Renew the expired certificate first (Certificates below); a restart alone will not hold.</div>"
+            if rec and name in act_targets:
+                aid, ins = rec
+                if aid in acts and action_applies(aid, t):
+                    attrs = " ".join(f"data-fix-{k}='{e(str(v))}'" for k, v in ins.items())
+                    fix = (f"<a class=fixlink href='#act-{e(aid)}' data-fix-action='{e(aid)}' {attrs}>"
+                           f"Propose fix<span class=sr-only>: {e(ACTIONS[aid]['label'])}</span></a>")
+            doc.append(f"<div class='row {e(c['status'])}'><span class=st>{e(c['status'])}</span>"
+                       f"<span class=nm>{e(c.get('category', ''))} &rsaquo; {e(c.get('name', ''))}</span>"
+                       f"<span class=dt>{e(c.get('detail', ''))}{fix}</span></div>")
+        doc.append("</div>")
+
+    keys = sorted({f"{c.get('category', '')}/{c.get('name', '')}" for c in checks
+                   if isinstance(c.get('value'), (int, float))})
+    unit_of = {f"{c.get('category', '')}/{c.get('name', '')}": c.get("unit", "")
+               for c in checks if isinstance(c.get('value'), (int, float))}
+    mcards = []
+    for k in keys:
+        vals = series_for(history, name, k)
+        if not vals:
+            v = next((c["value"] for c in checks
+                      if f"{c.get('category', '')}/{c.get('name', '')}" == k), None)
+            vals = [v, v] if isinstance(v, (int, float)) else []
+        if not vals:
+            continue
+        cur, prev = vals[-1], (vals[-2] if len(vals) > 1 else vals[-1])
+        ar = "<span class='ar up'>↑</span>" if cur > prev else (
+             "<span class='ar dn'>↓</span>" if cur < prev else "")
+        mcards.append(f"<div class=metric><div class=ml>{e(k.split('/', 1)[-1])}</div>"
+                      f"<div class=mv>{e(str(cur))}<u>{e(unit_of.get(k, ''))}</u>{ar}</div>"
+                      f"{sparkline(vals)}</div>")
+    if mcards:
+        doc.append(f"<h2 class=sec-eye>Metrics</h2><div class=metrics>{''.join(mcards)}</div>")
+
+    unreachable = res == "UNREACHABLE" and not t.get("reachable")
+    if unreachable:
+        doc.append("<h2 class=sec-eye>What the console last saw</h2><p class=meta>Everything below is from "
+                   "the last time this box answered, not from now. Presses that need the box are folded "
+                   "until it is back.</p>")
+    software = software_rows(t)
+    if software:
+        doc.append("<h2 class=sec-eye>Software</h2><div class=swlist>")
+        for s in software:
+            comp, ver = s.get("name", "?"), (s.get("version") or "")
+            want = (desired or {}).get(comp)
+            cell = ""
+            if want and not version_current(ver, want):
+                aid = COMPONENT_ACTION.get(comp)
+                cell = f"<span class=sw-drift>→ {e(want)}</span>"
+                if aid in acts and name in act_targets:
+                    cell += (f"<a class=sw-up href='#act-{e(aid)}'>Update"
+                             f"<span class=sr-only> {e(comp)} on {e(label)}</span></a>")
+            elif want:
+                cell = "<span class=sw-cur>current</span>"
+            st_word = s.get("state", "")
+            dead = next((c for c in checks if (c.get("category") or "") == "service"
+                         and c.get("status") == "FAIL" and comp in str(c.get("name") or "")), None)
+            if dead:
+                # "active" from the inventory beside "inactive (dead)" from the checks was the same
+                # page saying two things; the checks are the later read and they win
+                st_word = f"not running ({dead.get('detail', 'the check failed')})"
+            if comp == "tak-health" and t.get("checker_version") and t.get("checker_version") != ver:
+                ver = t.get("checker_version")
+            if unreachable:
+                st_word = f"{st_word} (as last seen)" if st_word else "as last seen"
+            doc.append(f"<div class=swrow><span class=sw-n>{e(comp)}</span>"
+                       f"<span class=sw-v>{e(ver) if ver else '–'}</span>"
+                       f"<span class=sw-s>{e(st_word)}</span>"
+                       f"<span class=sw-a>{cell}</span></div>")
+        doc.append("</div>")
+    elif t.get("reachable"):
+        doc.append("<h2 class=sec-eye>Software</h2><div class=meta>No inventory reported. "
+                   "This box's checker predates 1.1.0; run Update health checker below.</div>")
+
+    # 1.32.0 Modules: the per-box marketplace. Each installable component as a card:
+    # its state from the health inventory, Update when behind the baseline, Install
+    # (the provisioner's components stage, as a gated job) when absent.
+    MODULES = [(t, n, d) for t, n, _p, d, _w in COMPONENTS]
+    # Inventory rows are named by SERVICE; three module tokens differ, and for the
+    # shared-substrate ones presence is not fittedness (chrony exists on every
+    # Ubuntu box without serving the LAN). The declared loadout, where one exists,
+    # is the authority on what counts as fitted.
+    SW_ALIAS = {"nodered": "node-red", "maps": "mbtileserver", "lanntp": "chrony",
+                "mesh": "mesh-manager-web"}
+    lo = t.get("loadout") or {}
+    declared_set = set(x for x in str(lo.get("declared") or "").split(",") if x)
+    lo_declared = bool(declared_set) and str(lo.get("source") or "") == "loadout.conf"
+    sw_by = {r.get("name"): r for r in software}
+    box_fqdn = str(t.get("fqdn") or "")
+    _pki = load_instance()
+    can_install = ("provision-server" in acts and name in act_targets
+                   and re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+",
+                                    box_fqdn or "") is not None)
+    cards = []
+    for comp, clabel, cdesc in MODULES:
+        row = sw_by.get(comp) or sw_by.get(SW_ALIAS.get(comp, ""))
+        if lo_declared and comp != "takserver" and comp not in declared_set:
+            # Declared not-fitted beats an inventory row: chrony existing is not
+            # lan-ntp, and a module the operator declared away offers Install.
+            row = None
+        if row:
+            ver = row.get("version") or "present"
+            st = row.get("state") or ""
+            want = (desired or {}).get(comp)
+            dead_m = next((c for c in checks if (c.get("category") or "") == "service"
+                           and c.get("status") == "FAIL" and comp in str(c.get("name") or "")), None)
+            if dead_m:
+                badge = "<span class='mod-b drift'>installed, not running</span>"
+            else:
+                badge = ("<span class='mod-b ok'>installed</span>"
+                         if not want or version_current(row.get("version") or "", want)
+                         else "<span class='mod-b drift'>update available</span>")
+            aid = COMPONENT_ACTION.get(comp)
+            act = (f"<a class=mod-act href='#act-{e(aid)}'>Update</a>"
+                   if want and not version_current(row.get("version") or "", want)
+                   and aid in acts and name in act_targets else "")
+            offline = ""
+            if comp in ("cloudtak", "mediamtx"):
+                img = library_image_for(comp, want)
+                can_off = "load-images" in acts and name in act_targets
+                istat = (f"image in library: <code>{e(img['file'])}</code>"
+                         + (f" ({e(img.get('version',''))})" if img.get("version") else "")
+                         if img else "no image tarball held yet")
+                dep = (f"<button type=button class=mo-deploy data-module='{e(comp)}' "
+                       f"data-target='{e(name)}'>Deploy offline (docker load)</button>"
+                       if img and can_off else "")
+                offline = (
+                    f"<details class=mod-offline data-module='{e(comp)}' data-target='{e(name)}'>"
+                    "<summary>Offline deploy</summary><div class=mo-body>"
+                    "<p class=meta>Deploy with no internet: hold this module's Docker images on "
+                    "the admin box, then load them onto the box over the closed network. Capture "
+                    "on a connected machine with <code>docker save -o " + e(comp) + "-images.tar &lt;images&gt;</code>.</p>"
+                    f"<div class=mo-status>{istat}</div>"
+                    f"<div class=mo-actions>{dep}"
+                    "<label class=mo-upload>Upload image tarball"
+                    "<input type=file class=mo-file accept='.tar,.gz'></label>"
+                    f"<label class=mo-ver>version<input class=mo-verinp value=\"{e(want or '')}\" "
+                    "placeholder='e.g. v13.70.0' spellcheck=false></label></div>"
+                    "<div class=mo-prog role=status></div><div class=mo-log></div>"
+                    "</div></details>")
+            cards.append(f"<div class=mod><div class=mod-h><b>{e(clabel)}</b>{badge}</div>"
+                         f"<div class=mod-d>{e(ver)}{(' · ' + e(st)) if st else ''}</div>{act}{offline}</div>")
+        elif comp == "takserver":
+            cards.append(f"<div class=mod><div class=mod-h><b>{e(clabel)}</b>"
+                         "<span class='mod-b abs'>not installed</span></div>"
+                         "<div class=mod-d>installed by the <a href='/deploy'>Deploy wizard</a>, "
+                         "never from here</div></div>")
+        else:
+            inst = ""
+            if can_install and sw_by.get("takserver"):
+                inst = ("<form class=action data-id=provision-server data-pass=0 data-read=0 "
+                        f"data-confirm=\"Install {e(clabel)} on {{target}}. Software is installed "
+                        "and services start on that box.\" data-result=text>"
+                        f"<input type=hidden name=target value='{e(name)}'>"
+                        "<input type=hidden name=stage value=components>"
+                        f"<input type=hidden name=components value='{e(comp)}'>"
+                        f"<input type=hidden name=fqdn value='{e(box_fqdn)}'>"
+                        f"<input type=hidden name=le_email value='ops@{e(box_fqdn)}'>"
+                        f"<input type=hidden name=org value='{e(_pki.get('org') or 'Vantage')}'>"
+                        f"<input type=hidden name=org_unit value='{e(_pki.get('org_unit') or 'TAK')}'>"
+                        f"<input type=hidden name=country value='{e(_pki.get('country') or 'GB')}'>"
+                        f"<input type=hidden name=state value='{e(_pki.get('state') or 'England')}'>"
+                        f"<input type=hidden name=city value='{e(_pki.get('city') or 'Andover')}'>"
+                        "<input type=hidden name=deb value='/root/unused.deb'>"
+                        "<input type=hidden name=dry_run value='0'>"
+                        # Mesh Manager is the one module that cannot be a single press: the box
+                        # has to be told which radio is the gateway and which TAK filter group
+                        # the input carries, and neither can be guessed from here.
+                        + ("<label class=a-in>Radio (by-id path)"
+                           "<input name=mesh_serial required placeholder='/dev/serial/by-id/usb-...-if00' "
+                           "pattern='/dev/serial/by-id/[A-Za-z0-9._:-]{4,180}'></label>"
+                           "<div class=meta>Run <code>ls -l /dev/serial/by-id/</code> on the box. "
+                           "A ttyACM number is refused: it moves when the box is re-cabled.</div>"
+                           "<label class=a-in>TAK filter group"
+                           "<input name=mesh_filter_group placeholder='e.g. MilUX' "
+                           "pattern='[A-Za-z0-9._-]{1,40}'></label>"
+                           "<div class=meta>Without a filter group the server accepts the mesh "
+                           "and shows it to nobody.</div>" if comp == "mesh" else "") +
+                        "<div class=a-act><button class=a-go type=submit>Install</button></div>"
+                        "<div class='a-res' role=status aria-live=polite></div></form>")
+            if not inst and "provision-server" in acts and name in act_targets \
+               and sw_by.get("takserver"):
+                inst = ("<div class=meta>To install modules, give this box its public "
+                        "DNS name first - the rename control at the top of this page.</div>")
+            cards.append(f"<div class=mod><div class=mod-h><b>{e(clabel)}</b>"
+                         "<span class='mod-b abs'>not installed</span></div>"
+                         f"<div class=mod-d>{e(cdesc)}</div>{inst}</div>")
+    doc.append("<h2 class=sec-eye>Modules</h2><div class=mods>" + "".join(cards) + "</div>")
+    # Spec 002: the declared loadout, visible beside the modules it governs, and
+    # the gated editor where the action is enabled for this box.
+    if lo_declared:
+        doc.append(f"<div class=meta>Declared loadout: <code>{e(str(lo.get('declared')))}</code>"
+                   " - health checks judge exactly this set; everything else reads"
+                   " “not fitted (declared)” on the checks above.</div>")
+    elif lo:
+        doc.append(f"<div class=meta>Loadout: {e(str(lo.get('source') or 'profile defaults'))}"
+                   " - the profile's full expectations are in force.</div>")
+    if "set-loadout" in acts and name in act_targets:
+        # tick what the box carries. Start from the current declaration; if none has been
+        # made, pre-tick what is actually fitted so "Save" adopts reality (and clears the
+        # false-red on a box judged against the full profile).
+        if lo.get("declared"):
+            initial = set(x for x in str(lo["declared"]).split(",") if x)
+        else:
+            initial = {c for c, _, _ in MODULES
+                       if sw_by.get(c) or sw_by.get(SW_ALIAS.get(c, ""))}
+        initial.add("takserver")
+        boxes = []
+        for comp, clabel, _ in MODULES:
+            req = comp == "takserver"
+            ck = " checked" if (req or comp in initial) else ""
+            dis = " disabled" if req else ""
+            boxes.append(f"<label class=lo-item><input type=checkbox class=lo-box "
+                         f"value='{e(comp)}'{ck}{dis}> {e(clabel)}"
+                         + (" <span class=lo-req>required</span>" if req else "") + "</label>")
+        doc.append("<h2 class=sec-eye>What this box is meant to run</h2>")
+        doc.append(
+            "<form class='action loadout-form' data-id=set-loadout data-pass=1 data-read=0 "
+            f"data-confirm=\"Set what {e(label)} is meant to run. Health checks judge exactly "
+            "the ticked set; anything unticked stops being watched.\" data-result=text>"
+            f"<input type=hidden name=target value='{e(name)}'>"
+            "<input type=hidden name=tilesets value='-'>"
+            f"<input type=hidden name=components value='{e(','.join(sorted(initial)))}'>"
+            "<p class=meta>Tick the modules this box carries. Anything unticked reads "
+            "“not fitted” on its checks instead of failing. TAK Server is always required.</p>"
+            f"<div class=lo-grid>{''.join(boxes)}</div>"
+            # set-loadout is passphrase-gated (data-pass=1), so the form must carry the operator
+            # password field the generic action submit reads - exactly as action_form_html does.
+            # Without it the submit sent an empty passphrase and the box answered "incorrect".
+            "<label class=fl>Operator password"
+            "<input name=passphrase type=password required autocomplete=current-password></label>"
+            "<div class=a-act><button class=a-go type=submit>Save loadout</button></div>"
+            "<div class='a-res' role=status aria-live=polite></div></form>")
+        doc.append(f"<script>{LOADOUT_EDITOR_JS}</script>")
+
+    # 1.34.0 Security posture: read the box's hardening and firewall state, and act on it.
+    # The plan reads are live (read-only, safe); apply/revert are gated action forms.
+    if any(x in acts for x in ("harden-plan", "firewall-plan")) and name in act_targets:
+        doc.append(f"<h2 class=sec-eye>Security</h2><div class=secgrid data-box='{e(name)}'>")
+        if "harden-plan" in acts:
+            doc.append("<div class=seccard id=sec-harden><div class=sec-h><b>Posture</b>"
+                       "<span class=sec-badge>reading…</span></div>"
+                       "<div class='sec-body meta'>SSH, kernel, auditd, fail2ban, core "
+                       "dumps.</div><div class=sec-acts></div></div>")
+        if "firewall-plan" in acts:
+            doc.append("<div class=seccard id=sec-fw><div class=sec-h><b>Firewall</b>"
+                       "<span class=sec-badge>reading…</span></div>"
+                       "<div class='sec-body meta'>ufw against this box's declared policy."
+                       "</div><div class=sec-acts></div></div>")
+        doc.append("</div>")
+        doc.append(f"<script>{SECURITY_JS}</script>")
+
+    fed = next((c for c in checks if c.get("category") == "federation"), None)
+    if fed:
+        on = "not enabled" not in (fed.get("detail") or "")
+        doc.append("<h2 class=sec-eye>Federation</h2>"
+                   f"<div class=swrow style='border-top:0'><span class=sw-n>v2 server</span>"
+                   f"<span class=sw-v>{'on · 9001' if on else 'standalone'}</span>"
+                   f"<span class=sw-s>{e(fed.get('detail', ''))}</span><span class=sw-a></span></div>")
+
+    links = service_links(t)
+    if links:
+        doc.append("<h2 class=sec-eye>Services</h2><div class=links>")
+        for lbl, url, note in links:
+            doc.append(f"<a class=svc href='{e(url)}' target=_blank rel='noopener noreferrer'>"
+                       f"<span class=svc-l>{e(lbl)}</span>"
+                       f"<span class=svc-u>{e(url)}</span>"
+                       f"<span class=svc-n>{e(note)}</span></a>")
+        doc.append("</div>")
+
+    if checks:
+        cats = {}
+        for c in checks:
+            cats.setdefault(c.get("category", "other"), []).append(c)
+        doc.append(f"<details style='margin-top:22px'><summary>All {len(checks)} checks</summary>")
+        for cat in sorted(cats):
+            doc.append(f"<div class=cat>{e(cat)}</div>")
+            for c in cats[cat]:
+                val = (f"{c['value']} {e(c.get('unit', ''))}"
+                       if isinstance(c.get('value'), (int, float)) else "")
+                doc.append(f"<div class=checkrow><span class='d {e(c.get('status', ''))}'></span>"
+                           f"<span class=cn><span class=sr-only>{e(c.get('status', ''))} </span>"
+                           f"{e(c.get('name', ''))}</span>"
+                           f"<span class=cd>{e(c.get('detail', '') or val)}</span></div>")
+        doc.append("</details>")
+
+    if acts and name in act_targets:
+        # the *-plan reads are the Security cards' own machinery, not catalogue buttons
+        here = [aid for aid in acts if action_applies(aid, t)
+                and aid not in ("harden-plan", "firewall-plan")]
+        # the page's whole point, promoted: putting a device on the map is not one of
+        # twenty catalogue rows, it is THE job
+        if "enrol-device" in here:
+            doc.append("<section class=actions aria-label='Add a handset'><div class=ah>"
+                       "<h2 class=title>Add a handset</h2><span class=meta>"
+                       "Name it, give it a group, confirm - you get a QR code the device "
+                       "scans to join this server. Groups matter: devices only see their "
+                       "own group's traffic.</span></div><div class=agrid>"
+                       + action_form_html("enrol-device", fixed=name) + "</div></section>")
+            # Bulk enrolment: a whole team at once -> a printable QR sheet (PDF) + a ZIP of
+            # every device's QR and credentials, downloaded here or copied to a USB stick.
+            openpass = (not auth_configured()) and ACTIONS["enrol-device"].get("needs_passphrase")
+            doc.append(
+                "<section class=actions aria-label='Bulk enrolment'><div class=ah>"
+                "<h2 class=title>Bulk enrolment</h2><span class=meta>"
+                "Enrol a whole team at once. You get a printable <b>QR sheet (PDF)</b> and a "
+                "<b>ZIP</b> of every device's QR and credentials - download them here, or, on "
+                "the box itself, copy them straight to a USB stick.</span></div>"
+                f"<form class=bulk-form data-box='{e(name)}'>"
+                "<div class=bulk-fields>"
+                "<label class=fl>Group<input class=bulk-group maxlength=40 placeholder='e.g. recon' spellcheck=false autocomplete=off></label>"
+                "<label class=fl>Name prefix<input class=bulk-prefix maxlength=32 placeholder='e.g. alpha-' spellcheck=false autocomplete=off></label>"
+                "<label class=fl>How many<input class=bulk-count type=number min=1 max=30 value=5></label>"
+                "<label class=fl>Start at<input class=bulk-start type=number min=1 value=1></label>"
+                "</div>"
+                "<details class=bulk-names><summary>Or type device names, one per line</summary>"
+                "<textarea class=bulk-list rows=4 spellcheck=false autocomplete=off "
+                "placeholder='alpha-01&#10;alpha-02&#10;bravo-lead'></textarea></details>"
+                + ("<label class=cred-pass><span>Operator password</span>"
+                   "<input type=password class=bulk-pass autocomplete=off placeholder='to enrol'></label>"
+                   if openpass else "")
+                + "<div class=bulk-actions><button type=submit class=a-go>Generate QR sheet</button>"
+                "<span class=bulk-msg role=status></span></div></form>"
+                "<div class=bulk-out aria-live=polite></div></section>")
+        cat = [a for a in here if a != "enrol-device" and ACTIONS.get(a, {}).get("catalogue", True)]
+        if cat:
+            doc.append(f"<section class=actions aria-label='Actions on {e(label)}'><div class=ah>"
+                       f"<h2 class=title>Actions on this box</h2><span class=meta>"
+                       "Pre-bound to this box; shown only where the inventory says they "
+                       "apply. Reads run on one click, writes confirm, all are logged."
+                       "</span></div>")
+            doc.append(actions_grouped_html(cat, fixed=name, collapsible=True))
+            doc.append("</section>")
+
+        # Credentials panel: re-download the device credentials this box has issued. The list is
+        # a read (no passphrase); each download returns a secret, so it asks for the passphrase.
+        if "list-credentials" in here and "fetch-credential" in acts:
+            need_pass = ACTIONS["fetch-credential"]["needs_passphrase"]
+            doc.append(f"<section class=creds aria-label='Credentials on {e(label)}' "
+                       f"data-box='{e(name)}' data-needpass='{1 if need_pass else 0}'>"
+                       "<div class=ah><h2 class=title>Credentials</h2><span class=meta>"
+                       "Device certificates and enrolment QR codes issued on this box, for "
+                       "re-download. Enrolment tokens minted before the credential store existed "
+                       "cannot be recovered - reissue those with Enrol device.</span></div>"
+                       "<div class=cred-tools>"
+                       "<button type=button class=cred-refresh>List credentials</button>"
+                       + (f"<label class=cred-pass><span>Operator password</span>"
+                          f"<input type=password class=cred-passinp autocomplete=off "
+                          f"placeholder='to download'></label>" if need_pass else "")
+                       + "</div><div class=cred-list aria-live=polite>"
+                       "<div class=cred-empty>Listing credentials&hellip;</div></div>"
+                       "<div class=cred-view></div></section>")
+
+    doc.append("<h2 class=sec-eye id=housekeeping>Housekeeping</h2>"
+               "<p class=meta>Once-a-deployment controls for this box in the estate: its name, whether it is "
+               "turned off, and removing it. None of these touch the box itself.</p>")
     doc.append(f"<div class=rename-row><form id=renameform data-name='{e(name)}'>"
                f"<label class=fl>Display name<input id=rename-label maxlength=40 "
                f"value='{e(label)}'></label><button class=cred-refresh type=submit>"
@@ -12518,9 +13065,9 @@ def render_server(state, name):
     if tile_is_admin_box(t, str(state.get("console_host") or "")):
         pwords = None
     elif t.get("mark_stale"):
-        pwords = ("This box is marked <b>turned off</b>, but it answered. Its own verdict "
-                  "stands, because a box that is on and failing is a fault. Mark it turned "
-                  "on if it is back in service.")
+        pwords = (f"This box is marked <b>turned off</b>, but it answered. Something is running on {e(label)}; "
+                  "its own checks stand, because a box that is on is a box that can fail. Mark it turned on "
+                  "if it is back in service. If it should be in store, somebody has powered it up.")
     elif off_marked:
         pwords = ("This box is <b>turned off</b>. While it is, an absent box is not reported "
                   "as a fault and does not count against the estate. What the box holds is "
@@ -12529,6 +13076,9 @@ def render_server(state, name):
         pwords = ("Mark this box <b>turned off</b> when it goes into store. While it is "
                   "turned off, this console does not report it as a fault for being absent. "
                   "Nothing is done to the box.")
+        if res == "UNREACHABLE":
+            pwords = ("This box could not be reached. If it is in store, mark it <b>turned off</b> and it "
+                      "stops counting as a fault; nothing is done to the box.")
     if pwords:
         doc.append(f"<div class=power-row><form id=powerform data-name='{e(name)}' "
                    f"data-want='{'on' if off_marked else 'off'}'>"
@@ -12655,22 +13205,22 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
     # if the box is gone), passphrase-gated. In its own collapsed danger zone so it is
     # deliberate, never a mis-click.
     if acts:
-        doc.append("<details class=dangerzone><summary>Remove this server</summary>"
+        doc.append("<details class=dangerzone><summary>Remove this box from the estate</summary>"
                    f"<form id=unenrolform data-name='{e(name)}'>"
-                   "<p class=meta>Stop monitoring this server and unbind its actions. Use "
+                   "<p class=meta>Stop watching this box and take its actions off this console. Use "
                    "this when the box has been deleted, destroyed or reset. Nothing is done "
-                   "to the box itself, so it works whether or not it still exists. To "
-                   "re-add it later, enrol it again.</p>"
+                   "to the box itself, so it works whether or not it still exists. To bring "
+                   "it back later, add it to the estate again.</p>"
                    "<label class=cred-pass><span>Operator password</span>"
                    "<input type=password id=unenrol-pass autocomplete=off></label>"
                    f"<button type=submit class='a-go confirm'>Remove {e(label)} from "
-                   "monitoring</button><span id=unenrol-res class=lib-status role=status "
+                   "the estate</button><span id=unenrol-res class=lib-status role=status "
                    "style='margin-left:10px'></span></form></details>")
         doc.append("""<script>(function(){
 var f=document.getElementById('unenrolform'); if(!f)return;
 f.addEventListener('submit',function(ev){ev.preventDefault();
   var r=document.getElementById('unenrol-res');
-  if(!confirm('Remove this server from monitoring? Actions bound to it are unbound. '
+  if(!confirm('Remove this box from the estate? Its actions come off this console. '
     +'The box itself is not touched.'))return;
   r.textContent='Removing\\u2026';
   fetch('/api/setup/unenrol',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -12682,355 +13232,6 @@ f.addEventListener('submit',function(ev){ev.preventDefault();
     else{r.textContent=x.j.error||'failed';}
   }).catch(function(){r.textContent='could not reach the console';});
 });})();</script>""")
-    doc.append(stale_banner(age, stale))
-    if t.get("unconfirmed"):
-        doc.append("<div class='banner drift'><b>Confirming.</b><span>"
-                   f"{e(t.get('note', 'a check failed once'))}. A single transient (a public "
-                   "box's accept queue briefly overflowing under scanner load, say) does not "
-                   "turn the estate red; a real fault fails the next poll too.</span></div>")
-    if t.get("error"):
-        doc.append(f"<div class='banner stale'><b>Error.</b><span>{e(t['error'])}</span></div>")
-    if res in ("OFFLINE", "UNREACHABLE"):
-        seen = last_seen(history, name)
-        ago = human_age(age_seconds(seen)) if seen else "not in recent history"
-        doc.append(f"<div class='banner drift'><b>Last seen.</b><span>{e(ago)}"
-                   + (f" &middot; {e(t['note'])}" if t.get("note") else "") + "</span></div>")
-
-    flip = changed_since_last(history, name)
-    meta = (f"{t.get('fqdn') or t.get('profile') or ''} &middot; profile "
-            f"{t.get('profile') or '?'} &middot; last poll {t.get('elapsed_s', '?')}s"
-            + (f" &middot; {flip}" if flip else ""))
-    doc.append(f"<div class=meta style='margin-top:14px'>{meta}</div>")
-
-    strip = uptime_strip(history, name, 48)
-    if strip:
-        doc.append(f"<h2 class=sec-eye>Recent polls</h2>{strip}"
-                   "<div class=striplab><span>older</span><span>now</span></div>")
-
-    bad = [c for c in checks if c.get("status") in ("FAIL", "WARN")]
-    if bad:
-        bad.sort(key=lambda c: 0 if c.get("status") == "FAIL" else 1)
-        doc.append("<h2 class=sec-eye>Needs attention</h2><div class=rows>")
-        for c in bad:
-            fix = ""
-            rec = recovery_for(c)
-            if rec and name in act_targets:
-                aid, ins = rec
-                if aid in acts and action_applies(aid, t):
-                    attrs = " ".join(f"data-fix-{k}='{e(str(v))}'" for k, v in ins.items())
-                    fix = (f"<a class=fixlink href='#act-{e(aid)}' data-fix-action='{e(aid)}' {attrs}>"
-                           f"Propose fix<span class=sr-only>: {e(ACTIONS[aid]['label'])}</span></a>")
-            doc.append(f"<div class='row {e(c['status'])}'><span class=st>{e(c['status'])}</span>"
-                       f"<span class=nm>{e(c.get('category', ''))} &rsaquo; {e(c.get('name', ''))}</span>"
-                       f"<span class=dt>{e(c.get('detail', ''))}{fix}</span></div>")
-        doc.append("</div>")
-
-    keys = sorted({f"{c.get('category', '')}/{c.get('name', '')}" for c in checks
-                   if isinstance(c.get('value'), (int, float))})
-    unit_of = {f"{c.get('category', '')}/{c.get('name', '')}": c.get("unit", "")
-               for c in checks if isinstance(c.get('value'), (int, float))}
-    mcards = []
-    for k in keys:
-        vals = series_for(history, name, k)
-        if not vals:
-            v = next((c["value"] for c in checks
-                      if f"{c.get('category', '')}/{c.get('name', '')}" == k), None)
-            vals = [v, v] if isinstance(v, (int, float)) else []
-        if not vals:
-            continue
-        cur, prev = vals[-1], (vals[-2] if len(vals) > 1 else vals[-1])
-        ar = "<span class='ar up'>↑</span>" if cur > prev else (
-             "<span class='ar dn'>↓</span>" if cur < prev else "")
-        mcards.append(f"<div class=metric><div class=ml>{e(k.split('/', 1)[-1])}</div>"
-                      f"<div class=mv>{e(str(cur))}<u>{e(unit_of.get(k, ''))}</u>{ar}</div>"
-                      f"{sparkline(vals)}</div>")
-    if mcards:
-        doc.append(f"<h2 class=sec-eye>Metrics</h2><div class=metrics>{''.join(mcards)}</div>")
-
-    software = software_rows(t)
-    if software:
-        doc.append("<h2 class=sec-eye>Software</h2><div class=swlist>")
-        for s in software:
-            comp, ver = s.get("name", "?"), (s.get("version") or "")
-            want = (desired or {}).get(comp)
-            cell = ""
-            if want and not version_current(ver, want):
-                aid = COMPONENT_ACTION.get(comp)
-                cell = f"<span class=sw-drift>→ {e(want)}</span>"
-                if aid in acts and name in act_targets:
-                    cell += (f"<a class=sw-up href='#act-{e(aid)}'>Update"
-                             f"<span class=sr-only> {e(comp)} on {e(label)}</span></a>")
-            elif want:
-                cell = "<span class=sw-cur>current</span>"
-            doc.append(f"<div class=swrow><span class=sw-n>{e(comp)}</span>"
-                       f"<span class=sw-v>{e(ver) if ver else '–'}</span>"
-                       f"<span class=sw-s>{e(s.get('state', ''))}</span>"
-                       f"<span class=sw-a>{cell}</span></div>")
-        doc.append("</div>")
-    elif t.get("reachable"):
-        doc.append("<h2 class=sec-eye>Software</h2><div class=meta>No inventory reported. "
-                   "This box's checker predates 1.1.0; run Update health checker below.</div>")
-
-    # 1.32.0 Modules: the per-box marketplace. Each installable component as a card:
-    # its state from the health inventory, Update when behind the baseline, Install
-    # (the provisioner's components stage, as a gated job) when absent.
-    MODULES = [(t, n, d) for t, n, _p, d, _w in COMPONENTS]
-    # Inventory rows are named by SERVICE; three module tokens differ, and for the
-    # shared-substrate ones presence is not fittedness (chrony exists on every
-    # Ubuntu box without serving the LAN). The declared loadout, where one exists,
-    # is the authority on what counts as fitted.
-    SW_ALIAS = {"nodered": "node-red", "maps": "mbtileserver", "lanntp": "chrony"}
-    lo = t.get("loadout") or {}
-    declared_set = set(x for x in str(lo.get("declared") or "").split(",") if x)
-    lo_declared = bool(declared_set) and str(lo.get("source") or "") == "loadout.conf"
-    sw_by = {r.get("name"): r for r in software}
-    box_fqdn = str(t.get("fqdn") or "")
-    _pki = load_instance()
-    can_install = ("provision-server" in acts and name in act_targets
-                   and re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+",
-                                    box_fqdn or "") is not None)
-    cards = []
-    for comp, clabel, cdesc in MODULES:
-        row = sw_by.get(comp) or sw_by.get(SW_ALIAS.get(comp, ""))
-        if lo_declared and comp != "takserver" and comp not in declared_set:
-            # Declared not-fitted beats an inventory row: chrony existing is not
-            # lan-ntp, and a module the operator declared away offers Install.
-            row = None
-        if row:
-            ver = row.get("version") or "present"
-            st = row.get("state") or ""
-            want = (desired or {}).get(comp)
-            badge = ("<span class='mod-b ok'>installed</span>"
-                     if not want or version_current(row.get("version") or "", want)
-                     else "<span class='mod-b drift'>update available</span>")
-            aid = COMPONENT_ACTION.get(comp)
-            act = (f"<a class=mod-act href='#act-{e(aid)}'>Update</a>"
-                   if want and not version_current(row.get("version") or "", want)
-                   and aid in acts and name in act_targets else "")
-            offline = ""
-            if comp in ("cloudtak", "mediamtx"):
-                img = library_image_for(comp, want)
-                can_off = "load-images" in acts and name in act_targets
-                istat = (f"image in library: <code>{e(img['file'])}</code>"
-                         + (f" ({e(img.get('version',''))})" if img.get("version") else "")
-                         if img else "no image tarball held yet")
-                dep = (f"<button type=button class=mo-deploy data-module='{e(comp)}' "
-                       f"data-target='{e(name)}'>Deploy offline (docker load)</button>"
-                       if img and can_off else "")
-                offline = (
-                    f"<details class=mod-offline data-module='{e(comp)}' data-target='{e(name)}'>"
-                    "<summary>Offline deploy</summary><div class=mo-body>"
-                    "<p class=meta>Deploy with no internet: hold this module's Docker images on "
-                    "the admin box, then load them onto the box over the closed network. Capture "
-                    "on a connected machine with <code>docker save -o " + e(comp) + "-images.tar &lt;images&gt;</code>.</p>"
-                    f"<div class=mo-status>{istat}</div>"
-                    f"<div class=mo-actions>{dep}"
-                    "<label class=mo-upload>Upload image tarball"
-                    "<input type=file class=mo-file accept='.tar,.gz'></label>"
-                    f"<label class=mo-ver>version<input class=mo-verinp value=\"{e(want or '')}\" "
-                    "placeholder='e.g. v13.70.0' spellcheck=false></label></div>"
-                    "<div class=mo-prog role=status></div><div class=mo-log></div>"
-                    "</div></details>")
-            cards.append(f"<div class=mod><div class=mod-h><b>{e(clabel)}</b>{badge}</div>"
-                         f"<div class=mod-d>{e(ver)}{(' · ' + e(st)) if st else ''}</div>{act}{offline}</div>")
-        elif comp == "takserver":
-            cards.append(f"<div class=mod><div class=mod-h><b>{e(clabel)}</b>"
-                         "<span class='mod-b abs'>not installed</span></div>"
-                         "<div class=mod-d>installed by the <a href='/deploy'>Deploy wizard</a>, "
-                         "never from here</div></div>")
-        else:
-            inst = ""
-            if can_install and sw_by.get("takserver"):
-                inst = ("<form class=action data-id=provision-server data-pass=0 data-read=0 "
-                        f"data-confirm=\"Install {e(clabel)} on {{target}}. Software is installed "
-                        "and services start on that box.\" data-result=text>"
-                        f"<input type=hidden name=target value='{e(name)}'>"
-                        "<input type=hidden name=stage value=components>"
-                        f"<input type=hidden name=components value='{e(comp)}'>"
-                        f"<input type=hidden name=fqdn value='{e(box_fqdn)}'>"
-                        f"<input type=hidden name=le_email value='ops@{e(box_fqdn)}'>"
-                        f"<input type=hidden name=org value='{e(_pki.get('org') or 'Vantage')}'>"
-                        f"<input type=hidden name=org_unit value='{e(_pki.get('org_unit') or 'TAK')}'>"
-                        f"<input type=hidden name=country value='{e(_pki.get('country') or 'GB')}'>"
-                        f"<input type=hidden name=state value='{e(_pki.get('state') or 'England')}'>"
-                        f"<input type=hidden name=city value='{e(_pki.get('city') or 'Andover')}'>"
-                        "<input type=hidden name=deb value='/root/unused.deb'>"
-                        "<input type=hidden name=dry_run value='0'>"
-                        "<div class=a-act><button class=a-go type=submit>Install</button></div>"
-                        "<div class='a-res' role=status aria-live=polite></div></form>")
-            if not inst and "provision-server" in acts and name in act_targets \
-               and sw_by.get("takserver"):
-                inst = ("<div class=meta>To install modules, give this box its public "
-                        "DNS name first - the rename control at the top of this page.</div>")
-            cards.append(f"<div class=mod><div class=mod-h><b>{e(clabel)}</b>"
-                         "<span class='mod-b abs'>not installed</span></div>"
-                         f"<div class=mod-d>{e(cdesc)}</div>{inst}</div>")
-    doc.append("<h2 class=sec-eye>Modules</h2><div class=mods>" + "".join(cards) + "</div>")
-    # Spec 002: the declared loadout, visible beside the modules it governs, and
-    # the gated editor where the action is enabled for this box.
-    if lo_declared:
-        doc.append(f"<div class=meta>Declared loadout: <code>{e(str(lo.get('declared')))}</code>"
-                   " - health checks judge exactly this set; everything else reads"
-                   " “not fitted (declared)” on the checks above.</div>")
-    elif lo:
-        doc.append(f"<div class=meta>Loadout: {e(str(lo.get('source') or 'profile defaults'))}"
-                   " - the profile's full expectations are in force.</div>")
-    if "set-loadout" in acts and name in act_targets:
-        # tick what the box carries. Start from the current declaration; if none has been
-        # made, pre-tick what is actually fitted so "Save" adopts reality (and clears the
-        # false-red on a box judged against the full profile).
-        if lo.get("declared"):
-            initial = set(x for x in str(lo["declared"]).split(",") if x)
-        else:
-            initial = {c for c, _, _ in MODULES
-                       if sw_by.get(c) or sw_by.get(SW_ALIAS.get(c, ""))}
-        initial.add("takserver")
-        boxes = []
-        for comp, clabel, _ in MODULES:
-            req = comp == "takserver"
-            ck = " checked" if (req or comp in initial) else ""
-            dis = " disabled" if req else ""
-            boxes.append(f"<label class=lo-item><input type=checkbox class=lo-box "
-                         f"value='{e(comp)}'{ck}{dis}> {e(clabel)}"
-                         + (" <span class=lo-req>required</span>" if req else "") + "</label>")
-        doc.append("<h2 class=sec-eye>What this box is meant to run</h2>")
-        doc.append(
-            "<form class='action loadout-form' data-id=set-loadout data-pass=1 data-read=0 "
-            f"data-confirm=\"Set what {e(label)} is meant to run. Health checks judge exactly "
-            "the ticked set; anything unticked stops being watched.\" data-result=text>"
-            f"<input type=hidden name=target value='{e(name)}'>"
-            "<input type=hidden name=tilesets value='-'>"
-            f"<input type=hidden name=components value='{e(','.join(sorted(initial)))}'>"
-            "<p class=meta>Tick the modules this box carries. Anything unticked reads "
-            "“not fitted” on its checks instead of failing. TAK Server is always required.</p>"
-            f"<div class=lo-grid>{''.join(boxes)}</div>"
-            # set-loadout is passphrase-gated (data-pass=1), so the form must carry the operator
-            # password field the generic action submit reads - exactly as action_form_html does.
-            # Without it the submit sent an empty passphrase and the box answered "incorrect".
-            "<label class=fl>Operator password"
-            "<input name=passphrase type=password required autocomplete=current-password></label>"
-            "<div class=a-act><button class=a-go type=submit>Save loadout</button></div>"
-            "<div class='a-res' role=status aria-live=polite></div></form>")
-        doc.append(f"<script>{LOADOUT_EDITOR_JS}</script>")
-
-    # 1.34.0 Security posture: read the box's hardening and firewall state, and act on it.
-    # The plan reads are live (read-only, safe); apply/revert are gated action forms.
-    if any(x in acts for x in ("harden-plan", "firewall-plan")) and name in act_targets:
-        doc.append(f"<h2 class=sec-eye>Security</h2><div class=secgrid data-box='{e(name)}'>")
-        if "harden-plan" in acts:
-            doc.append("<div class=seccard id=sec-harden><div class=sec-h><b>Posture</b>"
-                       "<span class=sec-badge>reading…</span></div>"
-                       "<div class='sec-body meta'>SSH, kernel, auditd, fail2ban, core "
-                       "dumps.</div><div class=sec-acts></div></div>")
-        if "firewall-plan" in acts:
-            doc.append("<div class=seccard id=sec-fw><div class=sec-h><b>Firewall</b>"
-                       "<span class=sec-badge>reading…</span></div>"
-                       "<div class='sec-body meta'>ufw against this box's declared policy."
-                       "</div><div class=sec-acts></div></div>")
-        doc.append("</div>")
-        doc.append(f"<script>{SECURITY_JS}</script>")
-
-    fed = next((c for c in checks if c.get("category") == "federation"), None)
-    if fed:
-        on = "not enabled" not in (fed.get("detail") or "")
-        doc.append("<h2 class=sec-eye>Federation</h2>"
-                   f"<div class=swrow style='border-top:0'><span class=sw-n>v2 server</span>"
-                   f"<span class=sw-v>{'on · 9001' if on else 'standalone'}</span>"
-                   f"<span class=sw-s>{e(fed.get('detail', ''))}</span><span class=sw-a></span></div>")
-
-    links = service_links(t)
-    if links:
-        doc.append("<h2 class=sec-eye>Services</h2><div class=links>")
-        for lbl, url, note in links:
-            doc.append(f"<a class=svc href='{e(url)}' target=_blank rel='noopener noreferrer'>"
-                       f"<span class=svc-l>{e(lbl)}</span>"
-                       f"<span class=svc-u>{e(url)}</span>"
-                       f"<span class=svc-n>{e(note)}</span></a>")
-        doc.append("</div>")
-
-    if checks:
-        cats = {}
-        for c in checks:
-            cats.setdefault(c.get("category", "other"), []).append(c)
-        doc.append(f"<details style='margin-top:22px'><summary>All {len(checks)} checks</summary>")
-        for cat in sorted(cats):
-            doc.append(f"<div class=cat>{e(cat)}</div>")
-            for c in cats[cat]:
-                val = (f"{c['value']} {e(c.get('unit', ''))}"
-                       if isinstance(c.get('value'), (int, float)) else "")
-                doc.append(f"<div class=checkrow><span class='d {e(c.get('status', ''))}'></span>"
-                           f"<span class=cn><span class=sr-only>{e(c.get('status', ''))} </span>"
-                           f"{e(c.get('name', ''))}</span>"
-                           f"<span class=cd>{e(c.get('detail', '') or val)}</span></div>")
-        doc.append("</details>")
-
-    if acts and name in act_targets:
-        # the *-plan reads are the Security cards' own machinery, not catalogue buttons
-        here = [aid for aid in acts if action_applies(aid, t)
-                and aid not in ("harden-plan", "firewall-plan")]
-        # the page's whole point, promoted: putting a device on the map is not one of
-        # twenty catalogue rows, it is THE job
-        if "enrol-device" in here:
-            doc.append("<section class=actions aria-label='Add a device'><div class=ah>"
-                       "<h2 class=title>Add a device</h2><span class=meta>"
-                       "Name it, give it a group, confirm - you get a QR code the device "
-                       "scans to join this server. Groups matter: devices only see their "
-                       "own group's traffic.</span></div><div class=agrid>"
-                       + action_form_html("enrol-device", fixed=name) + "</div></section>")
-            # Bulk enrolment: a whole team at once -> a printable QR sheet (PDF) + a ZIP of
-            # every device's QR and credentials, downloaded here or copied to a USB stick.
-            openpass = (not auth_configured()) and ACTIONS["enrol-device"].get("needs_passphrase")
-            doc.append(
-                "<section class=actions aria-label='Bulk enrolment'><div class=ah>"
-                "<h2 class=title>Bulk enrolment</h2><span class=meta>"
-                "Enrol a whole team at once. You get a printable <b>QR sheet (PDF)</b> and a "
-                "<b>ZIP</b> of every device's QR and credentials - download them here, or, on "
-                "the box itself, copy them straight to a USB stick.</span></div>"
-                f"<form class=bulk-form data-box='{e(name)}'>"
-                "<div class=bulk-fields>"
-                "<label class=fl>Group<input class=bulk-group maxlength=40 placeholder='e.g. recon' spellcheck=false autocomplete=off></label>"
-                "<label class=fl>Name prefix<input class=bulk-prefix maxlength=32 placeholder='e.g. alpha-' spellcheck=false autocomplete=off></label>"
-                "<label class=fl>How many<input class=bulk-count type=number min=1 max=30 value=5></label>"
-                "<label class=fl>Start at<input class=bulk-start type=number min=1 value=1></label>"
-                "</div>"
-                "<details class=bulk-names><summary>Or type device names, one per line</summary>"
-                "<textarea class=bulk-list rows=4 spellcheck=false autocomplete=off "
-                "placeholder='alpha-01&#10;alpha-02&#10;bravo-lead'></textarea></details>"
-                + ("<label class=cred-pass><span>Operator password</span>"
-                   "<input type=password class=bulk-pass autocomplete=off placeholder='to enrol'></label>"
-                   if openpass else "")
-                + "<div class=bulk-actions><button type=submit class=a-go>Generate QR sheet</button>"
-                "<span class=bulk-msg role=status></span></div></form>"
-                "<div class=bulk-out aria-live=polite></div></section>")
-        cat = [a for a in here if a != "enrol-device" and ACTIONS.get(a, {}).get("catalogue", True)]
-        if cat:
-            doc.append(f"<section class=actions aria-label='Actions on {e(label)}'><div class=ah>"
-                       f"<h2 class=title>Actions on this server</h2><span class=meta>"
-                       "Pre-bound to this box; shown only where the inventory says they "
-                       "apply. Reads run on one click, writes confirm, all are logged."
-                       "</span></div>")
-            doc.append(actions_grouped_html(cat, fixed=name, collapsible=True))
-            doc.append("</section>")
-
-        # Credentials panel: re-download the device credentials this box has issued. The list is
-        # a read (no passphrase); each download returns a secret, so it asks for the passphrase.
-        if "list-credentials" in here and "fetch-credential" in acts:
-            need_pass = ACTIONS["fetch-credential"]["needs_passphrase"]
-            doc.append(f"<section class=creds aria-label='Credentials on {e(label)}' "
-                       f"data-box='{e(name)}' data-needpass='{1 if need_pass else 0}'>"
-                       "<div class=ah><h2 class=title>Credentials</h2><span class=meta>"
-                       "Device certificates and enrolment QR codes issued on this box, for "
-                       "re-download. Enrolment tokens minted before the credential store existed "
-                       "cannot be recovered - reissue those with Enrol device.</span></div>"
-                       "<div class=cred-tools>"
-                       "<button type=button class=cred-refresh>List credentials</button>"
-                       + (f"<label class=cred-pass><span>Operator password</span>"
-                          f"<input type=password class=cred-passinp autocomplete=off "
-                          f"placeholder='to download'></label>" if need_pass else "")
-                       + "</div><div class=cred-list aria-live=polite>"
-                       "<div class=cred-empty>Listing credentials&hellip;</div></div>"
-                       "<div class=cred-view></div></section>")
-
     doc.append(footer_html(state, acts))
     if "list-credentials" in enabled_actions(load_actions_config()):
         doc.append(f"<script>{CREDENTIALS_JS}</script>")
@@ -13921,11 +14122,16 @@ b.addEventListener('click',function(){
             ins = json.dumps(a.get("inputs") or {}, separators=(",", ":"))
             ins = ins if len(ins) <= 60 else ins[:57] + "…"
             r = a.get("result", "?")
+            act_w = str(a.get("action", "?"))
+            if act_w == "login":
+                act_w = "Sign-in refused (wrong password)" if r == "DENIED" else "Sign-in"
+            tgt_w = str(a.get("target") or "")
+            r_w = {"DENIED": "Refused", "ERROR": "Failed", "OK": "OK"}.get(r, r)
             doc.append(f"<tr><td>{e(str(a.get('ts', '?')))}</td>"
-                       f"<td>{e(str(a.get('action', '?')))}</td>"
-                       f"<td>{e(str(a.get('target', '?')))}</td>"
-                       f"<td class='r-{e(r)}'>{e(r)}</td>"
-                       f"<td>{e(ins)}</td><td>{e(str(a.get('client', '')))}</td></tr>")
+                       f"<td>{e(act_w)}</td>"
+                       f"<td>{e(tgt_w)}</td>"
+                       f"<td class='r-{e(r)}'>{e(r_w)}</td>"
+                       f"<td>{e(ins) if ins != '{}' else 'no inputs'}</td><td>{e(str(a.get('client', '')))}</td></tr>")
         doc.append("</table></div><div class=meta style='margin-top:8px'>Last "
                    f"{len(entries)} attempts, newest first, from "
                    "<code>/var/lib/vantage-console/agent/actions.log</code>. Every attempt lands "
@@ -17525,10 +17731,27 @@ def render_deploy(state):
     # the state's target record.
     labels = {t.get("name"): t.get("label") or t.get("name")
               for t in state.get("targets", [])}
-    for name in sorted(cfg.get("targets") or {}):
-        doc.append(f"<option value='{e(name)}'>{e(labels.get(name) or name)}</option>")
-    doc.append("</select><span class=hint>An enrolled box. The provisioner refuses a box "
-               "already running TAK Server.</span></label>")
+    # the box waiting to be built goes first and is chosen; the rest say why they would be
+    # refused, so the list is right rather than refusing after the fact (review A5)
+    by_name = {t.get("name"): t for t in state.get("targets", [])}
+    def _kind(n):
+        t = by_name.get(n) or {}
+        if tile_awaiting(t):
+            return 0, "awaiting first build"
+        if t.get("result") == "UNREACHABLE":
+            return 2, "cannot be reached now"
+        if t.get("expected_offline") and t.get("result") == "OFFLINE":
+            return 3, "turned off"
+        if any(sw.get("name") == "takserver" for sw in software_rows(t)):
+            return 1, "already built; the provisioner will refuse it"
+        return 1, ""
+    names = sorted(cfg.get("targets") or {}, key=lambda n: (_kind(n)[0], n))
+    for name in names:
+        k, why = _kind(name)
+        doc.append(f"<option value='{e(name)}'{' selected' if k == 0 else ''}>{e(labels.get(name) or name)}"
+                   + (f" ({e(why)})" if why else "") + "</option>")
+    doc.append("</select><span class=hint>A box already in the estate. A box awaiting its first build is "
+               "listed first and chosen.</span></label>")
     for f in a["inputs"]:
         if f["name"] == "dry_run" or f.get("hidden"):
             continue
@@ -17755,10 +17978,11 @@ class Handler(BaseHTTPRequestHandler):
                 with open(pf, "rb") as fh:
                     body = fh.read()
             except OSError:
-                self._send(404, "<h1>The planner is not on this console</h1><p>It ships with "
-                           "the release. Re-run the console installer here, or use "
-                           "<a href='https://tak.example.com/vantage/planner'>the copy on "
-                           "milux.co.uk</a>.</p>", "text/html; charset=utf-8")
+                self._send(404, render_error("The build planner is not installed on this console. It ships with the "
+                                         "Vantage release, so a console installed from an older release will not have it; "
+                                         "nothing is broken, Deploy works without it. Re-run the console installer on this box "
+                                         "to add it, or use the copy at milux.co.uk.", "deploy", title="No planner here."),
+                           "text/html; charset=utf-8")
                 return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -17990,12 +18214,19 @@ class Handler(BaseHTTPRequestHandler):
             name = path[len("/server/"):].strip("/")
             page = render_server(state, name)
             if page is None:
-                self._send(404, render_error(f"no server named '{name}' in the estate"),
+                self._send(404, render_error(f"This console does not have a box called {name}. It may have been removed from the estate, or the name may be spelled differently.", "estate", title="No box called " + name + "."),
                            "text/html; charset=utf-8")
             else:
                 self._send(200, page, "text/html; charset=utf-8")
+        elif path.startswith("/api/"):
+            self._send(404, json.dumps({"error": "not found"}), "application/json")
         else:
-            self._send(404, "not found\n", "text/plain")
+            # ten bytes of "not found" stranded an operator with a typo or an old bookmark;
+            # a wrong address gets the frame, the nav, and a way back
+            self._send(404, render_error(f"There is no page at {path} on this console. The pages "
+                                         "are in the bar above; Overview is the estate.",
+                                         "estate", title="No page here."),
+                       "text/html; charset=utf-8")
 
     def do_GET_peer(self, path):
         """Peer-token reads: the estate snapshot and vault folder bundles. Bearer only -
@@ -18113,7 +18344,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 login_failed(ip)
                 audit({"action": "login", "result": "DENIED", "client": ip})
-                self._send(200, render_login("Wrong password."), "text/html; charset=utf-8")
+                self._send(200, render_login("Wrong password. After five wrong tries in ten minutes this "
+                                             "address is locked out for ten minutes."), "text/html; charset=utf-8")
             return
         if auth_configured() and auth_required(path) and not session_valid(self):
             self._send(401, json.dumps({"error": "sign in first"}), "application/json")

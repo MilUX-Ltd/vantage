@@ -104,7 +104,7 @@ and the page says the mark and the box disagree, because a box that is on and fa
 fault wherever it is stored. The box running the console you are looking at is never offered
 the mark - a console cannot report its own box being down.
 
-**Add a device.** The promoted card: name, group, confirm with the operator password, and
+**Add a handset.** The promoted card: name, group, confirm with the operator password, and
 you get a QR code (with Save QR and Save iTAK line buttons) plus the device's one-time
 password. Groups matter: devices see only their own group's traffic.
 
@@ -122,9 +122,9 @@ read-and-reconcile pair. **Upgrade TAK Server** takes a package straight from th
 a picker that fills the name and checksum itself, and an upload control right on the card -
 then backs up CoreConfig, certificates and the database, installs in place, migrates the
 database (PostgreSQL major jumps included), and waits out the long first boot. A failed
-upgrade is recovered by pressing Run again; every step heals half-done state. **Remove
-this server** sits at the bottom, password-gated, and touches only the console's records -
-it works whether or not the box still exists.
+upgrade is recovered by pressing Run again; every step heals half-done state. **Housekeeping** sits at the bottom: the display name, whether the box is turned off, and
+**Remove this box from the estate** (password-gated, and it touches only the console's records, so
+it works whether or not the box still exists).
 
 ## Deploy: growing the estate
 

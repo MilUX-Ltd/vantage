@@ -27,7 +27,8 @@
 #       --fqdn tak.example.org --le-email admin@example.org \
 #       --org "Example" --org-unit "Ops" --country GB --state England --city London \
 #       --deb /root/takserver_5.7-RELEASE43_all.deb \
-#       [--components cloudtak,mediamtx,mosquitto,maps,ollama,lanntp,nodered,takbot]
+#       [--components cloudtak,mediamtx,mosquitto,maps,ollama,lanntp,nodered,takbot,mesh]
+#       [--mesh-serial /dev/serial/by-id/... --mesh-filter-group <TAK group>]
 #       [--stage <name>] [--dry-run]
 #
 # On success the server is running and this prints ENROL-READY with the facts the console
@@ -40,6 +41,7 @@ set -uo pipefail
 # ---------------------------------------------------------------------------- parameters
 FQDN="" LE_EMAIL="" ORG="MilUX" ORG_UNIT="TAK" COUNTRY="GB" STATE="England" CITY="London"
 DEB="" COMPONENTS="" ONLY_STAGE="" DRY=0 CA_PASS_CHOICE=""
+MESH_SERIAL="" MESH_FILTER_GROUP=""
 OFFLINE_REPO=""      # --offline-repo: build from a carried-in package bundle
 NO_LE=0              # --no-letsencrypt: skip the public-certificate stage
 # --cert-file / --key-file: a certificate you already hold, from wherever you got it.
@@ -76,6 +78,8 @@ while [[ $# -gt 0 ]]; do
         --cert-file) CERT_FILE="${2:-}"; shift 2 ;;
         --key-file) KEY_FILE="${2:-}"; shift 2 ;;
         --components) COMPONENTS="${2:-}"; shift 2 ;;
+        --mesh-serial) MESH_SERIAL="${2:-}"; shift 2 ;;
+        --mesh-filter-group) MESH_FILTER_GROUP="${2:-}"; shift 2 ;;
         --stage) ONLY_STAGE="${2:-}"; shift 2 ;;
         --ca-pass) CA_PASS_CHOICE="${2:-}"; shift 2 ;;
         --dry-run) DRY=1; shift ;;
@@ -931,6 +935,63 @@ UNIT
     echo "also keeps Docker from bypassing ufw). Exposure beyond loopback is an operator decision."
 }
 
+comp_mesh() {
+    echo "-- component: mesh (Mesh Manager; MilUX artefact staged via the Store, never the internet) --"
+    # Mesh Manager is a MilUX release tarball, not a public download, so it arrives the way
+    # TAKBOT does: pushed to the box's inbox from the Store shelf, hash-verified at both ends
+    # (ADR 002). This component does not fetch anything; it runs the application's own
+    # installer, which builds its environment from the wheels inside that tarball and needs no
+    # internet. The installer is idempotent and keeps a box's existing config on a re-run.
+    local inbox="/opt/vantage/inbox" tgz="" sha=""
+    tgz=$(ls -1t "$inbox"/mesh-manager-*-amd64.tgz 2>/dev/null | head -1 || true)
+    if [[ -z "$tgz" ]]; then
+        echo "ERR no Mesh Manager release staged: push mesh-manager-<version>-amd64.tgz and its"
+        echo ".sha256 from the Store shelf to $inbox, then run this component again."
+        return 1
+    fi
+    if [[ ! -f "$tgz.sha256" ]]; then
+        echo "ERR $tgz has no .sha256 beside it; the release is not verifiable, refusing."
+        return 1
+    fi
+    if ! (cd "$(dirname "$tgz")" && sha256sum -c "$(basename "$tgz").sha256" >/dev/null 2>&1); then
+        echo "ERR $tgz does not match its .sha256; refusing to install it."
+        return 1
+    fi
+    echo "sha256 ok for $(basename "$tgz")"
+    if [[ -z "$MESH_SERIAL" ]]; then
+        echo "ERR --mesh-serial is required: the gateway radio's /dev/serial/by-id path."
+        echo "Run 'ls -l /dev/serial/by-id/' on the box to find it."
+        return 1
+    fi
+    case "$MESH_SERIAL" in
+        /dev/serial/by-id/*) : ;;
+        *) echo "ERR --mesh-serial must be a /dev/serial/by-id/ path, not a ttyACM number:"
+           echo "port numbers move when the box is re-cabled and the bridge then owns the wrong radio."
+           return 1 ;;
+    esac
+    [[ -e "$MESH_SERIAL" ]] || { echo "ERR nothing at $MESH_SERIAL: is the radio plugged in?"; return 1; }
+    local args=(--serial "$MESH_SERIAL")
+    [[ -n "$MESH_FILTER_GROUP" ]] && args+=(--filter-group "$MESH_FILTER_GROUP")
+    # An install with no TAK group forwards nothing a client can see (LESSONS 1); say so rather
+    # than leaving the operator to find a silent mesh.
+    [[ -z "$MESH_FILTER_GROUP" ]] && echo "NOTE no --mesh-filter-group: the bridge will forward to TAK but no client will see it until an input filter group is set."
+    local d; d=$(mktemp -d)
+    run "tar -xzf $tgz -C $d"
+    if [[ ! -x "$d/release/install.sh" ]]; then
+        echo "ERR $tgz does not carry release/install.sh; is it a Mesh Manager release?"
+        rm -rf "$d"; return 1
+    fi
+    if (( DRY )); then
+        echo "DRY: bash $d/release/install.sh $tgz ${args[*]} --dry-run"
+        run "bash $d/release/install.sh $tgz ${args[*]} --dry-run"
+    else
+        run "bash $d/release/install.sh $tgz ${args[*]}"
+    fi
+    rm -rf "$d"
+    echo "Mesh Manager installed from the staged release. Its screen is on this box at :8093;"
+    echo "the console's tile links to it once the checker sees mesh-manager-web."
+}
+
 comp_takbot() {
     echo "-- component: takbot (MilUX-vendored artefact; staged via the Store, never pip) --"
     if systemctl cat takbot >/dev/null 2>&1 && [[ -e /opt/takbot/run.sh ]]; then
@@ -986,6 +1047,7 @@ stage_components() {
             lanntp)    comp_lanntp ;;
             nodered)   comp_nodered ;;
             takbot)    comp_takbot ;;
+            mesh)      comp_mesh ;;
             *) die "unknown component '$c'" ;;
         esac
     done
