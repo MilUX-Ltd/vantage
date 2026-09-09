@@ -153,6 +153,12 @@ for _tp in "$HERE/../third-party"/*.tar.gz; do
     "/var/lib/vantage-console/agent/store/software/$(basename "$_tp")"
 done
 
+# the console's unit carves this box's own vault; a box with no vault yet (a cloud box, a fresh
+# kit) must still start, and systemd refuses a unit whose carve does not exist (226/NAMESPACE;
+# tak.example.com crash-looped on this, 9 Sep 2026). The directory is made here, and the unit
+# marks the carve optional as well.
+install -d -m 0750 -o vantage-console -g vantage-console /srv/vault/Deployed
+
 echo "[5/6] services"
 install -m 644 "$HERE/systemd/vantage-console-deployed.service" /etc/systemd/system/vantage-console-deployed.service
 # bind/port drop-in
