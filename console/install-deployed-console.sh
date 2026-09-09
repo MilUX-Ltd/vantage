@@ -40,7 +40,7 @@ for f in "$UNIT_DIR/vantage-console-deployed.service.d/bind.conf" \
     if [[ -z "$BIND" ]]; then
         was=$(grep -m1 -o 'VANTAGE_CONSOLE_BIND=[^ ]*' "$f" 2>/dev/null | cut -d= -f2)
         if [[ -n "$was" ]]; then
-            [[ "$was" =~ ^[0-9a-fA-F.:]+$ ]] || die "this box records an address this script \
+            [[ "$was" =~ ^[A-Za-z0-9.:-]+$ ]] || die "this box records an address or name this script \
 will not accept ($was). Reinstall with an explicit --bind."
             BIND="$was"
             echo "==> keeping this box's address: $BIND"
@@ -56,7 +56,7 @@ accept ($wasp). Reinstall with an explicit --port."
     fi
 done
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-8092}"
-[[ "$BIND" =~ ^[0-9a-fA-F.:]+$ ]] || die "bad --bind"
+[[ "$BIND" =~ ^[A-Za-z0-9.:-]+$ ]] || die "bad --bind"
 [[ "$PORT" =~ ^[0-9]{2,5}$ ]] || die "bad --port"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [[ -f "$HERE/vantage-console-serve.py" ]] || die "run this from the console/ directory"

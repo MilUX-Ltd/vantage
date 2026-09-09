@@ -48,7 +48,7 @@ if [[ -r "$EXISTING_UNIT" ]]; then
     if [[ -z "$BIND" ]]; then
         was=$(grep -m1 '^Environment=VANTAGE_CONSOLE_BIND=' "$EXISTING_UNIT" 2>/dev/null | cut -d= -f3-)
         if [[ -n "$was" ]]; then
-            [[ "$was" =~ ^[0-9a-fA-F.:]+$ ]] || die "the installed unit records an address this \
+            [[ "$was" =~ ^[A-Za-z0-9.:-]+$ ]] || die "the installed unit records an address or name this \
 script will not accept ($was). Reinstall with an explicit --bind."
             BIND="$was"
             echo "==> keeping this box's address: $BIND"
@@ -64,7 +64,7 @@ will not accept ($wasp). Reinstall with an explicit --port."
     fi
 fi
 BIND="${BIND:-127.0.0.1}"; PORT="${PORT:-8090}"
-[[ "$BIND" =~ ^[0-9a-fA-F.:]+$ ]] || die "bad --bind"
+[[ "$BIND" =~ ^[A-Za-z0-9.:-]+$ ]] || die "bad --bind"
 [[ "$PORT" =~ ^[0-9]{2,5}$ ]] || die "bad --port"
 
 USER_NAME=vantage-console
