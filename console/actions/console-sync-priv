@@ -235,6 +235,45 @@ def hh(iso):
     return iso
 
 
+def inside(root, raw, what):
+    """A file this helper is about to move, as root: no link anywhere in its path, resolved
+    inside the folder, a plain file. Refused otherwise, with the thing named."""
+    if os.path.islink(raw):
+        refuse("%s is a link, not a file" % what)
+    real = os.path.realpath(raw)
+    if not real.startswith(root + os.sep) or real != os.path.normpath(raw):
+        refuse("%s is not inside the folder" % what)
+    if not os.path.isfile(real):
+        refuse("%s is not a file" % what)
+    return real
+
+
+def retain(root, vers, orig, loser):
+    """Move the losing copy under .stversions, filed under the path it came from, with a name
+    that cannot collide. Two same-named files in different sub-folders resolved within one
+    second used to get one archive name, and the second overwrote the first retained copy
+    (an internal card, P2). The name is claimed exclusively before anything is moved."""
+    rel_dir = os.path.dirname(os.path.relpath(orig, root))
+    dest = os.path.normpath(os.path.join(vers, rel_dir))
+    if dest != vers and not dest.startswith(vers + os.sep):
+        refuse("retained path is not inside the folder")
+    os.makedirs(dest, exist_ok=True)
+    if os.path.realpath(dest) != dest:
+        refuse("retained path is a link, not a directory")
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    base = os.path.basename(orig)
+    for n in range(1, 1000):
+        kept = os.path.join(dest, "%s~%s-resolved%s" % (base, stamp, "" if n == 1 else "-%d" % n))
+        try:
+            fd = os.open(kept, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        os.replace(loser, kept)
+        return kept
+    refuse("no free name to retain the losing copy under")
+
+
 def find_conflicts(path, cap=200):
     out = []
     if not os.path.isdir(path):
@@ -323,7 +362,13 @@ def status():
             try:
                 c = call("GET", "/rest/db/completion?folder=%s&device=%s" % (f.get("id"), did))
             except BadReply:
-                c = {}
+                # AC6: a completion the engine would not give is UNREAD. It used to become zero
+                # outstanding with a fresh time, which the page rendered as "Had everything"
+                #. No count, no time: the console says it could not be read.
+                completion.setdefault(f.get("id"), {})[did] = {
+                    "unread": True, "completion": None, "needBytes": None, "needItems": None,
+                    "globalBytes": None, "remoteState": "", "at": ""}
+                continue
             completion.setdefault(f.get("id"), {})[did] = {
                 "completion": c.get("completion", 0), "needBytes": c.get("needBytes", 0),
                 "needItems": c.get("needItems", 0), "globalBytes": c.get("globalBytes", 0),
@@ -486,20 +531,22 @@ def main(argv):
                 refuse("path is not a file inside the folder")
             f = get_folder(fid)
             root = os.path.realpath(f.get("path", ""))
-            orig = os.path.realpath(os.path.join(root, sub))
-            if not orig.startswith(root + os.sep):
-                refuse("path is not inside the folder")
+            orig = inside(root, os.path.join(root, sub), "path")
             cands = [c for c in find_conflicts(root) if os.path.realpath(os.path.join(root, c["original"])) == orig]
             if not cands:
                 refuse("no conflicting copy of that file")
-            conf = os.path.realpath(os.path.join(root, cands[0]["path"]))
+            # The conflict copy and the retained-versions directory are checked the way the
+            # original is. They were not, and a conflict copy that was a symlink out of the
+            # folder had its TARGET moved by this helper, as root (an internal card, P1).
+            conf = inside(root, os.path.join(root, cands[0]["path"]), "conflicting copy")
             vers = os.path.join(root, ".stversions")
+            if os.path.islink(vers):
+                refuse("the folder's retained-versions directory is a link, not a directory")
             os.makedirs(vers, exist_ok=True)
-            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+            if not os.path.isdir(vers) or os.path.realpath(vers) != vers:
+                refuse("the folder's retained-versions directory is not inside the folder")
             loser = orig if keep == "theirs" else conf
-            base = os.path.basename(orig)
-            kept_name = os.path.join(vers, "%s~%s-resolved" % (base, stamp))
-            os.replace(loser, kept_name)
+            kept_name = retain(root, vers, orig, loser)
             if keep == "theirs":
                 os.replace(conf, orig)
             out = {"ok": True, "kept": keep, "versioned": os.path.relpath(kept_name, root)}

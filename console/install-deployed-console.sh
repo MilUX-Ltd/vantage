@@ -34,11 +34,14 @@ done
 UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
 # the drop-in is where this installer records it; the unit itself is where older boxes carry
 # it, sometimes with both variables on one line
+# `|| true` on each read: this script runs under set -e, grep exits 1 when a readable unit
+# records no such setting, and errexit would end the install before the fallback below runs.
+# It did, on a box whose drop-in carried one setting and not the other.
 for f in "$UNIT_DIR/vantage-console-deployed.service.d/bind.conf" \
          "$UNIT_DIR/vantage-console-deployed.service"; do
     [[ -r "$f" ]] || continue
     if [[ -z "$BIND" ]]; then
-        was=$(grep -m1 -o 'VANTAGE_CONSOLE_BIND=[^ ]*' "$f" 2>/dev/null | cut -d= -f2)
+        was=$(grep -m1 -o 'VANTAGE_CONSOLE_BIND=[^ ]*' "$f" 2>/dev/null | cut -d= -f2 || true)
         if [[ -n "$was" ]]; then
             [[ "$was" =~ ^[A-Za-z0-9.:-]+$ ]] || die "this box records an address or name this script \
 will not accept ($was). Reinstall with an explicit --bind."
@@ -47,7 +50,7 @@ will not accept ($was). Reinstall with an explicit --bind."
         fi
     fi
     if [[ -z "$PORT" ]]; then
-        wasp=$(grep -m1 -o 'VANTAGE_CONSOLE_PORT=[^ ]*' "$f" 2>/dev/null | cut -d= -f2)
+        wasp=$(grep -m1 -o 'VANTAGE_CONSOLE_PORT=[^ ]*' "$f" 2>/dev/null | cut -d= -f2 || true)
         if [[ -n "$wasp" ]]; then
             [[ "$wasp" =~ ^[0-9]{2,5}$ ]] || die "this box records a port this script will not \
 accept ($wasp). Reinstall with an explicit --port."

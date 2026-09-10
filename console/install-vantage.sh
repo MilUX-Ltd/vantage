@@ -44,9 +44,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 EXISTING_UNIT="$UNIT_DIR/vantage-console.service"
+# `|| true` on each read: under set -e a unit that records no such setting would end the
+# install here, before the fallback below (an internal card; the deployed installer had the same).
 if [[ -r "$EXISTING_UNIT" ]]; then
     if [[ -z "$BIND" ]]; then
-        was=$(grep -m1 '^Environment=VANTAGE_CONSOLE_BIND=' "$EXISTING_UNIT" 2>/dev/null | cut -d= -f3-)
+        was=$(grep -m1 '^Environment=VANTAGE_CONSOLE_BIND=' "$EXISTING_UNIT" 2>/dev/null | cut -d= -f3- || true)
         if [[ -n "$was" ]]; then
             [[ "$was" =~ ^[A-Za-z0-9.:-]+$ ]] || die "the installed unit records an address or name this \
 script will not accept ($was). Reinstall with an explicit --bind."
@@ -55,7 +57,7 @@ script will not accept ($was). Reinstall with an explicit --bind."
         fi
     fi
     if [[ -z "$PORT" ]]; then
-        wasp=$(grep -m1 '^Environment=VANTAGE_CONSOLE_PORT=' "$EXISTING_UNIT" 2>/dev/null | cut -d= -f3-)
+        wasp=$(grep -m1 '^Environment=VANTAGE_CONSOLE_PORT=' "$EXISTING_UNIT" 2>/dev/null | cut -d= -f3- || true)
         if [[ -n "$wasp" ]]; then
             [[ "$wasp" =~ ^[0-9]{2,5}$ ]] || die "the installed unit records a port this script \
 will not accept ($wasp). Reinstall with an explicit --port."

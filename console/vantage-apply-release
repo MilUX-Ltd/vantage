@@ -140,6 +140,49 @@ if [[ -d "$ROOT/console/actions" ]]; then
     # The snapshot above already covers $BIN/console-*, so the rollback path is unchanged.
     install -m 0755 "$ROOT/console/actions/console-setup-priv" "$BIN/" 2>/dev/null || true
 fi
+# SHARING (Spec 010). A fresh install lays down three things this path never did: the pairing
+# template the console fills in and sends to a box, the root helper at the path the sudoers
+# rule names, and that helper's bootstrap (its path map, the key directory, the sudoers line).
+# A box updated from a pre-sharing release carried console code that could neither pair nor
+# share, and the page said a permission was missing (an internal card, 10 Sep 2026). Held by
+# test-console-apply.py on the installed tree, not on which names this file mentions.
+SYNC_STATE="${VANTAGE_SYNC_STATE_DIR:-/var/lib/vantage-sync}"
+ETC_VANTAGE="${VANTAGE_ETC_DIR:-/etc/vantage}"
+SUDOERS_D="${VANTAGE_SUDOERS_DIR:-/etc/sudoers.d}"
+[[ -f "$ROOT/console/sync-pair-payload.sh" ]] && \
+    install -m 0644 "$ROOT/console/sync-pair-payload.sh" "$LIB/sync-pair-payload.sh"
+if [[ -f "$ROOT/console/actions/console-sync-priv" ]]; then
+    install -m 0755 "$ROOT/console/actions/console-sync-priv" "$BIN/console-sync-priv" 2>/dev/null || true
+    mkdir -p "$SYNC_STATE" && chmod 0750 "$SYNC_STATE" 2>/dev/null || true
+    [[ -f "$SYNC_STATE/sync-paths.json" ]] || printf '{"vault": "/srv/vault/Deployed"}\n' > "$SYNC_STATE/sync-paths.json"
+    mkdir -p "$ETC_VANTAGE" && chmod 0750 "$ETC_VANTAGE" 2>/dev/null || true
+    # the engine's key, taken once from the running engine's own config; an existing key is never touched
+    if [[ ! -s "$ETC_VANTAGE/sync-api.key" ]]; then
+        for _cfg in /var/lib/vaultsync/syncthing/config.xml /home/USER/.local/state/syncthing/config.xml \
+                    /home/USER/.config/syncthing/config.xml; do
+            [[ -r "$_cfg" ]] || continue
+            _key=$(sed -n 's/.*<apikey>\([^<]*\)<\/apikey>.*/\1/p' "$_cfg" | head -1)
+            if [[ -n "$_key" ]]; then
+                printf '%s\n' "$_key" | install -m 0600 /dev/stdin "$ETC_VANTAGE/sync-api.key" \
+                    && say "sync engine key taken from $_cfg into $ETC_VANTAGE/sync-api.key"
+                break
+            fi
+        done
+    fi
+    # The sudoers line, on the estate edition only (the deployed console has no sharing
+    # controls). Validated before it lands: a malformed sudoers file locks every sudo on the box.
+    if [[ "$UNIT" == "vantage-console.service" && -f "$SUDOERS_D/vantage-console-setup" ]] \
+       && ! grep -q 'NOPASSWD: /usr/local/bin/console-sync-priv' "$SUDOERS_D/vantage-console-setup"; then
+        _sd="$WORK/sudoers.new"
+        { cat "$SUDOERS_D/vantage-console-setup"
+          echo "vantage-console ALL=(root) NOPASSWD: /usr/local/bin/console-sync-priv"; } > "$_sd"
+        if visudo -cf "$_sd" >/dev/null 2>&1; then
+            install -m 0440 "$_sd" "$SUDOERS_D/vantage-console-setup" && say "sudoers rule for console-sync-priv added"
+        else
+            say "WARN the sudoers rule for console-sync-priv did not validate and was not installed; the Sharing page will say a permission is missing"
+        fi
+    fi
+fi
 [[ -f "$ROOT/console/console-self-enrol.sh" ]] && \
     install -m 0755 "$ROOT/console/console-self-enrol.sh" "$LIB/console-self-enrol.sh"
 [[ -f "$ROOT/console/console-enrol-server.sh" ]] && \

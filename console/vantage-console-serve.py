@@ -32,11 +32,11 @@ import time as _time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.70.2"
+VERSION = "2.70.3"
 # Which VANTAGE RELEASE this build belongs to, which is not the console's own version above.
 # The public beta publishes as 0.9.x (Matt, 31 Aug 2026); the console keeps its own 2.x line.
 # The update check compares THIS against what the publish surface carries, never VERSION.
-VANTAGE_RELEASE = "0.9.66-beta"
+VANTAGE_RELEASE = "0.9.67-beta"
 VANTAGE_REPO = "MilUX-Ltd/vantage"
 STATE = os.environ.get("VANTAGE_CONSOLE_STATE", "/var/lib/vantage-console/state.json")
 HISTORY = os.environ.get("VANTAGE_CONSOLE_HISTORY", "/var/lib/vantage-console/history.ndjson")
@@ -3766,18 +3766,30 @@ def sync_rows(snapshot, collector, pins=None):
             if not row["shared"]:
                 row["words"] = "not shared"
             else:
-                c = comp.get(did, {}) or {}
-                need = int(c.get("needItems", 0) or 0)
-                at = _hhmm(c.get("at", as_of))
-                row["outstanding"] = need
-                if row["connected"]:
-                    since = _hhmm(dev.get("connected_since", ""))
-                    row["words"] = (f"Connected since {since}. Had everything at {at}." if need == 0
-                                    else f"Connected since {since}. {need} item{'s' if need != 1 else ''} still to arrive at {at}.")
+                c = comp.get(did) or {}
+                if c.get("unread") or c.get("needItems") is None:
+                    # AC6: a completion the engine would not give, or never gave, is unread. It
+                    # used to arrive as zero outstanding and read "Had everything".
+                    row["unread"] = True
+                    row["outstanding"] = None
+                    if row["connected"]:
+                        since = _hhmm(dev.get("connected_since", ""))
+                        row["words"] = f"Connected since {since}. Whether it has everything could not be read at {_hhmm(as_of)}."
+                    else:
+                        seen = _hhmm(dev.get("last_seen", ""))
+                        row["words"] = f"Not connected since {seen}. Whether it had everything could not be read."
                 else:
-                    seen = _hhmm(dev.get("last_seen", ""))
-                    row["words"] = (f"Not connected since {seen}. Had everything then." if need == 0
-                                    else f"Not connected since {seen}. {need} item{'s' if need != 1 else ''} were still to arrive then.")
+                    need = int(c.get("needItems", 0) or 0)
+                    at = _hhmm(c.get("at", as_of))
+                    row["outstanding"] = need
+                    if row["connected"]:
+                        since = _hhmm(dev.get("connected_since", ""))
+                        row["words"] = (f"Connected since {since}. Had everything at {at}." if need == 0
+                                        else f"Connected since {since}. {need} item{'s' if need != 1 else ''} still to arrive at {at}.")
+                    else:
+                        seen = _hhmm(dev.get("last_seen", ""))
+                        row["words"] = (f"Not connected since {seen}. Had everything then." if need == 0
+                                        else f"Not connected since {seen}. {need} item{'s' if need != 1 else ''} were still to arrive then.")
             confs = [c for c in (f.get("conflicts") or []) if not did or str(c.get("modified_by", "")) in (did[:7], did)]
             if confs and row["shared"]:
                 row["conflict"] = True
@@ -3814,7 +3826,8 @@ def sync_state_api(state):
            "unread": bool(err), "rows": sync_rows(snap, collector) if snap else [],
            "engine": {"version": (snap or {}).get("version", ""), "myID": (snap or {}).get("myID", ""),
                       "restart_required": bool((snap or {}).get("restart_required"))} if snap else None,
-           "conform": (snap or {}).get("conform") if snap else None}
+           "conform": (snap or {}).get("conform") if snap else None,
+           "pending_revocations": sync_revocations()}
     return 200, out
 
 
@@ -4099,6 +4112,85 @@ def sync_pairlog_set(box, ok, words):
         pass
 
 
+def sync_revocations_path():
+    return os.path.join(os.path.dirname(SYNC_PINS), "sync-revocations.json")
+
+
+def sync_revocations():
+    """The members still to be told that a box left a folder (AC23). An untick unshares the
+    folder here, then tells every other member to drop the box; a member out of reach used to
+    be skipped and the reply said done, while that member could go on sending the box changes
+    (an internal card, P1). What could not be told is kept here until it is."""
+    try:
+        with open(sync_revocations_path()) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def sync_revocations_save(items):
+    try:
+        os.makedirs(os.path.dirname(sync_revocations_path()), exist_ok=True)
+        tmp = sync_revocations_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(items, fh, indent=1)
+        os.replace(tmp, sync_revocations_path())
+    except OSError:
+        pass
+
+
+def sync_revocation_note(fid, label, sub, box, did, peers):
+    """Record the members still owed the word that `box` left `fid`. Same folder and box:
+    the peers are merged, never duplicated."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    items = sync_revocations()
+    for it in items:
+        if it.get("folder") == fid and it.get("box") == box:
+            it["peers"] = sorted(set(it.get("peers") or []) | set(peers))
+            it.update({"device": did, "label": label, "sub": sub, "at": now})
+            break
+    else:
+        items.append({"folder": fid, "label": label, "sub": sub, "box": box, "device": did,
+                      "peers": sorted(peers), "at": now})
+    sync_revocations_save(items)
+
+
+def _sync_tell(peer, pin, client):
+    """One member told over the enrolment channel. True only when the box ran the payload and
+    reported back: a 200 with no report is not told."""
+    try:
+        mcode, mres = run_action("sync-share", peer, pin, None, True, client, passphrase_ok=True)
+    except Exception:
+        return False
+    mtext = mres if isinstance(mres, str) else str((mres or {}).get("message") or (mres or {}).get("error") or "")
+    return mcode == 200 and "SYNC-SHARE-JSON" in mtext
+
+
+def sync_revocations_retry(snap, client):
+    """Tell every member still owed a revocation. Returns (told, left), each entry as
+    'member about box'. A member told is struck off; what is still owed is saved back."""
+    told, left, keep = [], [], []
+    for it in sync_revocations():
+        still = []
+        for peer in it.get("peers") or []:
+            pin = {"folder_id": str(it.get("folder", "")),
+                   "label_b64": base64.b64encode(str(it.get("label") or it.get("sub") or "").encode()).decode(),
+                   "sub": str(it.get("sub", "")), "master_id": str((snap or {}).get("myID", "")), "master_addr": _master_addr(),
+                   "peers_b64": "",
+                   "drop_b64": base64.b64encode(json.dumps([{"id": str(it.get("device", "")), "name": str(it.get("box", "")), "addr": "-"}]).encode()).decode()}
+            if _sync_tell(peer, pin, client):
+                told.append(f"{peer} about {it.get('box')}")
+            else:
+                still.append(peer)
+                left.append(f"{peer} about {it.get('box')}")
+        if still:
+            it["peers"] = still
+            keep.append(it)
+    sync_revocations_save(keep)
+    return told, left
+
+
 def build_sync_pair_installer(inputs):
     """The pairing payload from its template: the helper embedded, the master's id and address
     and the pinned engine version filled in. Nothing else is caller-supplied."""
@@ -4233,6 +4325,23 @@ def _sync_api(path, data, client):
     code, msg = sync_gate(data, cfg)
     if code:
         return code, {"error": msg}
+    if path == "/api/sync/revoke-retry":
+        snap_, _serr, _ = sync_snapshot()
+        told, left = sync_revocations_retry(snap_ or {}, client)
+        audit({"action": "sync-revoke-retry", "target": "-", "result": "PARTIAL" if left else "OK",
+               "detail": f"told={';'.join(told)} pending={';'.join(left)}", "client": client})
+        _SYNC_CACHE["read_at"] = 0.0
+        one = len(left) == 1
+        if told and not left:
+            words = f"Told {', '.join(told)}. Nothing is owed now."
+        elif told:
+            words = f"Told {', '.join(told)}. {', '.join(left)} still could not be reached; press again when {'it' if one else 'they'} can be."
+        elif left:
+            words = f"{', '.join(left)} still could not be reached; press again when {'it' if one else 'they'} can be."
+        else:
+            words = "Nothing was owed."
+        return 200, {"ok": True, "pending": left, "words": words}
+
     if path == "/api/sync/engine":
         op = str(data.get("op", "") or "")
         if op not in ("start", "stop", "enable"):
@@ -4458,27 +4567,34 @@ def _sync_api(path, data, client):
     if path == "/api/sync/unshare":
         others = [m for m in sync_folder_members(f, snap, collector, pins) if m["name"] != box]
         obj, herr = sync_helper("folder-unshare", fid, did, timeout=SYNC_MUTATION_BUDGET)
-        dropped = []
+        dropped, pending = [], []
         if herr == "ok":
             sub = os.path.basename(os.path.realpath(str(f.get("path", ""))))
             for m in others:
                 pin = {"folder_id": fid, "label_b64": base64.b64encode(str(f.get("label") or sub).encode()).decode(),
                        "sub": sub, "master_id": str(snap.get("myID", "")), "master_addr": _master_addr(),
                        "peers_b64": "", "drop_b64": base64.b64encode(json.dumps([{"id": did, "name": box, "addr": "-"}]).encode()).decode()}
-                try:
-                    mcode, mres = run_action("sync-share", m["name"], pin, None, True, client, passphrase_ok=True)
-                    if mcode == 200:
-                        dropped.append(m["name"])
-                except Exception:
-                    pass
-        audit({"action": "sync-unshare", "target": box, "result": "OK" if herr == "ok" else "ERROR",
-               "detail": f"folder={fid}", "client": client})
+                # AC23: a member that could not be told keeps the box as a peer and can go on
+                # sending it changes. That is kept as owed and said, not skipped.
+                (dropped if _sync_tell(m["name"], pin, client) else pending).append(m["name"])
+            if pending:
+                sync_revocation_note(fid, str(f.get("label") or sub), sub, box, did, pending)
+        audit({"action": "sync-unshare", "target": box,
+               "result": "ERROR" if herr != "ok" else ("PARTIAL" if pending else "OK"),
+               "detail": f"folder={fid}" + (f" pending={','.join(pending)}" if pending else ""), "client": client})
         _SYNC_CACHE["read_at"] = 0.0
         if herr != "ok":
             return 502, {"error": (obj or {}).get("error") if isinstance(obj, dict) else SYNC_ERROR_WORDS.get(herr, herr)}
-        return 200, {"ok": True, "shared": False,
-                     "words": f"{f.get('label') or fid} is no longer shared with {box}. The copy already on {box} stays where it is."
-                              + (f" {', '.join(dropped)} stopped syncing it with {box} too." if dropped else "")}
+        label = f.get("label") or fid
+        words = f"{label} is no longer shared with {box} from this console. The copy already on {box} stays where it is."
+        if dropped:
+            words += f" {', '.join(dropped)} stopped syncing it with {box} too."
+        if pending:
+            one = len(pending) == 1
+            words += (f" {', '.join(pending)} could not be told, and may still send {box} changes to it until "
+                      f"{'it is' if one else 'they are'}. This console keeps that owed: press Tell them now on this page "
+                      f"when {'it' if one else 'they'} can be reached.")
+        return 200, {"ok": True, "shared": False, "pending": pending, "words": words}
 
     if path == "/api/sync/share":
         t = targets[box]
@@ -4736,6 +4852,8 @@ def _sync_state_word(r):
         return "not shared"
     if r.get("connected") is False:
         return "not connected"
+    if r.get("unread"):
+        return "not read"
     if r.get("outstanding"):
         return "catching up"
     return "up to date"
@@ -4814,6 +4932,13 @@ def render_sync_progress(state):
     snap, err, as_of = sync_snapshot()
     doc = ["<section id=syncprogress aria-label='Where each folder has got to' class=sync-progress>"]
     doc.append("<h3 class=sync-h>Where each folder has got to</h3>")
+    for it in sync_revocations():
+        peers = ", ".join(str(x) for x in (it.get("peers") or []))
+        bx = str(it.get("box", ""))
+        doc.append(f"<p class=sync-finding data-code=revocation-pending role=alert>"
+                   f"{e(str(it.get('label') or it.get('folder') or ''))} was unticked for {e(bx)} at {e(_hhmm(str(it.get('at', ''))))}, "
+                   f"but {e(peers)} could not be told and may still send {e(bx)} changes to it. "
+                   "<button type=button class=sync-revoke-retry>Tell them now</button><span class=press-res role=status></span></p>")
     if not snap:
         doc.append("<p class=doct>Nothing to show until sharing can be read.</p></section>")
         return "".join(doc)
@@ -16717,6 +16842,12 @@ SYNC_JS = r"""
       if(x.code===200){ var p=b.closest('p'); if(p){ p.className='sync-finding done'; var h=p.querySelector('.hint'); if(h)h.remove(); b.remove(); } }
       else { b.disabled=false; } });
   });});
+  document.querySelectorAll('.sync-revoke-retry').forEach(function(b){b.addEventListener('click',function(){
+    b.disabled=true; progress(b,'Telling the boxes still owed.');
+    J('/api/sync/revoke-retry',{confirm:true}).then(function(x){ say(x,b);
+      if(x.code===200&&x.j&&x.j.pending&&x.j.pending.length===0){ var p=b.closest('p'); if(p){ p.className='sync-finding done'; b.remove(); } }
+      else { b.disabled=false; } });
+  });});
   if(sf){
     sf.querySelectorAll('.sync-tick').forEach(function(cb){
       cb.addEventListener('change',function(){
@@ -18606,7 +18737,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/api/deployed/"):
             code, res = deployed_api(path, data, client)
         elif path in ("/api/sync/share", "/api/sync/unshare", "/api/sync/retire", "/api/sync/engine",
-                      "/api/sync/protect", "/api/sync/harden", "/api/sync/resolve", "/api/sync/pair"):
+                      "/api/sync/protect", "/api/sync/harden", "/api/sync/resolve", "/api/sync/pair",
+                      "/api/sync/revoke-retry"):
             try:
                 code, res = sync_api(path, data, client)
             except Exception as ex:  # the page must always get an answer in words
